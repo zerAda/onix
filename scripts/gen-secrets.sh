@@ -71,6 +71,8 @@ ensure MINIO_ROOT_PASSWORD   rand 32
 # Redis : mot de passe (alphanumérique → sûr pour --requirepass et les URL).
 # Honoré par Onyx (api_server/background lisent REDIS_PASSWORD) et par redis-server.
 ensure REDIS_PASSWORD        rand 32
+# Clé API du microservice onix-actions (en-tête X-API-Key). 48 caractères alphanum.
+ensure ONIX_ACTIONS_API_KEY  rand 48
 
 # Les identifiants S3 d'Onyx pointent sur le compte root MinIO (mêmes valeurs).
 if [ -z "$(get_val S3_AWS_ACCESS_KEY_ID)" ]; then

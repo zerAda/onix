@@ -6,3 +6,10 @@ backups/
 
 # Override de test sandbox (proxy TLS) — purement local, jamais livré
 docker-compose.sandbox.yml
+
+# onix-actions — artefacts locaux (venv, données runtime, caches Python)
+actions/.venv/
+actions/data/
+actions/.pytest_cache/
+**/__pycache__/
+*.pyc
