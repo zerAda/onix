@@ -1,0 +1,20 @@
+title = "onix — configuration gitleaks"
+
+# On ÉTEND le jeu de règles par défaut (AWS, clés privées, etc.).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Artefacts locaux (jamais committés) + faux positifs vérifiés"
+# `paths` sont des REGEX (pas des globs). En mode CI `--no-git`, gitleaks scanne
+# le système de fichiers : on exclut explicitement les artefacts locaux gitignorés.
+paths = [
+  '''(^|/)\.env(\..*)?$''',   # secrets locaux (gitignorés) — jamais scannés
+  '''(^|/)\.venv/''',          # virtualenv local de actions/ (gitignoré)
+  '''(^|/)__pycache__/''',
+  '''\.pyc$''',
+]
+# Valeur FACTICE de test (actions/tests/conftest.py) — non-secret confirmé.
+regexes = [
+  '''test-key-0123456789''',
+]
