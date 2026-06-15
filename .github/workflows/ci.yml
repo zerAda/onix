@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntaxe des scripts shell
+        run: |
+          for s in scripts/*.sh; do bash -n "$s"; done
+
+      - name: Génération de secrets jetables (pour valider le compose)
+        run: ./scripts/gen-secrets.sh
+
+      - name: Validation docker-compose (base / PERF / GPU)
+        run: |
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.performance.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.gpu.yml config -q
+
+      - name: Vérifier qu'aucun .env n'est suivi par git
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env ne doit jamais être committé"; exit 1
+          fi
+          echo "OK : .env non suivi"

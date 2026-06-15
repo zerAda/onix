@@ -1,0 +1,43 @@
+# =============================================================================
+# Override HAUTE PERFORMANCE (machines confortables : RAM >= 32 Go CPU, ou GPU).
+# Rétablit un model-server d'INDEXATION DÉDIÉ : l'indexation des documents ne
+# se dispute plus le CPU/RAM avec l'inférence des requêtes → débit supérieur.
+# Coût : ~3-5 Go de RAM en plus.
+#
+# Lancement :  make up PERF=1   (cumulable avec GPU=1)
+# `make tune` recommande PERF=1 quand les ressources le permettent.
+# =============================================================================
+
+services:
+  indexing_model_server:
+    image: onyxdotapp/onyx-model-server:${IMAGE_TAG:-4.1.1}
+    command: >
+      /bin/sh -c "uvicorn model_server.main:app --host 0.0.0.0 --port 9000"
+    restart: unless-stopped
+    environment:
+      - INDEXING_ONLY=True
+      - MIN_THREADS_ML_MODELS=${MIN_THREADS_ML_MODELS:-}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - indexing_huggingface_model_cache:/app/.cache/huggingface/
+      - indexing_model_server_logs:/var/log/onyx
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
+    deploy:
+      resources:
+        limits:
+          memory: ${INDEXING_MEM_LIMIT:-5g}
+
+  # On bascule l'indexation du background vers le serveur dédié.
+  background:
+    depends_on:
+      - indexing_model_server
+    environment:
+      - INDEXING_MODEL_SERVER_HOST=indexing_model_server
+
+volumes:
+  indexing_huggingface_model_cache:
+  indexing_model_server_logs:

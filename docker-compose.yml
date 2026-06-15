@@ -1,0 +1,348 @@
+# =============================================================================
+# onix — Stack IA souveraine auto-hébergée : Onyx (RAG / assistant) + Ollama (LLM local)
+# -----------------------------------------------------------------------------
+# Fichier UNIQUE, auditable, images ÉPINGLÉES. Aucune dépendance à l'amont au
+# déploiement (pas de `curl | bash`). Dérivé fidèlement du compose officiel
+# Onyx v4.1.1, puis durci pour un poste local / un client exigeant :
+#
+#   * Ollama CONTENEURISÉ, réseau interne, AUCUN port publié sur l'hôte.
+#   * nginx = unique point d'entrée, lié à 127.0.0.1 UNIQUEMENT (localhost).
+#   * Aucun autre service n'expose de port sur l'hôte.
+#   * Services à risque retirés par défaut : code-interpreter (montait le socket
+#     Docker = root sur l'hôte), certbot, mcp_server.
+#   * Calibré CPU / RAM : heap OpenSearch réduit, 1 seul model-server,
+#     limites mémoire, Ollama décharge le modèle à l'inactivité.
+#
+# Secrets : fournis via le fichier .env (gitignoré), généré par
+# `scripts/gen-secrets.sh`. JAMAIS de secret en clair dans ce fichier.
+#
+# Démarrage recommandé :  make up   (voir Makefile / README.md)
+# =============================================================================
+
+name: onix
+
+# Réseau privé dédié : tout le trafic inter-services reste interne.
+networks:
+  default:
+    name: onix-net
+
+services:
+  # ---------------------------------------------------------------------------
+  # API Onyx (FastAPI) — migrations Alembic puis serveur applicatif.
+  # ---------------------------------------------------------------------------
+  api_server:
+    image: onyxdotapp/onyx-backend:${IMAGE_TAG:-4.1.1}
+    command: >
+      /bin/sh -c "
+      alembic upgrade head &&
+      echo 'Starting Onyx Api Server' &&
+      uvicorn onyx.main:app --host 0.0.0.0 --port 8080"
+    depends_on:
+      - relational_db
+      - opensearch
+      - cache
+      - minio
+      - inference_model_server
+    restart: unless-stopped
+    environment:
+      - AUTH_TYPE=${AUTH_TYPE:-basic}
+      - SESSION_EXPIRE_TIME_SECONDS=${SESSION_EXPIRE_TIME_SECONDS:-86400}
+      - VALID_EMAIL_DOMAINS=${VALID_EMAIL_DOMAINS:-}
+      - USER_DIRECTORY_ADMIN_ONLY=${USER_DIRECTORY_ADMIN_ONLY:-true}
+      - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-false}
+      - SECRET=${SECRET:?Lancez scripts/gen-secrets.sh pour generer les secrets}
+      - USER_AUTH_SECRET=${USER_AUTH_SECRET:?Lancez scripts/gen-secrets.sh pour generer les secrets}
+      - WEB_DOMAIN=${WEB_DOMAIN:-http://localhost:3000}
+      # Confidentialité : aucune télémétrie sortante.
+      - DISABLE_TELEMETRY=${DISABLE_TELEMETRY:-true}
+      # Postgres
+      - POSTGRES_HOST=relational_db
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set in .env via gen-secrets.sh}
+      - DB_READONLY_USER=${DB_READONLY_USER:-db_readonly_user}
+      - DB_READONLY_PASSWORD=${DB_READONLY_PASSWORD:?set in .env via gen-secrets.sh}
+      # Moteur de recherche / index vectoriel
+      - OPENSEARCH_HOST=${OPENSEARCH_HOST:-opensearch}
+      - OPENSEARCH_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD:?set in .env via gen-secrets.sh}
+      - REDIS_HOST=cache
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set in .env via gen-secrets.sh}
+      - MODEL_SERVER_HOST=${MODEL_SERVER_HOST:-inference_model_server}
+      # Stockage objet (MinIO, S3-compatible)
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_AWS_ACCESS_KEY_ID=${S3_AWS_ACCESS_KEY_ID:?set in .env via gen-secrets.sh}
+      - S3_AWS_SECRET_ACCESS_KEY=${S3_AWS_SECRET_ACCESS_KEY:?set in .env via gen-secrets.sh}
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
+    volumes:
+      - api_server_logs:/var/log/onyx
+      - file-system:/app/file-system
+    deploy:
+      resources:
+        limits:
+          cpus: ${API_SERVER_CPU_LIMIT:-2}
+          memory: ${API_SERVER_MEM_LIMIT:-3g}
+
+  # ---------------------------------------------------------------------------
+  # Workers d'arrière-plan (indexation, tâches Celery) via supervisord.
+  # ---------------------------------------------------------------------------
+  background:
+    image: onyxdotapp/onyx-backend:${IMAGE_TAG:-4.1.1}
+    command: >
+      /bin/sh -c "
+      if [ -f /etc/ssl/certs/custom-ca.crt ]; then update-ca-certificates; fi &&
+      /app/scripts/supervisord_entrypoint.sh"
+    depends_on:
+      - relational_db
+      - opensearch
+      - cache
+      - inference_model_server
+    restart: unless-stopped
+    environment:
+      - AUTH_TYPE=${AUTH_TYPE:-basic}
+      - DISABLE_TELEMETRY=${DISABLE_TELEMETRY:-true}
+      - POSTGRES_HOST=relational_db
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set in .env via gen-secrets.sh}
+      - OPENSEARCH_HOST=${OPENSEARCH_HOST:-opensearch}
+      - OPENSEARCH_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD:?set in .env via gen-secrets.sh}
+      - REDIS_HOST=cache
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set in .env via gen-secrets.sh}
+      - MODEL_SERVER_HOST=${MODEL_SERVER_HOST:-inference_model_server}
+      # CPU / RAM : on réutilise l'unique model-server pour l'indexation
+      # (pas de second model-server dédié). Voir docs/RUNBOOK.md pour scaler.
+      - INDEXING_MODEL_SERVER_HOST=${INDEXING_MODEL_SERVER_HOST:-inference_model_server}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_AWS_ACCESS_KEY_ID=${S3_AWS_ACCESS_KEY_ID:?set in .env via gen-secrets.sh}
+      - S3_AWS_SECRET_ACCESS_KEY=${S3_AWS_SECRET_ACCESS_KEY:?set in .env via gen-secrets.sh}
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - background_logs:/var/log/onyx
+      - file-system:/app/file-system
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: ${BACKGROUND_CPU_LIMIT:-4}
+          memory: ${BACKGROUND_MEM_LIMIT:-5g}
+
+  # ---------------------------------------------------------------------------
+  # Frontend Next.js (servi en interne, exposé via nginx uniquement).
+  # ---------------------------------------------------------------------------
+  web_server:
+    image: onyxdotapp/onyx-web-server:${IMAGE_TAG:-4.1.1}
+    depends_on:
+      - api_server
+    restart: unless-stopped
+    environment:
+      - INTERNAL_URL=http://api_server:8080
+      - WEB_DOMAIN=${WEB_DOMAIN:-http://localhost:3000}
+    env_file:
+      - path: .env
+        required: false
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: ${WEB_CPU_LIMIT:-1}
+          memory: ${WEB_MEM_LIMIT:-1g}
+
+  # ---------------------------------------------------------------------------
+  # Base relationnelle (Postgres). Aucun port publié.
+  # ---------------------------------------------------------------------------
+  relational_db:
+    image: postgres:15.2-alpine
+    shm_size: 1g
+    command: -c 'max_connections=150'
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set in .env via gen-secrets.sh}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - db_volume:/var/lib/postgresql/data
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: ${POSTGRES_CPU_LIMIT:-2}
+          memory: ${POSTGRES_MEM_LIMIT:-1g}
+
+  # ---------------------------------------------------------------------------
+  # Model server (embeddings + reranking). Sert aussi l'indexation (cf. background).
+  # ---------------------------------------------------------------------------
+  inference_model_server:
+    image: onyxdotapp/onyx-model-server:${IMAGE_TAG:-4.1.1}
+    command: >
+      /bin/sh -c "uvicorn model_server.main:app --host 0.0.0.0 --port 9000"
+    restart: unless-stopped
+    environment:
+      - MIN_THREADS_ML_MODELS=${MIN_THREADS_ML_MODELS:-}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - model_cache_huggingface:/app/.cache/huggingface/
+      - inference_model_server_logs:/var/log/onyx
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: ${INFERENCE_MEM_LIMIT:-4g}
+
+  # ---------------------------------------------------------------------------
+  # OpenSearch — moteur de recherche / index vectoriel (depuis Onyx v4).
+  # Heap réduit (1g) pour un poste CPU. Augmenter selon la RAM (cf. RUNBOOK).
+  # Pré-requis hôte Linux : vm.max_map_count >= 262144 (cf. scripts/verify.sh).
+  # ---------------------------------------------------------------------------
+  opensearch:
+    image: opensearchproject/opensearch:3.6.0
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD:?set in .env via gen-secrets.sh}
+      # memory_lock=false : robustesse maximale sur postes hétérogènes
+      # (Docker Desktop, rootless...). Évite les échecs de démarrage memlock.
+      - bootstrap.memory_lock=false
+      - "OPENSEARCH_JAVA_OPTS=-Xms${OPENSEARCH_HEAP:-1g} -Xmx${OPENSEARCH_HEAP:-1g}"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: ${OPENSEARCH_MEM_LIMIT:-2g}
+
+  # ---------------------------------------------------------------------------
+  # Cache Redis — éphémère (pas de persistance), interne uniquement.
+  # Protégé par mot de passe (--requirepass) : défense en profondeur, même si le
+  # service n'est joignable que sur le réseau Docker interne. Le shell `sh -c`
+  # permet d'interpoler $$REDIS_PASSWORD (Onyx lit la même variable côté clients).
+  # ---------------------------------------------------------------------------
+  cache:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: >
+      /bin/sh -c "exec redis-server --save '' --appendonly no
+      --requirepass \"$${REDIS_PASSWORD:?set in .env via gen-secrets.sh}\""
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set in .env via gen-secrets.sh}
+    env_file:
+      - path: .env
+        required: false
+    tmpfs:
+      - /data
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # MinIO — stockage objet S3-compatible pour les fichiers Onyx. Interne.
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set in .env via gen-secrets.sh}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env via gen-secrets.sh}
+      MINIO_DEFAULT_BUCKETS: ${S3_FILE_STORE_BUCKET_NAME:-onyx-file-store-bucket}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: ${MINIO_MEM_LIMIT:-512m}
+
+  # ---------------------------------------------------------------------------
+  # Ollama — runtime LLM LOCAL, conteneurisé. AUCUN port publié sur l'hôte :
+  # accessible uniquement par Onyx via http://ollama:11434 (réseau interne).
+  # Modèles persistés dans le volume `ollama_data` (pré-tirés via make models).
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:${OLLAMA_IMAGE_TAG:-0.30.8}
+    restart: unless-stopped
+    environment:
+      # Durée de maintien du modèle en mémoire. 5m = libère la RAM à l'inactivité ;
+      # -1 = toujours chargé (zéro latence de rechargement). `make tune` ajuste.
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
+      # Nb de modèles chargés simultanément et requêtes parallèles (coût RAM/VRAM).
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-1}
+      - OLLAMA_MAX_QUEUE=${OLLAMA_MAX_QUEUE:-512}
+      # Perf : Flash Attention + cache KV quantifié (q8_0) → -30 à -50% de mémoire
+      # de contexte, quasi sans perte. Le KV n'est quantifié QUE si flash attn = 1.
+      - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-1}
+      - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama ls >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: ${OLLAMA_CPU_LIMIT:-4}
+          memory: ${OLLAMA_MEM_LIMIT:-6g}
+
+  # ---------------------------------------------------------------------------
+  # nginx — UNIQUE point d'entrée. Lié à 127.0.0.1 (localhost) uniquement.
+  # Config maison, lisible, dans ./nginx/onyx.conf (pas de templating opaque).
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - api_server
+      - web_server
+    ports:
+      # 127.0.0.1 => non joignable depuis le réseau. Pour exposer : cf. docs/SECURITY.md
+      - "127.0.0.1:${ONYX_HOST_PORT:-3000}:80"
+    volumes:
+      - ./nginx/onyx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/nginx-health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: ${NGINX_CPU_LIMIT:-1}
+          memory: ${NGINX_MEM_LIMIT:-256m}
+
+volumes:
+  db_volume:
+  minio_data:
+  model_cache_huggingface:
+  opensearch-data:
+  ollama_data:
+  file-system:
+  api_server_logs:
+  background_logs:
+  inference_model_server_logs:

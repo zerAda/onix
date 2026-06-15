@@ -1,0 +1,27 @@
+# =============================================================================
+# Override OPTIONNEL — accélération GPU NVIDIA pour Ollama.
+# NON activé par défaut (le choix retenu est CPU). À utiliser UNIQUEMENT si :
+#   * la machine a un GPU NVIDIA + pilotes à jour, ET
+#   * nvidia-container-toolkit est installé (Linux ou Windows/WSL2).
+# Docker Desktop sur macOS NE DONNE PAS accès au GPU : sur Mac, pour profiter
+# du GPU (Metal) il faut Ollama en NATIF (cf. docs/RUNBOOK.md).
+#
+# Lancement :
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# (le Makefile expose aussi : make up GPU=1)
+# =============================================================================
+
+services:
+  ollama:
+    # Réserve tous les GPU NVIDIA visibles au conteneur Ollama.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    environment:
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-1}
