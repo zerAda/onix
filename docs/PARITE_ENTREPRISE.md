@@ -20,9 +20,11 @@ page est **honnête** : elle distingue ce qui est **natif**, **par configuration
 | LLM | **Ollama local** (souverain) ou tout LLM | ✅ **natif** |
 | Multi-format (PDF, Office…) | Indexation native Onyx | ✅ **natif** |
 | Souveraineté / hors-ligne / zéro transfert | Tout en local (Ollama + OpenSearch + MinIO) | ✅ **supérieur** au cloud |
-| Audit documentaire OCR (extraction + verdict) | — (Onyx indexe, ne « audite » pas) | 🔜 **roadmap** (pipeline applicatif à ajouter) |
-| Génération de fiches / documents (.docx) | — | 🔜 **roadmap** |
-| Relances / tâches (type Planner) | — | 🔜 **roadmap** (intégration externe) |
+| Audit documentaire OCR (extraction + verdict) | **onix-actions** : OCR **local** (tesseract/poppler) → extraction de champs canoniques → comparaison vs référence → verdict typé + score | ✅ **implémenté (onix-actions)** (cf. `ACTIONS.md`) |
+| Génération de fiches / documents (.docx) | **onix-actions** : `POST /generate/fiche` (python-docx) + `GET /download/{id}` | ✅ **implémenté (onix-actions)** |
+| Relances / tâches (type Planner) | **onix-actions** : `POST/GET /tasks` (SQLite local) + `webhook_url` vers un système externe | ✅ **implémenté (onix-actions)** (local, sans M365) |
+| Notifications (Teams / Power Automate) | **onix-actions** : `POST /notify` — webhook (Slack/Mattermost/Teams) ou SMTP | ✅ **implémenté (onix-actions)** |
+| Suivi d'usage / FinOps / kill-switch (admin) | **onix-actions** : `/usage`, `/cost`, `/admin/control` (UPN hashés, flags qui gatent réellement) | ✅ **implémenté (onix-actions)** |
 | Connecteurs au-delà de SharePoint (Teams, Confluence, Drive, web…) | Catalogue de connecteurs Onyx | ✅ **natif** (bonus) |
 
 ## Les 2 vraies réserves (à cadrer avec le client)
@@ -32,8 +34,14 @@ page est **honnête** : elle distingue ce qui est **natif**, **par configuration
    instances par groupe), ou passer en EE/Cloud pour la parité totale. Détails :
    [`connectors/SHAREPOINT.md`](connectors/SHAREPOINT.md) §6.
 2. **Fonctions « applicatives » au-delà du RAG** (audit OCR, génération de
-   documents, relances) ne sont pas dans le périmètre RAG d'Onyx : elles relèvent
-   d'une **brique applicative** à brancher (roadmap), pas d'une simple config.
+   documents, relances, notifications, usage/FinOps, kill-switch) sont désormais
+   **implémentées** dans le microservice local **`onix-actions`** (cf.
+   [`ACTIONS.md`](ACTIONS.md)), branché à l'assistant via **Onyx Custom Actions**.
+   Maturité honnête : moteur d'audit, génération `.docx`, tâches, usage, coût et
+   administration sont **opérationnels et testés** ; l'**OCR de PDF scannés/images**
+   nécessite les binaires `tesseract`/`poppler` (fournis par l'image Docker du
+   service) et dégrade proprement à défaut ; les connecteurs externes (webhook
+   tâches/notify, SMTP) sont des **MVP** prêts à configurer.
 
 ## Ce qu'onix apporte EN PLUS d'un assistant cloud
 - **Souveraineté totale** : inférence + index + fichiers **sur site**, aucun
@@ -46,4 +54,7 @@ Pour un **assistant commercial RAG sourcé sur SharePoint, en lecture seule, mon
 client, souverain** : onix atteint la **parité fonctionnelle** par configuration.
 La seule limite de fond en édition gratuite est le **RBAC fin par document**
 (permission sync EE). Les fonctions applicatives annexes (audit OCR, génération,
-relances) sont une **roadmap**, pas un acquis.
+relances, notifications, usage/FinOps, kill-switch) sont **implémentées** dans
+**`onix-actions`** (cf. [`ACTIONS.md`](ACTIONS.md)) : un acquis, branché via Onyx
+Custom Actions — avec une maturité documentée honnêtement (OCR de scans
+tributaire des binaires système ; connecteurs externes en MVP).
