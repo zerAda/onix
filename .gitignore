@@ -11,5 +11,12 @@ docker-compose.sandbox.yml
 actions/.venv/
 actions/data/
 actions/.pytest_cache/
+
+# access-gateway — artefacts locaux (venv, caches, .env local du composant)
+access-gateway/.venv/
+access-gateway/.pytest_cache/
+access-gateway/.env
+access-gateway/config/group_map.json
+
 **/__pycache__/
 *.pyc
