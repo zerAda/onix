@@ -1,0 +1,81 @@
+# =============================================================================
+# values-kind-smoke.yaml — OVERLAY DE TEST (ne pas utiliser en prod).
+# -----------------------------------------------------------------------------
+# But : valider le chart onix-ha sur un vrai serveur d'API Kubernetes (kind /
+# apiserver autonome) avec un SOUS-ENSEMBLE LÉGER, sans tirer le data-tier lourd
+# (model-server ~13 Go, OpenSearch, MinIO distribué, Ollama). Ne modifie PAS les
+# défauts HA du chart (values.yaml) : c'est un overlay appliqué via `-f`.
+#
+# Ce que cet overlay prouve / cible (cf. docs/HA_ACCEPTANCE.md) :
+#   * onix-actions en multi-réplica (replicas=2) — service stateless ;
+#   * HPA + PDB acceptés par l'API ;
+#   * état DÉPORTÉ vers un Postgres léger partagé (ONIX_DB_BACKEND=postgres) ;
+#   * pas de CRD requis (CNPG/OpenSearch désactivés) — dry-run server sans operator.
+#
+# Usage :
+#   helm template onix deploy/k8s/onix-ha -n onix -f deploy/k8s/onix-ha/values-kind-smoke.yaml \
+#     | kubectl apply --dry-run=server -n onix -f -
+#
+# Secret éphémère (create=true) : RÉSERVÉ aux tests/CI — JAMAIS en prod
+# (en prod : secrets.existingSecret, géré hors-chart / GitOps).
+# =============================================================================
+
+# Secret de DÉMO/CI uniquement (clés factices). En prod : existingSecret.
+secrets:
+  create: true
+  values:
+    POSTGRES_PASSWORD: "devpass"
+    OPENSEARCH_ADMIN_PASSWORD: "devpass"
+    REDIS_PASSWORD: "devpass"
+    S3_AWS_ACCESS_KEY_ID: "minioadmin"
+    S3_AWS_SECRET_ACCESS_KEY: "minioadmin"
+    SECRET: "devsecret"
+    USER_AUTH_SECRET: "devauth"
+    ONIX_ACTIONS_API_KEY: "devapikey"
+    BROKER_PASSWORD: "brokerpass"
+
+# Anti-affinité en "soft" (cluster mono-nœud kind) : les 2 répliques restent
+# schedulables sur le même nœud (preferred, pas required).
+podAntiAffinity:
+  enabled: true
+  type: soft
+
+# --- onix-actions : le service stateless qu'on prouve en multi-réplica -------
+actions:
+  replicaCount: 2
+  # HPA conservé ON (objet accepté par l'API) ; pas de métriques sous charge ici.
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# File Celery : on garde l'objet broker (StatefulSet RabbitMQ léger) et les
+# workers, mais on peut réduire pour un smoke. Laisser activé valide les manifests.
+actionsQueue:
+  enabled: true
+  worker:
+    replicaCount: 2
+
+# --- Allègements : on NE déploie PAS le data-tier lourd dans le smoke ---------
+# Ces services restent dans le rendu (manifests validés) mais en prod réelle on
+# pointerait sur les operators. Pour un déploiement réel léger, mettre enabled=false.
+ollama:
+  enabled: true        # mettre false pour un smoke sans pull du runtime LLM
+
+# Data-tier HA (operators/CRD) : DÉSACTIVÉ — pas de CRD requis pour le dry-run.
+postgresql:
+  operator:
+    enabled: false
+  cluster:
+    enabled: false      # le Postgres partagé léger est fourni HORS-chart pour le smoke
+opensearch:
+  enabled: false
+redisOperator:
+  enabled: false
+redis:
+  enabled: false
+minio:
+  enabled: false
