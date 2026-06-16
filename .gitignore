@@ -1,5 +1,9 @@
 # Secrets locaux (générés par scripts/gen-secrets.sh) — NE JAMAIS committer.
 .env
+# Fichiers d'environnement multi-env (dev/test/prod) — secrets, jamais committés.
+.env.*
+deploy/prod/.env
+deploy/prod/.env.*
 
 # Sauvegardes locales (scripts/backup.sh)
 backups/

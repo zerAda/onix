@@ -169,3 +169,60 @@ k8s-deploy:
 	  --set opensearch.enabled=true --set redisOperator.enabled=true --set redis.enabled=true \
 	  --set minio.enabled=true \
 	  --set ingress.host=$${HOST:-onix.example.com}
+
+# =============================================================================
+# --- WS3 --- Déploiement de PRODUCTION (TLS Caddy + OIDC Entra ID + multi-env)
+# -----------------------------------------------------------------------------
+# Schéma multi-environnement : un fichier .env PAR environnement.
+#   ENV=.env                      (dev / local — défaut, profil basic 127.0.0.1)
+#   ENV=deploy/prod/.env.test     (test / pré-prod)
+#   ENV=deploy/prod/.env.prod     (production)
+# La surcouche prod s'EMPILE sur la base : reverse-proxy TLS, OIDC forcé, nginx
+# repassé en interne, garde-fou « défaut-sûr » (refuse une expo sans TLS+OIDC).
+#
+#   make config-prod   valide la composition base + prod (syntaxe, défaut ENV=.env)
+#   make up-prod       démarre la stack de PRODUCTION (base + surcouche prod)
+#   make down-prod / logs-prod / ps-prod     exploitation prod
+#   make secrets-prod  génère les secrets dans le .env ciblé (ENV=…)
+# Démarrage type prod :
+#   cp deploy/prod/env.prod.template deploy/prod/.env.prod   # puis renseigner
+#   make secrets-prod ENV=deploy/prod/.env.prod
+#   make up-prod      ENV=deploy/prod/.env.prod
+# =============================================================================
+ENV ?= .env
+COMPOSE_PROD := docker compose --env-file $(ENV) -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml
+
+.PHONY: config-prod up-prod down-prod restart-prod ps-prod logs-prod secrets-prod preflight-prod
+
+# Valide la composition (résout les variables) sans rien démarrer.
+config-prod:
+	@$(COMPOSE_PROD) config -q && echo "✓ base + prod valide (ENV=$(ENV))"
+
+# Génère/complète les secrets dans le fichier d'environnement ciblé.
+secrets-prod:
+	@ENV_FILE=$(ENV) bash scripts/gen-secrets.sh
+
+# Démarre la stack de production (base + surcouche TLS/OIDC). Le service
+# `preflight` refuse de démarrer une exposition sans TLS+OIDC+vérif. e-mail.
+up-prod:
+	@$(COMPOSE_PROD) up -d
+	@echo "→ Stack PROD démarrée (ENV=$(ENV)). Caddy obtient le certificat TLS au 1er accès."
+	@D=$$(sed -n 's/^ONYX_DOMAIN=//p' $(ENV) 2>/dev/null | head -n1); \
+	  echo "  Ouvrez : https://$${D:-<ONYX_DOMAIN>}  (SSO Entra ID)."; \
+	  echo "  Callback à déclarer côté Entra ID : https://$${D:-<ONYX_DOMAIN>}/auth/oidc/callback"
+
+down-prod:
+	@$(COMPOSE_PROD) down
+
+restart-prod:
+	@$(COMPOSE_PROD) restart
+
+ps-prod:
+	@$(COMPOSE_PROD) ps
+
+logs-prod:
+	@$(COMPOSE_PROD) logs -f --tail=200
+
+# Exécute le garde-fou de défaut-sûr seul (diagnostic), avec l'environnement ciblé.
+preflight-prod:
+	@set -a; . ./$(ENV) 2>/dev/null || true; set +a; sh scripts/preflight-prod.sh

@@ -7,8 +7,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ENV_FILE=".env"
-TEMPLATE="env.template"
+# Fichier d'environnement cible : `.env` par défaut (dev/local). Surchargeable
+# pour le multi-environnement (test/prod) via $ENV_FILE ou en 1er argument :
+#   ENV_FILE=deploy/prod/.env.prod ./scripts/gen-secrets.sh
+#   ./scripts/gen-secrets.sh deploy/prod/.env.prod
+ENV_FILE="${ENV_FILE:-${1:-.env}}"
+# Gabarit associé : env.prod.template pour les environnements prod/test (sous
+# deploy/prod/), env.template sinon. Surchargeable via $TEMPLATE.
+case "$ENV_FILE" in
+  deploy/prod/*|*/deploy/prod/*) TEMPLATE="${TEMPLATE:-deploy/prod/env.prod.template}" ;;
+  *)                             TEMPLATE="${TEMPLATE:-env.template}" ;;
+esac
 
 if [ ! -f "$ENV_FILE" ]; then
   cp "$TEMPLATE" "$ENV_FILE"
