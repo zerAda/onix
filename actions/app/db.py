@@ -40,7 +40,7 @@ import os
 import re
 import sqlite3
 import threading
-from typing import Any, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Iterable, List, Optional, Tuple
 
 # Verrou applicatif partagé. En SQLite mono-process il sérialise les écritures
 # (SQLite n'aime pas l'écriture concurrente). En Postgres il reste utile pour
