@@ -1,0 +1,37 @@
+# =============================================================================
+# onix — Promtail : collecte des logs des conteneurs Docker -> Loki.
+# -----------------------------------------------------------------------------
+# Découvre les conteneurs via le socket Docker (MONTÉ EN LECTURE SEULE), lit
+# leurs logs json-file et les pousse à Loki avec des labels exploitables
+# (conteneur, service compose, flux). 100 % local.
+# =============================================================================
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Découverte dynamique des conteneurs Docker sur l'hôte.
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+    relabel_configs:
+      # Nom du conteneur (sans le « / » initial).
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      # Service tel que défini dans le docker-compose.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: compose_service
+      # Projet compose (onix / onix-monitoring).
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: compose_project
+      # Flux (stdout / stderr).
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: stream

@@ -1,0 +1,17 @@
+# =============================================================================
+# onix — Grafana : provider de dashboards (chargés depuis le système de fichiers).
+# Tous les .json de /var/lib/grafana/dashboards sont importés au démarrage.
+# =============================================================================
+apiVersion: 1
+
+providers:
+  - name: onix
+    orgId: 1
+    folder: onix
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
