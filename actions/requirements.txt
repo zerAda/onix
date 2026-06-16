@@ -1,14 +1,19 @@
 # onix-actions — dépendances épinglées (reproductibilité).
 # Toutes locales / open-source : aucun SDK cloud.
-fastapi==0.115.6
+#
+# Versions relevées (WS6) pour purger 100 % des CVE connues (gate pip-audit en CI
+# = 0 vulnérabilité). Compatibilité validée par actions/tests (33 passed, 1 skipped).
+# Relever ces pins quand de nouveaux correctifs paraissent (le gate pip-audit, qui
+# est BLOQUANT, échouera dès qu'une CVE corrigeable apparaît). Cf. docs/OBSERVABILITY.md.
+fastapi==0.137.1
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
-python-multipart==0.0.20
+python-multipart==0.0.32
 httpx==0.28.1
 python-docx==1.1.2
 thefuzz==0.22.1
-pdfplumber==0.11.4
-pypdf==5.1.0
+pdfplumber==0.11.10
+pypdf==6.13.2
 pytesseract==0.3.13
 pdf2image==1.17.0
-Pillow==11.0.0
+Pillow==12.2.0

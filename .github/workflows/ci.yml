@@ -1,10 +1,24 @@
 name: CI
 
+# Intégration continue DURCIE (WS6) : qualité, tests, sécurité, supply-chain.
+# Tous les jobs ci-dessous sont BLOQUANTS (aucun continue-on-error) : un échec
+# fait échouer le pipeline et bloque la fusion (à protéger par branch protection).
 on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+  security-events: write   # upload SARIF (trivy) vers l'onglet Code scanning.
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # ===========================================================================
+  # 1. Validation infra : shell, compose, garde .env, secrets (gitleaks).
+  # ===========================================================================
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -14,6 +28,12 @@ jobs:
         run: |
           for s in scripts/*.sh; do bash -n "$s"; done
 
+      - name: Lint YAML (workflows + monitoring)
+        run: |
+          python -m pip install --quiet yamllint
+          yamllint -d "{extends: relaxed, rules: {line-length: disable}}" \
+            .github/workflows monitoring
+
       - name: Génération de secrets jetables (pour valider le compose)
         run: ./scripts/gen-secrets.sh
 
@@ -22,6 +42,10 @@ jobs:
           docker compose -f docker-compose.yml config -q
           docker compose -f docker-compose.yml -f docker-compose.performance.yml config -q
           docker compose -f docker-compose.yml -f docker-compose.gpu.yml config -q
+
+      - name: Validation docker-compose (monitoring / observabilité)
+        run: |
+          docker compose -f monitoring/docker-compose.monitoring.yml config -q
 
       - name: Vérifier qu'aucun .env n'est suivi par git
         run: |
@@ -35,3 +59,147 @@ jobs:
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz -O /tmp/gl.tgz
           tar -xzf /tmp/gl.tgz -C /usr/local/bin gitleaks
           gitleaks detect --source . --config .gitleaks.toml --no-git --redact
+
+  # ===========================================================================
+  # 2. Tests unitaires / intégration (BLOQUANT).
+  #    actions/tests existe ; tests/rag et access-gateway/tests sont exécutés
+  #    s'ils existent (résilient à l'ordre de fusion des autres workstreams).
+  # ===========================================================================
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Dépendances de test
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          # Dépendances du microservice actions (FastAPI, etc.).
+          if [ -f actions/requirements.txt ]; then pip install -r actions/requirements.txt; fi
+          # Dépendances éventuelles des autres suites (ajoutées par WS1/WS3).
+          for req in tests/rag/requirements.txt access-gateway/requirements.txt; do
+            [ -f "$req" ] && pip install -r "$req" || true
+          done
+
+      - name: pytest — actions/tests (microservice onix-actions)
+        run: pytest -q actions/tests
+
+      - name: pytest — tests/rag (si présent)
+        run: |
+          if [ -d tests/rag ]; then
+            pytest -q tests/rag
+          else
+            echo "::notice::tests/rag absent (fourni par un autre workstream) — étape ignorée."
+          fi
+
+      - name: pytest — access-gateway/tests (si présent)
+        run: |
+          if [ -d access-gateway/tests ]; then
+            pytest -q access-gateway/tests
+          else
+            echo "::notice::access-gateway/tests absent (fourni par un autre workstream) — étape ignorée."
+          fi
+
+  # ===========================================================================
+  # 3. SAST Python (bandit) — BLOQUANT.
+  # ===========================================================================
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer bandit
+        run: pip install "bandit[sarif]"
+      - name: Analyse statique de sécurité (bandit -r)
+        # -r récursif. Les chemins absents (tests/, access-gateway/ fournis par
+        # d'autres workstreams) sont IGNORÉS par bandit (pas une erreur). On
+        # exclut les suites de tests et venv ; sévérité/confiance moyenne+ bloquante.
+        run: |
+          bandit -r actions tests access-gateway \
+            --exclude '**/tests/**,**/.venv/**' \
+            --severity-level medium --confidence-level medium
+
+  # ===========================================================================
+  # 4. Audit des dépendances Python (pip-audit) — BLOQUANT.
+  # ===========================================================================
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer pip-audit
+        run: pip install pip-audit
+      - name: Audit des CVE des dépendances (requirements épinglés)
+        # Scanne chaque requirements.txt présent. Vulnérabilité connue -> échec.
+        run: |
+          set -e
+          found=0
+          for req in actions/requirements.txt tests/rag/requirements.txt access-gateway/requirements.txt; do
+            if [ -f "$req" ]; then
+              echo "::group::pip-audit $req"
+              pip-audit --requirement "$req" --strict --progress-spinner off
+              echo "::endgroup::"
+              found=1
+            fi
+          done
+          [ "$found" = "1" ] || echo "::warning::Aucun requirements.txt trouvé à auditer."
+
+  # ===========================================================================
+  # 5. Scan vulnérabilités filesystem + image (trivy) — BLOQUANT.
+  # ===========================================================================
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Filesystem : code + dépendances + IaC/Dockerfile + secrets ---------
+      - name: Trivy — scan filesystem (CRITICAL/HIGH bloquant)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      # --- Image : build local puis scan de l'image onix-actions -------------
+      - name: Build de l'image onix-actions (pour le scan)
+        run: docker build -t onix-actions:ci ./actions
+
+      - name: Trivy — scan de l'image onix-actions (CRITICAL/HIGH bloquant)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: onix-actions:ci
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      # --- Export SARIF (non bloquant sur la sévérité) pour Code scanning -----
+      - name: Trivy — rapport SARIF (image)
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: onix-actions:ci
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+
+      - name: Upload SARIF vers Code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image

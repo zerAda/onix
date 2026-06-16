@@ -1,0 +1,145 @@
+name: CD
+
+# Livraison continue (WS6) : build -> scan -> SBOM -> push de l'image
+# `onix-actions` (taggée + digestée) vers GitHub Container Registry (GHCR).
+# Déclenchement MANUEL (workflow_dispatch) ou sur tag de version `v*`.
+#
+# Supply-chain : l'image est SCANNÉE (trivy) AVANT push ; un SBOM (syft) est
+# généré et archivé en artefact (et attaché à la release si déclenchée par tag).
+on:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Pousser l'image vers GHCR (sinon build + scan + SBOM seuls)"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write          # push vers GHCR.
+  security-events: write   # upload SARIF.
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/onix-actions
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Décide si l'on pousse : tag v* OU dispatch avec push=true.
+      - name: Déterminer le mode push
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.push }}" = "true" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Métadonnées (tags + labels OCI)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha,format=long
+            type=raw,value=latest,enable=${{ github.ref == format('refs/tags/v{0}', github.ref_name) }}
+
+      - name: Login GHCR
+        if: steps.mode.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build local (chargé dans le démon) pour scanner AVANT de pousser.
+      - name: Build de l'image (local, pour scan)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./actions
+          load: true
+          tags: onix-actions:candidate
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy — scan de l'image candidate (CRITICAL/HIGH bloquant)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: onix-actions:candidate
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      # Push (multi-tags + digest) UNIQUEMENT si le scan a réussi.
+      - name: Build & push (taggé + digesté)
+        id: build
+        if: steps.mode.outputs.push == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./actions
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Récapitulatif (tags + digest)
+        run: |
+          {
+            echo "## Image onix-actions"
+            echo ""
+            echo "**Push :** ${{ steps.mode.outputs.push }}"
+            echo ""
+            echo "**Digest :** \`${{ steps.build.outputs.digest || 'non poussée (build local)' }}\`"
+            echo ""
+            echo "**Tags :**"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- SBOM (syft) : généré sur l'image candidate locale ------------------
+      - name: Génération du SBOM (syft, SPDX + CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: onix-actions:candidate
+          format: spdx-json
+          output-file: sbom.onix-actions.spdx.json
+          artifact-name: sbom.onix-actions.spdx.json
+
+      - name: SBOM — format CycloneDX (complémentaire)
+        uses: anchore/sbom-action@v0
+        with:
+          image: onix-actions:candidate
+          format: cyclonedx-json
+          output-file: sbom.onix-actions.cdx.json
+          artifact-name: sbom.onix-actions.cdx.json
+
+      - name: Archiver les SBOM en artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-onix-actions
+          path: |
+            sbom.onix-actions.spdx.json
+            sbom.onix-actions.cdx.json
+          if-no-files-found: error
+          retention-days: 90
