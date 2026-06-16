@@ -46,6 +46,13 @@ class Settings:
     oidc_group_claims: tuple[str, ...]
     # Cache TTL (secondes) des groupes résolus par utilisateur (0 = pas de cache).
     group_cache_ttl: int
+    # Post-filtre garde-fous (couche 3) appliqué sur la réponse de l'assistant.
+    # True par défaut : c'est un contrôle de sécurité DÉPLOYÉ (fail-safe). On ne
+    # l'expose désactivable que pour le diagnostic ; en prod on le laisse actif.
+    guardrail_enabled: bool
+    # Timeout (s) du relais HTTP vers l'amont Onyx. Un amont qui génère via LLM
+    # peut être lent (CPU) ; configurable pour ne pas couper une génération longue.
+    upstream_timeout: float
 
     @property
     def graph_configured(self) -> bool:
@@ -71,6 +78,8 @@ def get_settings() -> Settings:
         deny_if_no_match=_bool("GATEWAY_DENY_IF_NO_MATCH", True),
         oidc_group_claims=oidc_group_claims,
         group_cache_ttl=int(os.environ.get("GATEWAY_GROUP_CACHE_TTL", "300")),
+        guardrail_enabled=_bool("GATEWAY_GUARDRAIL_ENABLED", True),
+        upstream_timeout=float(os.environ.get("GATEWAY_UPSTREAM_TIMEOUT", "30")),
     )
 
 

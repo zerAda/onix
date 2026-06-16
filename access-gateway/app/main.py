@@ -26,12 +26,20 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from . import __version__
-from .audit import log_access_decision
+from .audit import log_access_decision, log_guardrail_decision
 from .config import get_settings
+from .guardrail import post_filter
 from .identity import IdentityError, _TTLCache, resolve_principal
 from .graph_client import GraphError
 from .mapping import GroupMap, load_group_map
-from .onyx_proxy import AccessDenied, enforce_document_sets, upstream_headers
+from .onyx_proxy import (
+    AccessDenied,
+    apply_filtered_answer,
+    enforce_document_sets,
+    extract_answer,
+    reconstruct_context,
+    upstream_headers,
+)
 
 _logger = logging.getLogger("onix.gateway")
 
@@ -62,7 +70,7 @@ async def _lifespan(app: FastAPI):
     settings = get_settings()
     app.state.group_map = load_group_map(settings.mapping_path)
     app.state.cache = _TTLCache(settings.group_cache_ttl)
-    app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
+    app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(settings.upstream_timeout))
     _logger.info(
         "gateway prête : source=%s, groupes mappés=%d, deny_if_no_match=%s",
         settings.group_source,
@@ -218,10 +226,34 @@ async def chat_send_message(
         _logger.warning("Erreur de relais vers Onyx : %s", type(exc).__name__)
         raise HTTPException(status_code=502, detail="Onyx amont injoignable.")
 
+    body = _safe_json(resp)
+
+    # ── CHEMIN RÉPONSE : POST-FILTRE GARDE-FOUS (couche 3, hors-LLM, DÉPLOYÉ) ──
+    # La passerelle est le dernier point sous notre contrôle avant l'utilisateur :
+    # on inspecte la réponse de l'assistant Onyx et, au moindre invariant violé
+    # (fuite de prompt, exécution d'injection, write simulé, fait non sourcé…), on
+    # SUBSTITUE un refus déterministe. S'exécute APRÈS le LLM : une injection ne
+    # peut pas le désactiver. N'agit que sur les réponses 2xx exploitables.
+    if settings.guardrail_enabled and 200 <= resp.status_code < 300:
+        answer, field = extract_answer(body)
+        if field is not None:
+            question = payload.get("message", "") if isinstance(payload, dict) else ""
+            context = reconstruct_context(body)
+            verdict = post_filter(str(question), context, answer)
+            log_guardrail_decision(
+                actor=principal.user_id,
+                blocked=verdict.blocked,
+                rule=verdict.rule,
+                reason=verdict.reason,
+                endpoint="chat/send-message",
+            )
+            if verdict.blocked:
+                body = apply_filtered_answer(body, field, verdict.answer)
+
     media = resp.headers.get("content-type", "application/json")
     return JSONResponse(
         status_code=resp.status_code,
-        content=_safe_json(resp),
+        content=body,
         media_type="application/json" if media.startswith("application/json") else media,
     )
 

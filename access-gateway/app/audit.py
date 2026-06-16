@@ -91,3 +91,36 @@ def log_access_decision(
     else:
         _audit_logger.info("%s", line)
     return record
+
+
+def log_guardrail_decision(
+    *,
+    actor: Optional[str],
+    blocked: bool,
+    rule: str,
+    reason: str,
+    endpoint: Optional[str] = None,
+) -> dict[str, Any]:
+    """Émet (et renvoie, pour les tests) un enregistrement d'audit du POST-FILTRE
+    garde-fous appliqué sur la réponse de l'assistant.
+
+    On journalise la **décision** (bloqué/laissé passer) et la **règle**
+    déclenchée — JAMAIS le contenu de la réponse ni la question (minimisation,
+    cohérent avec `log_access_decision`). L'acteur est TOUJOURS pseudonymisé.
+    """
+    record: dict[str, Any] = {
+        "event": "guardrail_decision",
+        "blocked": blocked,
+        "rule": rule,
+        "reason": reason,
+        "actor_hash": pseudonymize(actor),
+        "endpoint": endpoint,
+    }
+    record = {k: v for k, v in record.items() if v is not None}
+    line = json.dumps(record, ensure_ascii=False, sort_keys=True)
+    # Un blocage = signal de sécurité (warning) ; un passthrough = info.
+    if blocked:
+        _audit_logger.warning("%s", line)
+    else:
+        _audit_logger.info("%s", line)
+    return record

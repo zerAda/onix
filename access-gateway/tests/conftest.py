@@ -114,3 +114,48 @@ def client(env, monkeypatch):
         monkeypatch.setattr(main.app.state.http, "post", _fake_post)
         c.last_upstream = captured
         yield c
+
+
+@pytest.fixture()
+def client_factory(env, monkeypatch):
+    """Fabrique un TestClient dont la RÉPONSE de l'amont Onyx est PILOTABLE.
+
+    Utile pour prouver le **post-filtre déployé** : on fait renvoyer à l'amont une
+    réponse d'assistant dangereuse (write simulé, fuite de prompt, fait non
+    sourcé…) et on vérifie que la **gateway** la substitue par un refus AVANT de
+    la renvoyer au client. La réponse amont est paramétrable par test.
+    """
+    from fastapi.testclient import TestClient
+
+    import app.config as config
+    import app.main as main
+
+    importlib.reload(config)
+    importlib.reload(main)
+
+    state: dict = {"upstream": {"message": "ok"}, "status": 200, "captured": {}}
+
+    async def _fake_post(url, json=None, headers=None, **kwargs):  # noqa: A002
+        state["captured"]["url"] = url
+        state["captured"]["payload"] = json
+        return _FakeResponse(state["status"], state["upstream"])
+
+    def _build(upstream_response, status=200):
+        state["upstream"] = upstream_response
+        state["status"] = status
+        c = TestClient(main.app)
+        c.__enter__()
+        monkeypatch.setattr(main.app.state.http, "post", _fake_post)
+        c.captured = state["captured"]
+        return c
+
+    created: list = []
+
+    def _factory(upstream_response, status=200):
+        c = _build(upstream_response, status)
+        created.append(c)
+        return c
+
+    yield _factory
+    for c in created:
+        c.__exit__(None, None, None)
