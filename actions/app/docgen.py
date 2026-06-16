@@ -6,6 +6,10 @@ préparer un rendez-vous / briefing. Durcissement Path Traversal conservé
 
 Les fichiers générés sont stockés sous `ONIX_JOBS_DIR` (défaut: ../data/jobs),
 un identifiant de job est rendu pour le téléchargement ultérieur (GET /download).
+
+WS-CW1 — stockage objet opt-in : si `ONIX_OBJECT_STORE=s3`, le `.docx` est aussi
+téléversé sur S3/MinIO (partagé entre répliques) ; le téléchargement le relit
+depuis le bon backend. En défaut (`local`), comportement historique inchangé.
 """
 from __future__ import annotations
 
@@ -16,6 +20,8 @@ import unicodedata
 import uuid
 from pathlib import Path
 from typing import Optional
+
+from . import objstore
 
 try:
     from docx import Document  # type: ignore
@@ -107,6 +113,12 @@ def generate_fiche(
 
     doc.save(str(file_path))
 
+    # WS-CW1 — stockage objet opt-in : téléverse aussi sur S3/MinIO (partagé entre
+    # répliques). Le fichier local reste écrit (python-docx exige un chemin) ; en
+    # multi-réplica, c'est la copie S3 qui fait foi pour le download.
+    if objstore.is_s3():
+        objstore.put_file(safe_job, file_path.name, str(file_path))
+
     return {"job_id": safe_job, "filename": file_path.name, "path": str(file_path)}
 
 
@@ -125,3 +137,43 @@ def resolve_download(job_id: str, filename: str) -> str:
     if not path.is_file():
         raise FileNotFoundError("Fichier introuvable.")
     return str(path)
+
+
+def _safe_download_inputs(job_id: str, filename: str) -> str:
+    """Valide job_id/filename (anti IDOR/traversal) et renvoie le job_id sanitisé.
+    Mutualisé entre la résolution locale et S3 (mêmes garde-fous)."""
+    if ".." in (filename or "") or "/" in filename or "\\" in filename:
+        raise PermissionError("Nom de fichier invalide.")
+    safe_job = re.sub(r"[^a-zA-Z0-9_\-]", "", str(job_id))[:64]
+    if not safe_job:
+        raise PermissionError("job_id invalide.")
+    return safe_job
+
+
+def list_job_docx(job_id: str) -> list:
+    """Liste les `.docx` d'un job, quel que soit le backend (local ou S3).
+    Renvoie une liste de noms de fichiers (peut être vide)."""
+    safe_job = re.sub(r"[^a-zA-Z0-9_\-]", "", str(job_id))[:64]
+    if not safe_job:
+        return []
+    if objstore.is_s3():
+        name = objstore.find_job_docx(safe_job)
+        return [name] if name else []
+    base = os.path.join(jobs_dir(), safe_job)
+    if not os.path.isdir(base):
+        return []
+    return [f for f in os.listdir(base) if f.lower().endswith(".docx")]
+
+
+def read_download(job_id: str, filename: str) -> bytes:
+    """Retourne le CONTENU d'un fichier généré, depuis le backend actif.
+
+    - local : lit le fichier sur disque (après confinement anti-traversal) ;
+    - S3    : lit l'objet `jobs/<job_id>/<filename>` depuis MinIO/S3.
+    Lève FileNotFoundError si absent, PermissionError si hors périmètre.
+    Permet à `GET /download/{id}` de fonctionner en multi-réplica."""
+    safe_job = _safe_download_inputs(job_id, filename)
+    if objstore.is_s3():
+        return objstore.get_bytes(safe_job, filename)
+    with open(resolve_download(safe_job, filename), "rb") as fh:
+        return fh.read()

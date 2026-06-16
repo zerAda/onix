@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     REGISTRY,
@@ -506,6 +506,89 @@ async def audit_file_endpoint(
 
 
 # ---------------------------------------------------------------------------
+# 1bis. Audit OCR ASYNCHRONE (file Celery) — gated ONIX_QUEUE_ENABLED (WS-CW1)
+# ---------------------------------------------------------------------------
+@app.post("/audit/file/async", status_code=202)
+async def audit_file_async_endpoint(
+    file: UploadFile = File(...),
+    reference: Optional[str] = Form(default=None),
+    client_key: Optional[str] = Form(default=None),
+    caller_id: Optional[str] = Form(default=None),
+    caller: CallerContext = Depends(require_caller),
+) -> Dict[str, Any]:
+    """Met en file un audit OCR long (gros PDF / lot) et renvoie `202 Accepted` +
+    `task_id`. L'API ne bloque pas : le pool `actions-worker` (Celery) traite la
+    tâche et le résultat est récupérable via `GET /jobs/{task_id}`.
+
+    Activé par `ONIX_QUEUE_ENABLED=true` (sinon `503`). Les mêmes garde-fous que
+    l'audit synchrone s'appliquent (auth, kill-switch, validation d'upload)."""
+    from . import celery_app
+
+    if not celery_app.queue_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="File asynchrone désactivée (ONIX_QUEUE_ENABLED non actif).",
+        )
+    who = _effective_caller(caller, caller_id)
+    _gate("audit", who)
+    _gate("ocr", who)
+    data = await file.read()
+    validate_upload(file.filename or "", len(data))
+    audit_log.record_document_accessed(
+        user_id=who, document_id=file.filename, action_name="audit_file_async"
+    )
+
+    ref_inline = None
+    if reference:
+        try:
+            ref_inline = json.loads(reference)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="Champ 'reference' invalide : JSON attendu (objet ou liste).",
+            )
+
+    import base64
+
+    file_b64 = base64.b64encode(data).decode("ascii")
+    async_result = celery_app.audit_file_async.delay(
+        file_b64, file.filename or "document", ref_inline, {"client_key": client_key}
+    )
+    usage_tracker.track("backend_action_called", user_id=who, action_name="audit_file_async_enqueue")
+    return {
+        "status": "accepted",
+        "task_id": async_result.id,
+        "status_url": f"/jobs/{async_result.id}",
+    }
+
+
+@app.get("/jobs/{task_id}")
+def job_status_endpoint(
+    task_id: str, _: CallerContext = Depends(require_caller)
+) -> Dict[str, Any]:
+    """Statut/résultat d'une tâche asynchrone (file Celery). États Celery :
+    PENDING / STARTED / SUCCESS / FAILURE / RETRY. En SUCCESS, `result` porte le
+    verdict d'audit. Gated par `ONIX_QUEUE_ENABLED`."""
+    from . import celery_app
+
+    if not celery_app.queue_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="File asynchrone désactivée (ONIX_QUEUE_ENABLED non actif).",
+        )
+    _gate("audit")
+    res = celery_app.celery.AsyncResult(task_id)
+    state = res.state
+    payload: Dict[str, Any] = {"task_id": task_id, "state": state}
+    if state == "SUCCESS":
+        payload["result"] = res.result
+    elif state == "FAILURE":
+        # Ne pas fuiter de trace interne : message borné, sûr.
+        payload["error"] = "task_failed"
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # 2. Génération de fiche .docx + téléchargement
 # ---------------------------------------------------------------------------
 @app.post("/generate/fiche")
@@ -535,30 +618,36 @@ def generate_fiche_endpoint(
     }
 
 
+_DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+
+
 @app.get("/download/{job_id}")
 def download_endpoint(
     job_id: str, caller: CallerContext = Depends(require_caller)
-) -> FileResponse:
+) -> Response:
+    """Télécharge le `.docx` d'un job. Lit depuis le backend actif (disque local
+    par défaut, S3/MinIO si `ONIX_OBJECT_STORE=s3`) → fonctionne en multi-réplica
+    (toute réplique sert le fichier, qu'elle l'ait généré ou non)."""
     _gate("generate", caller.caller_id if not caller.is_service else None)
     audit_log.record_document_accessed(
         user_id=(None if caller.is_service else caller.caller_id),
         document_id=job_id,
         action_name="download",
     )
-    base = os.path.join(docgen.jobs_dir(), os.path.basename(job_id))
-    if not os.path.isdir(base):
-        raise HTTPException(status_code=404, detail="Job introuvable.")
-    docx_files = [f for f in os.listdir(base) if f.lower().endswith(".docx")]
+    docx_files = docgen.list_job_docx(job_id)
     if not docx_files:
-        raise HTTPException(status_code=404, detail="Aucun fichier pour ce job.")
+        raise HTTPException(status_code=404, detail="Job introuvable ou sans fichier.")
+    filename = docx_files[0]
     try:
-        path = docgen.resolve_download(job_id, docx_files[0])
+        content = docgen.read_download(job_id, filename)
     except (PermissionError, FileNotFoundError) as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return FileResponse(
-        path=path,
-        filename=docx_files[0],
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    return Response(
+        content=content,
+        media_type=_DOCX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

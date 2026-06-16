@@ -26,10 +26,10 @@ import hmac
 import json
 import logging
 import os
-import sqlite3
 from typing import Any, Dict, List, Optional
 
 from .admin_state import _connect, _lock, hash_id
+from . import db
 from . import usage_tracker
 
 _logger = logging.getLogger("onix.actions.audit")
@@ -103,8 +103,24 @@ def compute_entry_hash(
     return hashlib.sha256(material).hexdigest()
 
 
-def _last_chain(conn: sqlite3.Connection) -> tuple[int, str]:
-    """Retourne (dernier seq, dernier entry_hash) ou (0, GENESIS) si vide."""
+# Clé d'avis (advisory lock) Postgres pour sérialiser l'append de la chaîne
+# d'audit ENTRE répliques (arbitraire mais stable ; espace bigint).
+_AUDIT_ADVISORY_LOCK_KEY = 0x0117A0D17  # "onix audit"
+
+
+def _last_chain(conn: Any) -> tuple[int, str]:
+    """Retourne (dernier seq, dernier entry_hash) ou (0, GENESIS) si vide.
+
+    En Postgres, on prend d'abord un **verrou d'avis transactionnel**
+    (`pg_advisory_xact_lock`) : il SÉRIALISE le cycle lecture-du-dernier-maillon +
+    insertion ENTRE répliques (le verrou applicatif `_lock` ne couvre qu'un
+    process). Le verrou est relâché automatiquement au COMMIT/ROLLBACK de la
+    transaction courante — donc la fenêtre critique est exactement l'append. En
+    SQLite (mono-process), `_lock` + l'écriture sérialisée suffisent."""
+    if db.is_postgres():
+        # Placeholder SQLite-style `?` (traduit en %s) + paramètre => pas de
+        # collision avec le doublement des `%` de l'adaptateur.
+        conn.execute("SELECT pg_advisory_xact_lock(?)", (_AUDIT_ADVISORY_LOCK_KEY,))
     row = conn.execute(
         "SELECT seq, entry_hash FROM admin_audit"
         " WHERE seq IS NOT NULL ORDER BY seq DESC LIMIT 1"
