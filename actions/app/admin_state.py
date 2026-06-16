@@ -16,11 +16,17 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import sqlite3
-import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+# WS-CW1 — couche d'accès DB factorisée (SQLite par défaut, Postgres opt-in).
+# `_connect` et `_lock` sont RÉEXPORTÉS depuis `db` pour que les modules
+# historiques (`tasks`, `usage_tracker`, `audit_log`, `retention`) qui font
+# `from .admin_state import _connect, _lock, hash_id` continuent de fonctionner
+# sans modification, quel que soit le backend.
+from . import db
+from .db import _connect, _lock  # noqa: F401 (réexport pour compat)
 
 _logger = logging.getLogger("onix.actions.admin")
 
@@ -44,13 +50,11 @@ _ACTION_SCOPES: Dict[str, Any] = {
     "unblock_user": "user",
 }
 
-_lock = threading.Lock()
-_DB_PATH_ENV = "ONIX_ACTIONS_DB"
-_DEFAULT_DB = os.path.join(os.path.dirname(__file__), "..", "data", "onix_actions.db")
-
-
 def db_path() -> str:
-    return os.path.abspath(os.environ.get(_DB_PATH_ENV) or _DEFAULT_DB)
+    """Chemin du fichier SQLite (mode par défaut). Conservé pour rétro-compat :
+    plusieurs tests lisent `admin_state.db_path()` pour ouvrir la base directement.
+    En mode Postgres, ce chemin n'est pas utilisé (cf. db.connect)."""
+    return db.sqlite_path()
 
 
 def hash_id(raw: Optional[str]) -> Optional[str]:
@@ -61,14 +65,6 @@ def hash_id(raw: Optional[str]) -> Optional[str]:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _connect() -> sqlite3.Connection:
-    path = db_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def init_db() -> None:

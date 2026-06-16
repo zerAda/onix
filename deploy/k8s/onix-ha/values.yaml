@@ -219,6 +219,24 @@ actions:
     llmModel: "llama3.2:3b"
     ollamaUrl: "http://ollama:11434"
     budgetWarnPct: "80"
+    # --- WS-CW1 : persistance & stockage STATELESS (multi-réplica) -----------
+    # Noms de variables ALIGNÉS sur le code (actions/app/db.py & objstore.py),
+    # cf. docs/STATELESS_ACTIONS.md. La ConfigMap pose déjà ONIX_DB_BACKEND=postgres
+    # et ONIX_QUEUE_ENABLED ; ici on documente/aligne les clés consommées.
+    #
+    # Persistance partagée : ONIX_DB_BACKEND=postgres + soit ONIX_DB_URL (DSN
+    # complet), soit les variables POSTGRES_* déjà câblées par la ConfigMap/Secret
+    # (POSTGRES_HOST/POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB). Le code compose
+    # le DSN depuis POSTGRES_* si ONIX_DB_URL est vide.
+    dbBackend: "postgres"        # -> ONIX_DB_BACKEND (sqlite en mono-poste)
+    dbUrl: ""                    # -> ONIX_DB_URL (optionnel ; sinon dérivé de POSTGRES_*)
+    dbName: "onyx"               # -> POSTGRES_DB (base partagée Onyx/onix_actions)
+    dbSchema: ""                 # -> ONIX_DB_SCHEMA (search_path dédié, optionnel)
+    # Stockage objet partagé pour les .docx (sinon GET /download casse en HA).
+    objectStore: "s3"           # -> ONIX_OBJECT_STORE (local en mono-poste)
+    s3Bucket: "onyx-file-store-bucket"  # -> ONIX_S3_BUCKET (S3_ENDPOINT_URL déjà en ConfigMap)
+    # Chaîne d'audit HMAC tamper-evident : clé via Secret (ONIX_ACTIONS_AUDIT_HMAC_KEY).
+    # En prod, l'ajouter au Secret applicatif (cf. docs/STATELESS_ACTIONS.md).
 
 # -----------------------------------------------------------------------------
 # File ASYNCHRONE pour onix-actions : worker Celery + broker AMQP (RabbitMQ).
@@ -229,6 +247,11 @@ actions:
 # -----------------------------------------------------------------------------
 actionsQueue:
   enabled: true
+  # WS-CW1 — backend de RÉSULTATS Celery (statut/résultat des tâches async, lu par
+  # GET /jobs/{task_id}). Aligné sur le code (ONIX_RESULT_BACKEND). Vide => le code
+  # dérive de Redis si le broker est Redis, sinon rpc:// (résultats via AMQP). En
+  # prod HA, pointer sur Postgres partagé : "db+postgresql://<user>:<pwd>@<host>/<db>".
+  resultBackend: ""            # -> ONIX_RESULT_BACKEND
   worker:
     replicaCount: 2
     # Commande Celery (le module `app.celery_app` est le hook à ajouter côté code).

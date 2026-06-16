@@ -33,3 +33,24 @@ PyJWT==2.13.0
 # Endpoint /metrics Prometheus dans actions/app/main.py (cf. docs/OBSERVABILITY.md
 # §5). Pin sûr (0 CVE connue). Permet l'instrumentation HTTP + FinOps + kill-switch.
 prometheus-client==0.21.1
+# --- WS-CW1 : stateless / multi-réplica (cf. docs/STATELESS_ACTIONS.md) -------
+# Persistance partagée OPT-IN (Postgres). En mode SQLite par défaut, ces paquets
+# sont présents mais NON importés (imports paresseux dans app/db.py) — le mode
+# mono-poste ne dépend de rien de nouveau. psycopg 3 (driver Postgres moderne) +
+# binaire embarqué (pas de libpq système requis).
+psycopg==3.3.4
+psycopg-binary==3.3.4
+# Stockage objet OPT-IN (S3/MinIO) pour les .docx (app/objstore.py). boto3 = client
+# S3 standard, compatible MinIO (path-style). Importé paresseusement (mode S3 only).
+boto3==1.43.30
+botocore==1.43.30
+s3transfer==0.18.0
+# urllib3 ÉPINGLÉ à 2.7.0 (et non la 2.6.x tirée par botocore) pour purger
+# PYSEC-2026-141 / PYSEC-2026-142 — gate pip-audit --strict = 0 CVE. Compatible
+# avec la contrainte botocore (>=1.25.4,<3,!=2.2.0).
+urllib3==2.7.0
+# File asynchrone OPT-IN (Celery). Le worker du chart WS4 lance
+# `celery -A app.celery_app.celery worker`. Broker AMQP (RabbitMQ) en prod ;
+# client redis fourni pour un broker/résultats Redis (dev / alternative HA).
+celery==5.6.3
+redis==8.0.0
