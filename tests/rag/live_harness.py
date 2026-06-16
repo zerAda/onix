@@ -542,8 +542,16 @@ def build_user_message(case: LiveCase) -> str:
     )
 
 
-def run_case(case: LiveCase, *, model: Optional[str] = None) -> Dict[str, object]:
-    """Exécute un cas live et renvoie un dict de résultat (sérialisable)."""
+def run_case(case: LiveCase, *, model: Optional[str] = None,
+             apply_postfilter: bool = False) -> Dict[str, object]:
+    """Exécute un cas live et renvoie un dict de résultat (sérialisable).
+
+    Si ``apply_postfilter`` est vrai, la réponse brute du modèle est passée dans
+    la **couche 3 déterministe** (`guardrail_postfilter.post_filter`) AVANT
+    l'évaluation : c'est la garantie applicative qui rattrape les relâchements
+    résiduels d'un 7B (le prompt seul ne suffit pas). On renvoie les DEUX
+    réponses (brute + filtrée) pour la transparence/preuve.
+    """
     user = build_user_message(case)
     try:
         answer = chat(system_prompt(), user, model=model)
@@ -551,10 +559,20 @@ def run_case(case: LiveCase, *, model: Optional[str] = None) -> Dict[str, object
         return {
             "id": case.id, "category": case.category, "passed": False,
             "reason": f"ERREUR appel LLM: {type(e).__name__}: {e}",
-            "answer": "",
+            "answer": "", "raw_answer": "", "postfilter": None,
         }
+
+    raw_answer = answer
+    pf_info: Optional[Dict[str, object]] = None
+    if apply_postfilter:
+        import guardrail_postfilter as pf  # import paresseux (hors-LLM)
+        fr = pf.post_filter(case.question, case.context, raw_answer)
+        answer = fr.answer
+        pf_info = {"blocked": fr.blocked, "rule": fr.rule, "reason": fr.reason}
+
     res = case.checker(answer)
     return {
         "id": case.id, "category": case.category, "passed": res.passed,
         "reason": res.reason, "answer": answer,
+        "raw_answer": raw_answer, "postfilter": pf_info,
     }
