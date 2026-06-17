@@ -78,6 +78,24 @@ class Settings:
     # Locale incluse dans la clé (différencie versions FR/EN d'une même question).
     cache_locale: str
 
+    # ── Filtre ACL par DOCUMENT appliqué sur la RÉPONSE (FOSS, voir doc_acl.py) ──
+    # Active le retrait des citations vers les documents non autorisés
+    # individuellement pour l'appelant. C'est un filtre de SORTIE — il
+    # n'empêche pas que le LLM ait potentiellement vu le contenu pendant la
+    # génération (limite assumée, cf. docs/RBAC.md § « Per-Document Filter »).
+    doc_acl_enabled: bool
+    # Chemin du fichier ACL JSON (objet doc_id → {groups, users}). Fichier
+    # absent ⇒ ACL vide (donc deny-by-default total si default_policy=deny).
+    doc_acl_path: str
+    # Politique par défaut pour un doc_id NON listé dans l'ACL : "deny" (par
+    # défaut, cohérent avec la posture deny-by-default de la passerelle) ou
+    # "allow" (réservé aux POCs / corpus historique sans ACL fine).
+    doc_acl_default_policy: str
+    # Si True ET que toutes les citations sont retirées par le filtre, on
+    # SUBSTITUE le texte de l'assistant par un refus sûr
+    # (`REFUSAL_NO_ACCESSIBLE_SOURCE`). Désactiver uniquement pour le diag.
+    doc_acl_strip_uncited: bool
+
     @property
     def graph_configured(self) -> bool:
         return bool(self.graph_tenant_id and self.graph_client_id and self.graph_client_secret)
@@ -112,6 +130,13 @@ def get_settings() -> Settings:
         cache_max_entries=int(os.environ.get("GATEWAY_CACHE_MAX_ENTRIES", "512")),
         cache_hmac_secret=os.environ.get("GATEWAY_CACHE_HMAC_SECRET", "").strip(),
         cache_locale=os.environ.get("GATEWAY_CACHE_LOCALE", "fr").strip().lower() or "fr",
+        # Filtre ACL par document (cf. app/doc_acl.py + docs/RBAC.md).
+        doc_acl_enabled=_bool("GATEWAY_DOC_ACL_ENABLED", True),
+        doc_acl_path=os.environ.get("GATEWAY_DOC_ACL_PATH", "config/doc_acl.json").strip(),
+        doc_acl_default_policy=(
+            os.environ.get("GATEWAY_DOC_ACL_DEFAULT_POLICY", "deny").strip().lower() or "deny"
+        ),
+        doc_acl_strip_uncited=_bool("GATEWAY_DOC_ACL_STRIP_UNCITED", True),
     )
 
 

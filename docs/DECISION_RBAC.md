@@ -24,7 +24,7 @@
 | Question | Réponse |
 |---|---|
 | Le RBAC **par-document** est-il faisable en FOSS ? | **Non.** C'est une fonction **Onyx EE / Cloud** (permission sync + certificat). Confirmé par les docs Onyx (§5, sources datées). |
-| Que couvre la voie FOSS (`access-gateway`) ? | Un cloisonnement **par groupe d'accès → Document Set**, deny-by-default, non-élargissable. Suffisant pour **équipes/périmètres homogènes** (multi-commerciaux). |
+| Que couvre la voie FOSS (`access-gateway`) ? | Un cloisonnement **par groupe d'accès → Document Set**, deny-by-default, non-élargissable, **+ un filtre par document côté RÉPONSE** (`doc_acl.py`) qui retire les citations vers les fichiers non autorisés individuellement (refus substitué si zéro citation restante). Suffisant pour **équipes/périmètres homogènes** (multi-commerciaux) **avec un cloisonnement supplémentaire visible par fichier**. |
 | Recommandation **équipe homogène par périmètre** | **FOSS + `access-gateway`.** Coût licence = **0 €**. |
 | Recommandation **droits hétérogènes fins intra-équipe** OU **révocation auto exigée** | **EE / Cloud.** Coût licence ≠ 0 (cf. §3, daté **2026-06-16**). |
 | L'astérisque est-il « cadré » ? | **Oui** : la limite est documentée, le risque résiduel quantifié (§4), la passerelle durcie/testée (§6), la décision outillée (cette matrice). Il **n'est pas supprimé** : le par-document strict reste EE. |
@@ -33,11 +33,17 @@
 
 ## 1. Les trois options
 
-- **Option A — Cloisonnement par groupe (FOSS).** SSO OIDC Entra +
-  **Document Sets** Onyx (un par périmètre homogène) + **passerelle
-  `access-gateway`** qui mappe *groupe Entra → Document Set(s) autorisés* et
-  **force** le filtre à la requête (deny-by-default, non-élargissable). Granularité
-  = **Document Set ≈ groupe d'accès**. Édition Onyx = **Community (MIT, gratuite)**.
+- **Option A — Cloisonnement par groupe + filtre par-document côté RÉPONSE
+  (FOSS).** SSO OIDC Entra + **Document Sets** Onyx (un par périmètre
+  homogène) + **passerelle `access-gateway`** qui :
+  1. mappe *groupe Entra → Document Set(s) autorisés* et **force** le filtre
+     à la requête (deny-by-default, non-élargissable) — granularité **Document
+     Set ≈ groupe d'accès**, sur le chemin **RECHERCHE** ;
+  2. depuis `feat/rbac-perdoc`, applique [`doc_acl.py`](../access-gateway/app/doc_acl.py)
+     **sur la RÉPONSE** : retire les citations vers les documents non
+     autorisés individuellement (granularité **par document**, côté sortie ;
+     refus substitué si zéro citation restante).
+  Édition Onyx = **Community (MIT, gratuite)**.
 
 - **Option B — EE / Cloud (permission sync).** Le connecteur SharePoint
   **rapatrie les ACL** de la source (certificat obligatoire) et **filtre par
@@ -61,9 +67,11 @@ Légende : ✅ couvert · ⚠️ partiel/contrainte · ❌ non couvert.
 
 | Critère | A — FOSS (groupe) | B — EE/Cloud (document) | C — Hybride |
 |---|---|---|---|
-| **Granularité** | Document Set (groupe d'accès) | **Document** (ACL source rejouée) | Document **sur le périmètre EE**, groupe ailleurs |
+| **Granularité (RECHERCHE)** | Document Set (groupe d'accès) — le LLM voit tout le set | **Document** (ACL source rejouée — zéro-leak) | Document **sur le périmètre EE**, groupe ailleurs |
+| **Granularité (RÉPONSE)** | ✅ **Document** (filtre `doc_acl.py` retire les citations non-autorisées + refus si zéro citation) | ✅ Document (intégré) | ✅ Document partout |
 | Isolation inter-équipes (commercial A ↮ B) | ✅ filtre forcé + deny-by-default | ✅ | ✅ |
-| Droits **hétérogènes** intra-équipe (même dossier, accès ≠) | ❌ (voir risque résiduel §4) | ✅ | ✅ **sur périmètre EE** |
+| Droits **hétérogènes** intra-équipe (même dossier, accès ≠) — **rendu visible** | ✅ **NOUVEAU** : la citation est retirée pour celui qui n'a pas accès au fichier | ✅ | ✅ |
+| Droits **hétérogènes** intra-équipe — **fuite indirecte par le texte généré** | ❌ (le LLM a pu lire le contenu pendant la génération, cf. §4) | ✅ (le LLM ne voit jamais les chunks non autorisés) | ✅ **sur périmètre EE** |
 | **Propagation de révocation** | ⚠️ **manuelle/différée** : retrait du groupe Entra → effet au ré-login ou expiration du cache (`GATEWAY_GROUP_CACHE_TTL`, défaut 300 s) ; retrait d'accès **fichier** SharePoint **non** propagé | ✅ **auto** : la sync ACL reflète les changements (ordre de grandeur **minutes**, selon l'intervalle) | ✅ auto sur périmètre EE ; différé ailleurs |
 | Anti-contournement requête | ✅ intersection `document_set`, `search_doc_ids` neutralisé | ✅ (filtre moteur natif) | ✅ |
 | Surface de confiance | en-tête `X-OIDC-Claims` (vérifié en amont) + passerelle = **seul point d'entrée** | moteur Onyx + sync ACL (composant EE) | les deux |
@@ -193,11 +201,22 @@ au **même Document Set DS** :
 **Ce que la voie FOSS NE garantit PAS (risque résiduel à acter) :**
 - Si **DS agrège des fichiers dont l'accès diffère** entre U1 et U2 (ex. U1 a accès
   au dossier « Client X » mais **pas** U2, alors que les deux sont mappés à DS),
-  alors **U2 peut, via l'assistant, voir/citer le contenu du dossier « Client X »**
-  indexé dans DS. **L'index FOSS est partagé au sein de DS** : pas d'ACL par
-  fichier rejouée. ⇒ **Mitigation obligatoire : un Document Set ne doit agréger que
-  des sources à accès HOMOGÈNE** pour tous les membres des groupes qui le mappent
-  (cf. [`RBAC.md`](RBAC.md) §6.2 — invariant de conception, pas un contrôle runtime).
+  alors :
+  - **Côté RENDU/CITATION** : depuis le workstream `feat/rbac-perdoc`, le filtre
+    [`doc_acl.py`](../access-gateway/app/doc_acl.py) **retire** les citations
+    vers « Client X » dans la réponse rendue à U2, et **substitue** un refus
+    sourcé si toutes les citations sont retirées. Le risque visible
+    (citations affichées + snippets) est **fermé en FOSS**.
+  - **Côté RÉCUPÉRATION/LLM** : Onyx FOSS récupère et fait raisonner le LLM
+    sur tout DS (pas d'ACL par-fichier à la recherche). Le LLM peut donc
+    **avoir vu** le contenu de « Client X » et — dans le pire des cas —
+    avoir formulé sa réponse à partir de ce contenu, sans citation traçable
+    (le filtre retire la citation mais pas le fragment de texte). **Ce
+    résidu n'est levable qu'en EE** (permission sync, ACL à la recherche)
+    OU par instances Onyx **séparées par tier d'accès**.
+  ⇒ **Mitigation recommandée** : un Document Set conçu **HOMOGÈNE** reste
+    l'invariant de premier rang (`docs/RBAC.md` §6.2) ; le filtre par-document
+    par-RÉPONSE ferme la fuite VISIBLE quand l'homogénéité est imparfaite.
 - **Révocation différée.** Le retrait de U1 d'un **groupe Entra** ne prend effet
   qu'au **ré-login** (claim) ou à l'**expiration du cache** Graph
   (`GATEWAY_GROUP_CACHE_TTL`, défaut **300 s**). Le retrait de l'accès **fichier**
@@ -208,10 +227,13 @@ au **même Document Set DS** :
   obligatoire : la passerelle est le SEUL point d'entrée** (§6).
 
 **Formulation pour l'audit/assurance.** *« En édition gratuite, deux membres d'un
-même groupe d'accès partagent la visibilité de tout le périmètre (Document Set) qui
-leur est mappé ; la séparation fine par document à l'intérieur d'un périmètre, et la
-propagation automatique des révocations SharePoint, requièrent l'Enterprise Edition
-(permission sync). Les périmètres sont donc conçus homogènes. »*
+même groupe d'accès partagent la visibilité **à la recherche** de tout le périmètre
+(Document Set) qui leur est mappé. Le **rendu** (citations visibles, refus si zéro
+citation accessible) est cloisonné **par document** côté passerelle (`doc_acl.py`,
+filtre de sortie). La séparation **stricte par document à la recherche** (zéro
+fuite indirecte par le texte généré) et la propagation automatique des révocations
+SharePoint requièrent l'Enterprise Edition (permission sync). Les périmètres sont
+donc conçus homogènes ; le filtre par-document côté réponse renforce le rendu. »*
 
 ---
 
