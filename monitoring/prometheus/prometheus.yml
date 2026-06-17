@@ -1,0 +1,122 @@
+# =============================================================================
+# onix — Prometheus : configuration de collecte (scrape) + routage des alertes.
+# -----------------------------------------------------------------------------
+# 100 % local / souverain : aucune cible externe, aucune télémétrie sortante.
+# Toutes les cibles sont des services du réseau Docker `monitoring`/`onix-net`.
+#
+# DÉPENDANCE (WS2) : la cible `onix-actions` suppose un endpoint Prometheus
+# `GET /metrics` sur le microservice actions (port 8100). Tant que WS2 ne l'a
+# pas ajouté, ce job restera `down` (visible comme tel dans Grafana) SANS
+# empêcher la collecte des autres cibles. Spécification de l'endpoint : voir
+# docs/OBSERVABILITY.md (« Dépendance : endpoint /metrics à exposer par WS2 »).
+# =============================================================================
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    stack: onix
+    env: local
+
+# Règles d'alerte (service down, budget FinOps dépassé, taux d'erreur, 403…).
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# Routage des alertes vers Alertmanager (interne).
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  # --- Prometheus lui-même (auto-supervision) ------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          service: prometheus
+
+  # --- onix-actions : métriques applicatives métier -------------------------
+  # DÉPENDANCE WS2 : nécessite GET /metrics (Prometheus text format) sur le
+  # microservice actions. Métriques attendues (cf. docs/OBSERVABILITY.md) :
+  #   onix_http_requests_total{endpoint,method,status}        (compteur)
+  #   onix_http_request_duration_seconds_bucket{endpoint,le}  (histogramme)
+  #   onix_killswitch_blocked_total{feature,reason}           (compteur — 403)
+  #   onix_budget_spent_eur / onix_budget_limit_eur / onix_budget_ratio  (jauges)
+  #   onix_up                                                 (jauge 1/0)
+  - job_name: onix-actions
+    metrics_path: /metrics
+    # Le service refuse toute requête sans clé API ; /metrics DOIT être exempté
+    # par WS2 (réseau interne) OU protégé par un bearer fourni ici en clair via
+    # un fichier monté (jamais committé). Par défaut : pas d'auth (interne).
+    static_configs:
+      - targets: ["actions:8100"]
+        labels:
+          service: onix-actions
+
+  # --- onix-access-gateway : métriques qualité + ops du proxy RBAC ----------
+  # Endpoint GET /metrics exposé sur le port 8200 (cf. access-gateway/Dockerfile
+  # et README). Activé par GATEWAY_METRICS_ENABLED (défaut : true). Pas d'auth
+  # (réseau interne onix-net, sans port hôte publié — même posture que onix-actions).
+  # Métriques collectées (cf. docs/OBSERVABILITY.md §access-gateway) :
+  #   onix_gateway_requests_total{endpoint,decision}         (compteur)
+  #   onix_gateway_guardrail_total{rule,blocked}             (compteur — qualité)
+  #   onix_gateway_answer_no_context_total                   (compteur)
+  #   onix_gateway_answer_with_citation_total                (compteur)
+  #   onix_gateway_answer_without_citation_total             (compteur)
+  #   onix_gateway_request_latency_seconds_bucket{le}        (histogramme)
+  #   onix_gateway_upstream_errors_total                     (compteur)
+  #   onix_gateway_feedback_total{rating}                    (compteur — up/down)
+  - job_name: onix-access-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["access-gateway:8200"]
+        labels:
+          service: onix-access-gateway
+
+  # --- Exporters d'infrastructure ------------------------------------------
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: node
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels:
+          service: postgres
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels:
+          service: redis
+
+  # OpenSearch expose une API compatible Elasticsearch -> elasticsearch_exporter.
+  - job_name: opensearch
+    static_configs:
+      - targets: ["opensearch-exporter:9114"]
+        labels:
+          service: opensearch
+
+  # --- Sondes HTTP de disponibilité (blackbox) -----------------------------
+  # Probe HTTP des services internes : santé "boîte noire" indépendante des
+  # métriques applicatives (utile tant que /metrics n'existe pas côté actions).
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://actions:8100/health
+          - http://nginx:80/nginx-health
+        labels:
+          probe: http
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

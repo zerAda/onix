@@ -1,0 +1,75 @@
+apiVersion: v2
+name: onix-ha
+description: >-
+  Déploiement Kubernetes HAUTE DISPONIBILITÉ & SCALE-OUT d'onix (Onyx + Ollama +
+  onix-actions). Chart auto-porté qui REPREND la structure du chart Onyx officiel
+  (deployment/helm/charts/onyx, v0.6.0) — mêmes noms de services, mêmes subcharts
+  data-tier (CloudNativePG, OpenSearch, Redis Operator, MinIO) — mais bascule tous
+  les interrupteurs HA sur ON : services stateless en replicas>=2 + HPA, data-tier
+  multi-noeuds, Ingress+TLS, PodDisruptionBudgets, requests/limits, file asynchrone
+  Celery pour onix-actions, et CronJobs de continuité (snapshots OpenSearch à chaud,
+  PITR Postgres, miroir MinIO) — le tout SANS interruption de service.
+type: application
+
+# Version du chart (artefact onix), et version applicative Onyx ciblée.
+version: 1.0.0
+appVersion: "4.1.1"
+
+home: https://github.com/onyx-dot-app/onyx
+sources:
+  - https://github.com/onyx-dot-app/onyx/tree/main/deployment/helm/charts/onyx
+
+keywords:
+  - onyx
+  - rag
+  - ollama
+  - high-availability
+  - autoscaling
+  - opensearch
+  - cloudnative-pg
+  - minio
+
+maintainers:
+  - name: onix platform team
+
+# ---------------------------------------------------------------------------
+# Dépendances data-tier = EXACTEMENT les subcharts du chart Onyx officiel
+# (deployment/helm/charts/onyx/Chart.yaml, v0.6.0). On les déclare ici pour
+# rester FIDÈLE à l'amont et fournir l'HA du socle de données.
+#
+# Les sous-charts RÉELS sont VENDORISÉS dans charts/*.tgz (verrouillés par
+# Chart.lock) : le chart est donc auto-porté et installable HORS-LIGNE (souverain,
+# air-gap — cohérent avec la philosophie du dépôt : versions épinglées, pas de
+# `curl|bash`). `helm lint`/`helm template` fonctionnent tels quels.
+#
+# Ils sont GATÉS par condition et DÉSACTIVÉS par défaut dans values.yaml : un
+# `Cluster` CNPG / un cluster OpenSearch exigent que l'OPÉRATEUR/les CRD soient
+# déjà présents. Activation EN DEUX TEMPS en prod (opérateur puis cluster) —
+# cf. docs/HA_SCALING.md §"Installation". Refresh des tgz : `helm dependency build`.
+# ---------------------------------------------------------------------------
+dependencies:
+  - name: cloudnative-pg
+    version: "0.26.0"
+    repository: https://cloudnative-pg.github.io/charts
+    condition: postgresql.operator.enabled
+    alias: cloudnativePgOperator
+
+  - name: opensearch
+    version: "3.6.0"
+    repository: https://opensearch-project.github.io/helm-charts
+    condition: opensearch.enabled
+
+  - name: redis-operator
+    version: "0.24.0"
+    repository: https://ot-container-kit.github.io/helm-charts
+    condition: redisOperator.enabled
+
+  - name: redis
+    version: "0.16.6"
+    repository: https://ot-container-kit.github.io/helm-charts
+    condition: redis.enabled
+
+  - name: minio
+    version: "5.4.0"
+    repository: https://charts.min.io/
+    condition: minio.enabled

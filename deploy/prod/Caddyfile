@@ -1,0 +1,149 @@
+# =============================================================================
+# onix — Reverse-proxy TLS de PRODUCTION (Caddy)
+# -----------------------------------------------------------------------------
+# Caddy est le point d'entrée PUBLIC en production. Il termine TLS sur :443,
+# obtient/renouvelle automatiquement les certificats (Let's Encrypt, ACME), force
+# HTTPS (redirection 80 -> 443 native), pose HSTS + en-têtes de sécurité, puis
+# proxifie vers le service `nginx` INTERNE (réseau onix-net) qui conserve tout
+# le routage applicatif audité (/api -> api_server, / -> web_server, WebSocket).
+#
+# Pourquoi Caddy (plutôt que Traefik / nginx+certbot) :
+#   * HTTPS AUTOMATIQUE par défaut (ACME HTTP-01 sur :80, TLS-ALPN-01 sur :443),
+#     renouvellement géré, agrafage OCSP — zéro cron, zéro script certbot.
+#   * Configuration déclarative minimale et AUDITABLE (ce fichier).
+#   * Redirection 80 -> 443 et en-têtes HSTS pris en charge nativement.
+#
+# Variables (fournies par deploy/prod/env.prod.template via le service caddy) :
+#   ONYX_DOMAIN  domaine public réel (ex: onix.exemple.fr) — OBLIGATOIRE en prod.
+#   ACME_EMAIL   e-mail de contact ACME (avis d'expiration Let's Encrypt).
+#   ACME_CA      (optionnel) endpoint ACME — par défaut Let's Encrypt PRODUCTION.
+#                Pour tester sans rate-limit : https://acme-staging-v02.api.letsencrypt.org/directory
+#
+# Validation syntaxe (sans certs/domaine) :
+#   docker run --rm -v "$PWD/deploy/prod/Caddyfile":/etc/caddy/Caddyfile \
+#     caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+# =============================================================================
+{
+	# E-mail ACME : reçoit les avis d'expiration. Recommandé en production.
+	email {$ACME_EMAIL}
+	# Autorité ACME. Défaut = Let's Encrypt PROD. Surcharger en STAGING pour les
+	# essais (évite d'épuiser le rate-limit de production sur un domaine de test).
+	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+	# Pas de divulgation d'identité serveur sur les pages d'erreur de Caddy.
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+# -----------------------------------------------------------------------------
+# Site public. Le domaine est injecté depuis l'environnement : Caddy demande et
+# renouvelle automatiquement un certificat pour ce nom (TLS auto).
+# Pour un certificat INTERNE (lab sans domaine public) : remplacer la ligne par
+#   https://{$ONYX_DOMAIN} { tls internal ; ... }   (CA locale Caddy, cf. doc).
+# -----------------------------------------------------------------------------
+{$ONYX_DOMAIN} {
+	# --- En-têtes de sécurité (appliqués à TOUTES les réponses) --------------
+	header {
+		# HSTS : force HTTPS côté navigateur pendant 2 ans, sous-domaines inclus,
+		# éligible à la liste de préchargement des navigateurs.
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		# Anti-sniffing de type MIME.
+		X-Content-Type-Options "nosniff"
+		# Anti-clickjacking (cohérent avec le SAMEORIGIN du nginx interne).
+		X-Frame-Options "SAMEORIGIN"
+		# Fuite minimale de l'URL référente vers les tiers.
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Désactive des API navigateur intrusives par défaut.
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		# Ne pas exposer la pile technique.
+		-Server
+		-X-Powered-By
+	}
+
+	# =========================================================================
+	# ANTI-USURPATION (RÈGLE D'ARÊTE) — appliquée à TOUTES les requêtes entrantes.
+	# -------------------------------------------------------------------------
+	# La passerelle RBAC FAIT CONFIANCE à `X-OIDC-Claims`. Un client ne doit donc
+	# JAMAIS pouvoir le poser. On SUPPRIME tout en-tête entrant homonyme AU BORD,
+	# avant tout routage. Seul nginx (hop interne) le (re)pose, et UNIQUEMENT à
+	# partir de l'identité VÉRIFIÉE par oauth2-proxy (cf. nginx.prod.conf). On
+	# neutralise aussi les en-têtes `X-Auth-Request-*` entrants (idem : ne doivent
+	# provenir que d'oauth2-proxy, jamais du client).
+	request_header -X-OIDC-Claims
+	request_header -X-Auth-Request-User
+	request_header -X-Auth-Request-Email
+	request_header -X-Auth-Request-Groups
+	request_header -X-Auth-Request-Preferred-Username
+	request_header -X-Auth-Request-Access-Token
+
+	# =========================================================================
+	# 1) Endpoints d'oauth2-proxy (/oauth2/*) — SANS authentification préalable
+	# (sinon boucle de redirection). C'est ici que se déroule la poignée de main
+	# OIDC Entra (sign_in, callback, sign_out) et l'introspection /oauth2/auth.
+	# =========================================================================
+	handle /oauth2/* {
+		reverse_proxy oauth2-proxy:4180 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Uri {uri}
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	# =========================================================================
+	# 2) CHEMIN CHAT (le cœur RBAC) — protégé par oauth2-proxy via forward_auth,
+	# puis routé vers nginx qui le dirige vers la PASSERELLE. C'est le seul
+	# chemin qui exige l'identité VÉRIFIÉE en en-tête (X-OIDC-Claims posé par
+	# nginx). Onyx publie la réponse du chat sur /api/chat/send-message.
+	# -------------------------------------------------------------------------
+	# forward_auth interroge oauth2-proxy:/oauth2/auth. Si 2xx (session valide),
+	# Caddy RECOPIE les en-têtes d'identité VÉRIFIÉS sur la requête amont
+	# (copy_headers) ; si 401, on redirige vers la page de connexion OIDC.
+	# =========================================================================
+	handle /api/chat/send-message* {
+		forward_auth oauth2-proxy:4180 {
+			uri /oauth2/auth
+			header_up X-Real-IP {remote_host}
+			# En-têtes d'identité VÉRIFIÉS recopiés sur la requête vers nginx.
+			# (oauth2-proxy --set-xauthrequest les renvoie en réponse de /oauth2/auth.)
+			copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Preferred-Username X-Auth-Request-Groups X-Auth-Request-Access-Token
+		}
+		# IMPORTANT (chemin API/XHR) : on NE redirige PAS un 401 vers une page de
+		# connexion — le chat est appelé en `fetch()` (XHR), qui ne suivrait pas une
+		# page HTML de login. forward_auth LAISSE donc remonter le 401 d'oauth2-proxy
+		# tel quel ; la SPA / l'opérateur établit la session oauth2-proxy par une
+		# navigation de premier niveau UNE fois (visite de https://<domaine>/oauth2/sign_in,
+		# SSO Entra silencieux si déjà connecté). Cf. docs/DEPLOY_PROD.md §5bis (limite).
+		reverse_proxy nginx:80 {
+			header_up X-Forwarded-Proto https
+			transport http {
+				dial_timeout 10s
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+
+	# =========================================================================
+	# 3) RESTE DU SITE (UI Onyx, autres /api, /openapi.json, WebSocket, uploads)
+	# -> nginx INTERNE puis Onyx. Conserve l'OIDC NATIF d'Onyx (inchangé) : on
+	# n'impose PAS oauth2-proxy ici pour ne pas créer de double flux OIDC qui
+	# casserait l'UI. Seul le chemin chat ci-dessus traverse la passerelle RBAC.
+	# =========================================================================
+	handle {
+		reverse_proxy nginx:80 {
+			header_up X-Forwarded-Proto https
+			# Délais larges : requêtes LLM / indexation longues (aligné sur nginx).
+			transport http {
+				dial_timeout 10s
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+
+	# Journalisation d'accès en JSON (exploitable par un collecteur de logs).
+	log {
+		output stdout
+		format json
+	}
+}

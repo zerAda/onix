@@ -1,0 +1,176 @@
+name: RAGAS Nightly (quality gate)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE QUALITÉ RAG **LIVE**, planifié (nightly) — PAS sur les PR.
+#
+# Le `ci.yml` ne lance QUE les tests RAGAS *offline* (juge mocké) : il ne mesure
+# jamais la qualité d'un VRAI modèle. D'où ce trou : une dérive de qualité (le
+# RAG se met à halluciner, le retrieval se dégrade) peut atteindre le client sans
+# être vue. Ce workflow le ferme : chaque nuit, il fait tourner un LLM-juge
+# souverain (Ollama LOCAL) sur le golden set FR et applique DEUX garde-fous :
+#
+#   1. GATE ABSOLU  : chaque agrégat doit dépasser un seuil (ONIX_RAGAS_MIN_*).
+#   2. ANTI-RÉGRESSION : aucun agrégat ne doit chuter de plus d'une tolérance
+#      sous la baseline committée (tests/rag/ragas_eval/baseline_scores.json).
+#
+# Le job ÉCHOUE si l'un des deux casse → la dérive devient visible. Comme il est
+# `schedule` + `workflow_dispatch` (jamais `pull_request`), il NE BLOQUE PAS les PR.
+#
+# ⚠️ HONNÊTETÉ RUNNER : un runner hébergé GitHub (2 vCPU, ~7 Go RAM, sans GPU)
+# fait tourner un PETIT modèle (llama3.2:1b) en CPU — c'est LENT et BRUYANT. Pour
+# une mesure stable, préférer un **runner self-hosted** (cf. docs/RAG_EVAL.md) et
+# un modèle ≥ 7B. Le bruit du petit juge est précisément pourquoi on compare avec
+# une TOLÉRANCE, jamais à l'égalité. Voir docs/RAG_EVAL.md pour lire/rafraîchir
+# la baseline et la distinction seuils vs tolérance.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # 03:17 UTC chaque jour (heure « creuse » ; minute décalée pour éviter le pic).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Modèle Ollama juge (petit = feasible sur runner hébergé)"
+        type: string
+        default: "llama3.2:1b"
+      tolerance:
+        description: "Tolérance anti-régression (bruit du juge)"
+        type: string
+        default: "0.05"
+      update_baseline:
+        description: "Rafraîchir la baseline depuis CE run (run sain UNIQUEMENT)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Un seul run nightly à la fois ; ne pas annuler un run en cours (mesure longue).
+concurrency:
+  group: ragas-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ragas-live:
+    runs-on: ubuntu-latest
+    # Généreux : pull du modèle + inférence CPU du golden set sont lents.
+    timeout-minutes: 60
+
+    env:
+      # Modèle juge : input du dispatch, sinon défaut petit (feasible CPU hébergé).
+      ONIX_LIVE_MODEL: ${{ github.event.inputs.model || 'llama3.2:1b' }}
+      ONIX_OLLAMA_URL: "http://127.0.0.1:11434"
+      ONIX_LIVE_OLLAMA: "1"
+      # Timeout par appel LLM TRÈS généreux : un 1b en CPU peut « ramer » par item.
+      ONIX_LIVE_TIMEOUT: "600"
+      # Tolérance anti-régression (overridable au dispatch).
+      RAGAS_TOLERANCE: ${{ github.event.inputs.tolerance || '0.05' }}
+      # ── Seuils du GATE ABSOLU, calibrés pour le golden set COMPLET ───────────
+      # golden_fr.json inclut 2 items VOLONTAIREMENT dégradés (G07 halluciné,
+      # G08 hors-sujet) : ils tirent faithfulness/context_precision vers le bas
+      # PAR CONSTRUCTION. Les seuils par défaut (0.90/0.70/0.85) supposent un set
+      # propre → sur le set complet ils échoueraient toujours (gate décoratif).
+      # On pose donc des planchers réalistes pour le set complet + juge 1b bruité :
+      # le gate reste un VRAI signal (passe si sain, casse si effondrement), et la
+      # dérive fine est attrapée par l'anti-régression. Cf. docs/RAG_EVAL.md.
+      ONIX_RAGAS_MIN_FAITHFULNESS: "0.55"
+      ONIX_RAGAS_MIN_CONTEXT_PRECISION: "0.55"
+      ONIX_RAGAS_MIN_ANSWER_RELEVANCY: "0.70"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Dépendances Python de test
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          # Dépendances éventuelles du harnais RAG (requests, PyYAML…). Le chemin
+          # souverain n'utilise que la stdlib, mais on reste cohérent avec ci.yml.
+          if [ -f tests/rag/requirements.txt ]; then
+            pip install -r tests/rag/requirements.txt
+          fi
+
+      - name: Installer Ollama (script officiel)
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama --version
+
+      - name: Démarrer Ollama (serveur en arrière-plan)
+        run: |
+          # `ollama serve` tourne en tâche de fond ; on journalise pour le debug.
+          nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          echo "Ollama lancé (PID $!)."
+
+      - name: Attendre qu'Ollama soit joignable
+        run: |
+          # Polling actif (pas de sleep aveugle) : on attend l'endpoint /api/version.
+          for i in $(seq 1 60); do
+            if curl -fsS "${ONIX_OLLAMA_URL}/api/version" >/dev/null 2>&1; then
+              echo "Ollama joignable après ${i}s."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Ollama injoignable après 60s."
+          cat "$RUNNER_TEMP/ollama.log" || true
+          exit 1
+
+      - name: Télécharger le modèle juge (timeout généreux)
+        # Le pull peut être long sur un runner hébergé ; timeout step explicite.
+        timeout-minutes: 25
+        run: |
+          echo "Pull du modèle : ${ONIX_LIVE_MODEL}"
+          ollama pull "${ONIX_LIVE_MODEL}"
+          ollama list
+
+      - name: Préchauffer le modèle (charge en mémoire)
+        # Un premier appel charge le modèle ; évite de payer ce coût pendant l'éval
+        # et valide tôt que l'inférence répond vraiment sur ce runner.
+        timeout-minutes: 10
+        run: |
+          curl -fsS "${ONIX_OLLAMA_URL}/api/generate" \
+            -d "{\"model\":\"${ONIX_LIVE_MODEL}\",\"prompt\":\"Bonjour\",\"stream\":false}" \
+            >/dev/null && echo "Modèle préchauffé." || {
+              echo "::error::Préchauffage du modèle échoué.";
+              cat "$RUNNER_TEMP/ollama.log" || true; exit 1; }
+
+      - name: Éval RAGAS LIVE + gate absolu + anti-régression
+        # Réutilise EXACTEMENT la cible Makefile (même code path qu'en local) :
+        #   runner --json scores.json  →  compare_scores vs baseline.
+        # Échoue si le gate casse OU si une métrique régresse au-delà de la tolérance.
+        run: |
+          make rag-eval-ci \
+            SCORES=scores.json \
+            BASELINE=ragas_eval/baseline_scores.json \
+            TOL="${RAGAS_TOLERANCE}"
+
+      - name: Rafraîchir la baseline (dispatch manuel uniquement)
+        # UNIQUEMENT sur demande explicite (run jugé sain). N'altère pas le dépôt :
+        # le fichier rafraîchi est exposé en ARTEFACT à committer manuellement après
+        # revue du diff (le job a `contents: read` — pas de push automatique).
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.update_baseline == 'true' }}
+        run: |
+          cd tests/rag
+          python -m ragas_eval.compare_scores scores.json \
+            --baseline ragas_eval/baseline_scores.json --update
+          echo "::notice::Baseline rafraîchie — télécharge l'artefact et committe après revue."
+
+      - name: Archiver les scores (et la baseline éventuellement rafraîchie)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ragas-scores
+          path: |
+            tests/rag/scores.json
+            tests/rag/ragas_eval/baseline_scores.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Journal Ollama (diagnostic en cas d'échec)
+        if: failure()
+        run: cat "$RUNNER_TEMP/ollama.log" || true

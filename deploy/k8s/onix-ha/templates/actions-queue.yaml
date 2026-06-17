@@ -1,0 +1,145 @@
+{{- /*
+File ASYNCHRONE pour onix-actions :
+  * actions-worker : workers Celery (image onix-actions, commande `celery worker`),
+    pour OCR de gros PDF / audits par lot — scale-out indépendant via HPA.
+  * actions-broker : RabbitMQ (StatefulSet + PVC) comme broker AMQP.
+Le hook code attendu côté actions (module `app.celery_app`, endpoints async, tâche
+OCR/audit) est décrit dans docs/HA_SCALING.md.
+*/ -}}
+{{- if .Values.actionsQueue.enabled }}
+
+{{- /* ---------- BROKER RabbitMQ ---------- */ -}}
+{{- if .Values.actionsQueue.broker.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "onix.fullname" . }}-actions-broker
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "actions-broker") | nindent 4 }}
+spec:
+  serviceName: {{ include "onix.fullname" . }}-actions-broker
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "actions-broker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "onix.componentLabels" (dict "ctx" . "component" "actions-broker") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: rabbitmq
+          image: "{{ .Values.actionsQueue.broker.image.repository }}:{{ .Values.actionsQueue.broker.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: amqp
+              containerPort: {{ .Values.actionsQueue.broker.port }}
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: {{ .Values.actionsQueue.broker.username | quote }}
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "onix.secretName" . }}
+                  key: BROKER_PASSWORD
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+          volumeMounts:
+            - name: broker-data
+              mountPath: /var/lib/rabbitmq
+          resources:
+            {{- toYaml .Values.actionsQueue.broker.resources | nindent 12 }}
+  {{- if .Values.actionsQueue.broker.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: broker-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.actionsQueue.broker.persistence.size }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "onix.fullname" . }}-actions-broker
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "actions-broker") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.actionsQueue.broker.port }}
+      targetPort: amqp
+      name: amqp
+  selector:
+    {{- include "onix.componentSelector" (dict "ctx" . "component" "actions-broker") | nindent 4 }}
+{{- end }}
+---
+{{/* ---------- WORKERS Celery ---------- */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "onix.fullname" . }}-actions-worker
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "actions-worker") | nindent 4 }}
+spec:
+  {{- if not .Values.actionsQueue.worker.autoscaling.enabled }}
+  replicas: {{ .Values.actionsQueue.worker.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "actions-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "onix.componentLabels" (dict "ctx" . "component" "actions-worker") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "actions-worker") | nindent 6 }}
+      containers:
+        - name: worker
+          image: "{{ .Values.actions.image.repository }}:{{ .Values.actions.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            {{- toYaml .Values.actionsQueue.worker.command | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "onix.fullname" . }}-config
+          env:
+            - name: ONIX_ACTIONS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "onix.secretName" . }}
+                  key: ONIX_ACTIONS_API_KEY
+            - name: BROKER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "onix.secretName" . }}
+                  key: BROKER_PASSWORD
+            - name: ONIX_BROKER_URL
+              value: {{ include "onix.brokerUrl" . | quote }}
+            {{- include "onix.dataTierSecretEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.actionsQueue.worker.resources | nindent 12 }}
+{{- if .Values.actionsQueue.worker.autoscaling.enabled }}
+---
+{{ include "onix.hpa" (dict "ctx" . "component" "actions-worker" "target" (printf "%s-actions-worker" (include "onix.fullname" .)) "cfg" .Values.actionsQueue.worker.autoscaling) }}
+{{- end }}
+{{- if .Values.actionsQueue.worker.pdb.enabled }}
+---
+{{ include "onix.pdb" (dict "ctx" . "component" "actions-worker" "cfg" .Values.actionsQueue.worker.pdb) }}
+{{- end }}
+{{- end }}

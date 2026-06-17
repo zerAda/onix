@@ -1,0 +1,70 @@
+{{- /* Frontend Next.js Onyx — stateless, replicas>=2, HPA, PDB. */ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "onix.fullname" . }}-webserver
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "webserver") | nindent 4 }}
+spec:
+  {{- if not .Values.webserver.autoscaling.enabled }}
+  replicas: {{ .Values.webserver.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "webserver") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "onix.componentLabels" (dict "ctx" . "component" "webserver") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "webserver") | nindent 6 }}
+      containers:
+        - name: webserver
+          image: {{ include "onix.image" (dict "image" .Values.webserver.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.webserver.port }}
+          env:
+            - name: INTERNAL_URL
+              value: "http://{{ include "onix.fullname" . }}-api:{{ .Values.api.port }}"
+            - name: WEB_DOMAIN
+              value: "https://{{ .Values.ingress.host }}"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml .Values.webserver.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "onix.fullname" . }}-webserver
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "webserver") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.webserver.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "onix.componentSelector" (dict "ctx" . "component" "webserver") | nindent 4 }}
+{{- if .Values.webserver.autoscaling.enabled }}
+---
+{{ include "onix.hpa" (dict "ctx" . "component" "webserver" "target" (printf "%s-webserver" (include "onix.fullname" .)) "cfg" .Values.webserver.autoscaling) }}
+{{- end }}
+{{- if .Values.webserver.pdb.enabled }}
+---
+{{ include "onix.pdb" (dict "ctx" . "component" "webserver" "cfg" .Values.webserver.pdb) }}
+{{- end }}

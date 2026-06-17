@@ -124,6 +124,9 @@ $gpuHint   = if ($useGpu) { "Lancer avec le profil GPU : make up GPU=1 (Docker D
 $keepAlive = if ($ramGB -ge 24) { "-1" } else { "5m" }
 $nPar      = if ($availOllama -ge 12) { 2 } else { 1 }
 $maxLoad   = if ($availOllama -ge 12) { 2 } else { 1 }
+# Fenêtre de contexte (num_ctx) au plus juste du plafond Ollama. Le défaut (4096)
+# tronque le contexte RAG ; KV ~ contextLength x NUM_PARALLEL (q8_0 ~/2).
+$ollamaCtx = if ($useGpu) { 16384 } elseif ((IDiv $ollamaMem $GB) -ge 7) { 12288 } elseif ((IDiv $ollamaMem $GB) -ge 3) { 8192 } else { 4096 }
 $sumGb     = [math]::Round($sumLimits / $GB, 1)
 $headGb    = [math]::Round(($ramMB - $sumLimits) / $GB, 1)
 
@@ -147,6 +150,7 @@ Write-Host "    OLLAMA_KV_CACHE_TYPE=q8_0"
 Write-Host "    OLLAMA_KEEP_ALIVE=$keepAlive"
 Write-Host "    OLLAMA_NUM_PARALLEL=$nPar"
 Write-Host "    OLLAMA_MAX_LOADED_MODELS=$maxLoad"
+Write-Host "    OLLAMA_CONTEXT_LENGTH=$ollamaCtx"
 Write-Host "    OLLAMA_CPU_LIMIT=$cpuCores"
 Write-Host "    OLLAMA_MEM_LIMIT=$(FmtMem $ollamaMem)"
 Write-Host "    OPENSEARCH_HEAP=${heap}g"

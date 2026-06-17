@@ -1,0 +1,56 @@
+# onix-actions — dépendances épinglées (reproductibilité).
+# Toutes locales / open-source : aucun SDK cloud.
+#
+# Versions relevées (WS6) pour purger 100 % des CVE connues (gate pip-audit en CI
+# = 0 vulnérabilité). Compatibilité validée par actions/tests (33 passed, 1 skipped).
+# Relever ces pins quand de nouveaux correctifs paraissent (le gate pip-audit, qui
+# est BLOQUANT, échouera dès qu'une CVE corrigeable apparaît). Cf. docs/OBSERVABILITY.md.
+fastapi==0.137.1
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+python-multipart==0.0.32
+httpx==0.28.1
+python-docx==1.1.2
+thefuzz==0.22.1
+pdfplumber==0.11.10
+pypdf==6.13.2
+pytesseract==0.3.13
+pdf2image==1.17.0
+Pillow==12.2.0
+# --- WS2 : sécurité / RGPD ---------------------------------------------------
+# Rate-limiting par appelant (parité quota AC360). Le décompte effectif par
+# identité est piloté dans la dépendance d'auth ; slowapi reste l'extension de
+# référence (et un repli mémoire couvre son absence).
+slowapi==0.1.9
+# Vérification de JWT OIDC (RS256/ES256 + JWKS) pour l'identité d'appelant
+# fédérée (ex. Entra ID). Optionnel : la voie HS256 est gérée nativement sans
+# dépendance ; PyJWT n'est requis QUE pour les signatures asymétriques.
+# Intégration : relevé de 2.10.1 (proposé par WS2) à 2.13.0 pour purger 12 CVE
+# disclosed depuis (PYSEC-2025-183, PYSEC-2026-120/175/176/177/178/179) — gate
+# pip-audit --strict = 0 CVE. API compatible (vérif JWT inchangée).
+PyJWT==2.13.0
+# --- Intégration (câblage WS6 ↔ WS2) -----------------------------------------
+# Endpoint /metrics Prometheus dans actions/app/main.py (cf. docs/OBSERVABILITY.md
+# §5). Pin sûr (0 CVE connue). Permet l'instrumentation HTTP + FinOps + kill-switch.
+prometheus-client==0.21.1
+# --- WS-CW1 : stateless / multi-réplica (cf. docs/STATELESS_ACTIONS.md) -------
+# Persistance partagée OPT-IN (Postgres). En mode SQLite par défaut, ces paquets
+# sont présents mais NON importés (imports paresseux dans app/db.py) — le mode
+# mono-poste ne dépend de rien de nouveau. psycopg 3 (driver Postgres moderne) +
+# binaire embarqué (pas de libpq système requis).
+psycopg==3.3.4
+psycopg-binary==3.3.4
+# Stockage objet OPT-IN (S3/MinIO) pour les .docx (app/objstore.py). boto3 = client
+# S3 standard, compatible MinIO (path-style). Importé paresseusement (mode S3 only).
+boto3==1.43.30
+botocore==1.43.30
+s3transfer==0.18.0
+# urllib3 ÉPINGLÉ à 2.7.0 (et non la 2.6.x tirée par botocore) pour purger
+# PYSEC-2026-141 / PYSEC-2026-142 — gate pip-audit --strict = 0 CVE. Compatible
+# avec la contrainte botocore (>=1.25.4,<3,!=2.2.0).
+urllib3==2.7.0
+# File asynchrone OPT-IN (Celery). Le worker du chart WS4 lance
+# `celery -A app.celery_app.celery worker`. Broker AMQP (RabbitMQ) en prod ;
+# client redis fourni pour un broker/résultats Redis (dev / alternative HA).
+celery==5.6.3
+redis==8.0.0

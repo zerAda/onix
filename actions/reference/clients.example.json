@@ -1,0 +1,14 @@
+[
+  {
+    "nom_client": "ACME SAS",
+    "plafond_hospitalisation": "2000,00",
+    "date_effet": "2024-01-01",
+    "numero_contrat": "CTR-2024-001"
+  },
+  {
+    "nom_client": "OMEGA MUTUELLE",
+    "plafond_hospitalisation": "3500",
+    "date_effet": "2023-06-15",
+    "numero_contrat": "CTR-2023-117"
+  }
+]

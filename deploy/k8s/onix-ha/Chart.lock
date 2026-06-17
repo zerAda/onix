@@ -1,0 +1,18 @@
+dependencies:
+- name: cloudnative-pg
+  repository: https://cloudnative-pg.github.io/charts
+  version: 0.26.0
+- name: opensearch
+  repository: https://opensearch-project.github.io/helm-charts
+  version: 3.6.0
+- name: redis-operator
+  repository: https://ot-container-kit.github.io/helm-charts
+  version: 0.24.0
+- name: redis
+  repository: https://ot-container-kit.github.io/helm-charts
+  version: 0.16.6
+- name: minio
+  repository: https://charts.min.io/
+  version: 5.4.0
+digest: sha256:ef7d7e678ef326c48506c5b947f6d5d2713d47b59a89b3eaa925874503a693fe
+generated: "2026-06-16T14:52:39.097369911Z"

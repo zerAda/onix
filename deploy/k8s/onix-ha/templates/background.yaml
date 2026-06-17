@@ -1,0 +1,46 @@
+{{- /* Workers d'arrière-plan Onyx (indexation, Celery interne via supervisord). */ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "onix.fullname" . }}-background
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "background") | nindent 4 }}
+spec:
+  {{- if not .Values.background.autoscaling.enabled }}
+  replicas: {{ .Values.background.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "background") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "onix.componentLabels" (dict "ctx" . "component" "background") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "background") | nindent 6 }}
+      containers:
+        - name: background
+          image: {{ include "onix.image" (dict "image" .Values.background.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - "/app/scripts/supervisord_entrypoint.sh"
+          envFrom:
+            - configMapRef:
+                name: {{ include "onix.fullname" . }}-config
+          env:
+            {{- include "onix.dataTierSecretEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.background.resources | nindent 12 }}
+{{- if .Values.background.autoscaling.enabled }}
+---
+{{ include "onix.hpa" (dict "ctx" . "component" "background" "target" (printf "%s-background" (include "onix.fullname" .)) "cfg" .Values.background.autoscaling) }}
+{{- end }}
+{{- if .Values.background.pdb.enabled }}
+---
+{{ include "onix.pdb" (dict "ctx" . "component" "background" "cfg" .Values.background.pdb) }}
+{{- end }}

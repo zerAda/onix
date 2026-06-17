@@ -1,0 +1,80 @@
+{{- /*
+Postgres HA via CloudNativePG — CRD postgresql.cnpg.io/Cluster.
+3 instances (1 primaire + 2 réplicas en streaming) => bascule automatique, zéro
+SPOF base. Sauvegarde NATIVE à chaud vers MinIO/S3 : WAL archiving continu (PITR)
++ base backups planifiées => continuité SANS interruption.
+
+Pré-requis : opérateur CloudNativePG présent (postgresql.operator.enabled=true,
+sous-chart `cloudnativePgOperator`). Rendu uniquement si postgresql.cluster.enabled.
+*/ -}}
+{{- if .Values.postgresql.cluster.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "onix.fullname" . }}-postgresql
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "postgresql") | nindent 4 }}
+spec:
+  instances: {{ .Values.postgresql.cluster.instances }}
+  imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+
+  # Identifiants applicatifs : CNPG attend un Secret de type basic-auth (clés
+  # `username` + `password`). Par défaut CNPG GÉNÈRE ce Secret ; pour câbler le
+  # MÊME mot de passe côté Onyx, fournir un Secret dédié et le référencer ici
+  # (postgresql.cluster.appSecret). IMPORTANT : ce Secret a des clés `username`/
+  # `password` (format CNPG), distinct du Secret applicatif (POSTGRES_PASSWORD).
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgresql.cluster.database | quote }}
+      owner: {{ .Values.postgresql.cluster.owner | quote }}
+      {{- if .Values.postgresql.cluster.appSecret }}
+      secret:
+        name: {{ .Values.postgresql.cluster.appSecret }}
+      {{- end }}
+
+  storage:
+    size: {{ .Values.postgresql.cluster.storageSize }}
+    {{- if .Values.global.storageClass }}
+    storageClass: {{ .Values.global.storageClass | quote }}
+    {{- end }}
+
+  # Réplication synchrone : au moins 1 réplica doit confirmer (durabilité HA).
+  postgresql:
+    parameters:
+      max_connections: "200"
+
+  {{- if .Values.postgresql.cluster.backup.enabled }}
+  # Sauvegarde à chaud vers object store (MinIO/S3) : WAL continu + base backups.
+  backup:
+    retentionPolicy: {{ .Values.postgresql.cluster.backup.retentionPolicy | quote }}
+    barmanObjectStore:
+      destinationPath: {{ .Values.postgresql.cluster.backup.destinationPath | quote }}
+      endpointURL: {{ .Values.postgresql.cluster.backup.endpointURL | default (include "onix.minioEndpoint" .) | quote }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ include "onix.secretName" . }}
+          key: S3_AWS_ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ include "onix.secretName" . }}
+          key: S3_AWS_SECRET_ACCESS_KEY
+      wal:
+        compression: gzip
+      data:
+        compression: gzip
+  {{- end }}
+{{- if and .Values.postgresql.cluster.backup.enabled .Values.postgresql.cluster.backup.scheduledBackup.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ include "onix.fullname" . }}-postgresql-backup
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "postgresql") | nindent 4 }}
+spec:
+  # Format CNPG : 6 champs (secondes incluses).
+  schedule: {{ .Values.postgresql.cluster.backup.scheduledBackup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ include "onix.fullname" . }}-postgresql
+{{- end }}
+{{- end }}

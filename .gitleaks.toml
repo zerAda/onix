@@ -1,0 +1,32 @@
+title = "onix — configuration gitleaks"
+
+# On ÉTEND le jeu de règles par défaut (AWS, clés privées, etc.).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Artefacts locaux (jamais committés) + faux positifs vérifiés"
+# `paths` sont des REGEX (pas des globs). En mode CI `--no-git`, gitleaks scanne
+# le système de fichiers : on exclut explicitement les artefacts locaux gitignorés.
+paths = [
+  '''(^|/)\.env(\..*)?$''',   # secrets locaux (gitignorés) — jamais scannés
+  '''(^|/)\.venv/''',          # virtualenv local de actions/ (gitignoré)
+  '''(^|/)__pycache__/''',
+  '''\.pyc$''',
+  # Overlay smoke-test kind mono-nœud : valeurs factices `dev*` documentées,
+  # JAMAIS utilisées en prod (le chart prod génère les secrets). Cf. HA_ACCEPTANCE.md.
+  '''deploy/k8s/onix-ha/values-kind-smoke\.yaml$''',
+]
+# Valeur FACTICE de test (actions/tests/conftest.py) — non-secret confirmé.
+regexes = [
+  '''test-key-0123456789''',
+  # GUIDs de RÔLES INTÉGRÉS Azure (publics, documentés Microsoft) — PAS des secrets.
+  # AcrPull / Key Vault Secrets User / Monitoring Data Reader (deploy/azure/bicep/).
+  '''7f951dda-4ed3-4680-a7ca-43fe172d538d''',
+  '''4633458b-17de-408a-b874-0445c86b69e6''',
+  '''b0d8363b-8ddd-447d-831f-62ca05bff136''',
+  # Healthcheck OpenSearch (docker-compose.prod-local.yml) : `curl -u admin:$${OPENSEARCH_INITIAL_ADMIN_PASSWORD}`.
+  # Le « mot de passe » est une RÉFÉRENCE de variable (compose échappe `$$` → évaluée
+  # DANS le conteneur), jamais un secret littéral. Faux positif de la règle curl-auth-user.
+  '''admin:\$\$\{OPENSEARCH_INITIAL_ADMIN_PASSWORD\}''',
+]

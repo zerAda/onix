@@ -1,0 +1,145 @@
+{{- /* Model servers Onyx : INFÉRENCE (requête) et INDEXATION (ingestion).
+       Stateless, replicas>=2, HPA, PDB. Cache HF en emptyDir (re-téléchargeable). */ -}}
+
+{{- /* ---------- INFERENCE MODEL SERVER ---------- */ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "onix.fullname" . }}-inference-model-server
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "inference-model-server") | nindent 4 }}
+spec:
+  {{- if not .Values.inferenceModelServer.autoscaling.enabled }}
+  replicas: {{ .Values.inferenceModelServer.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "inference-model-server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "onix.componentLabels" (dict "ctx" . "component" "inference-model-server") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "inference-model-server") | nindent 6 }}
+      containers:
+        - name: model-server
+          image: {{ include "onix.image" (dict "image" .Values.inferenceModelServer.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - "uvicorn model_server.main:app --host 0.0.0.0 --port {{ .Values.inferenceModelServer.port }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.inferenceModelServer.port }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /app/.cache/huggingface
+          resources:
+            {{- toYaml .Values.inferenceModelServer.resources | nindent 12 }}
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "onix.fullname" . }}-inference-model-server
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "inference-model-server") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.inferenceModelServer.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "onix.componentSelector" (dict "ctx" . "component" "inference-model-server") | nindent 4 }}
+{{- if .Values.inferenceModelServer.autoscaling.enabled }}
+---
+{{ include "onix.hpa" (dict "ctx" . "component" "inference-model-server" "target" (printf "%s-inference-model-server" (include "onix.fullname" .)) "cfg" .Values.inferenceModelServer.autoscaling) }}
+{{- end }}
+{{- if .Values.inferenceModelServer.pdb.enabled }}
+---
+{{ include "onix.pdb" (dict "ctx" . "component" "inference-model-server" "cfg" .Values.inferenceModelServer.pdb) }}
+{{- end }}
+
+---
+{{/* ---------- INDEX MODEL SERVER ---------- */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "onix.fullname" . }}-index-model-server
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "index-model-server") | nindent 4 }}
+spec:
+  {{- if not .Values.indexModelServer.autoscaling.enabled }}
+  replicas: {{ .Values.indexModelServer.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "index-model-server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "onix.componentLabels" (dict "ctx" . "component" "index-model-server") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "index-model-server") | nindent 6 }}
+      containers:
+        - name: model-server
+          image: {{ include "onix.image" (dict "image" .Values.indexModelServer.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - "uvicorn model_server.main:app --host 0.0.0.0 --port {{ .Values.indexModelServer.port }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.indexModelServer.port }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /app/.cache/huggingface
+          resources:
+            {{- toYaml .Values.indexModelServer.resources | nindent 12 }}
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "onix.fullname" . }}-index-model-server
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "index-model-server") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.indexModelServer.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "onix.componentSelector" (dict "ctx" . "component" "index-model-server") | nindent 4 }}
+{{- if .Values.indexModelServer.autoscaling.enabled }}
+---
+{{ include "onix.hpa" (dict "ctx" . "component" "index-model-server" "target" (printf "%s-index-model-server" (include "onix.fullname" .)) "cfg" .Values.indexModelServer.autoscaling) }}
+{{- end }}
+{{- if .Values.indexModelServer.pdb.enabled }}
+---
+{{ include "onix.pdb" (dict "ctx" . "component" "index-model-server" "cfg" .Values.indexModelServer.pdb) }}
+{{- end }}

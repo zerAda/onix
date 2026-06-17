@@ -1,0 +1,405 @@
+# =============================================================================
+# onix — Surcouche de PRODUCTION (déploiement d'entreprise exposé).
+# -----------------------------------------------------------------------------
+# S'EMPILE sur docker-compose.yml (jamais à la place). À utiliser ainsi :
+#
+#   docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml \
+#     --env-file deploy/prod/.env.prod up -d
+#   (ou : make up-prod — cf. bloc « --- WS3 --- » du Makefile)
+#
+# Ce que cette surcouche ajoute / durcit par rapport à la base (poste local) :
+#   1. Reverse-proxy TLS « caddy » : termine :443, HTTPS AUTOMATIQUE (Let's
+#      Encrypt), redirection 80 -> 443, HSTS + en-têtes de sécurité. SEUL service
+#      lié à une IP/host PUBLIC. Proxifie vers le nginx INTERNE (routage audité).
+#   2. nginx repassé en INTERNE : re-lié à 127.0.0.1 (n'est plus le point
+#      d'entrée public ; Caddy l'atteint via le réseau onix-net en nginx:80).
+#   3. OIDC Entra ID FORCÉ : AUTH_TYPE=oidc, vérification d'e-mail obligatoire,
+#      domaines e-mail restreints, PKCE. WEB_DOMAIN en https.
+#   4. Défauts durcis : pas de télémétrie, énumération comptes réservée admin,
+#      session raccourcie, redémarrage always.
+#   5. Reproductibilité : image `actions` ÉPINGLÉE par tag (+ digest possible),
+#      plus de build local implicite en prod (cf. docs/DEPLOY_PROD.md § CI/WS6).
+#
+# Pré-vol de sûreté : le service `preflight` REFUSE de démarrer une exposition
+# (BIND_IP != 127.0.0.1) sans TLS + OIDC + vérification d'e-mail. api_server,
+# background, web_server et caddy en dépendent (depends_on: condition healthy),
+# donc rien d'exposé ne monte si le garde-fou échoue.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Garde-fou « défaut-sûr » : vérifie l'environnement AVANT que quoi que ce
+  # soit d'exposé démarre. Refuse une exposition réseau sans TLS+OIDC+email.
+  # Conteneur éphémère (busybox) exécutant scripts/preflight-prod.sh.
+  # ---------------------------------------------------------------------------
+  preflight:
+    image: busybox:1.37
+    command: ["/bin/sh", "/preflight/preflight-prod.sh"]
+    environment:
+      - BIND_IP=${BIND_IP:?definir BIND_IP dans .env.prod - ex 0.0.0.0 ou une IP publique}
+      - AUTH_TYPE=${AUTH_TYPE:-basic}
+      - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-false}
+      - VALID_EMAIL_DOMAINS=${VALID_EMAIL_DOMAINS:-}
+      - ONYX_DOMAIN=${ONYX_DOMAIN:-}
+      - WEB_DOMAIN=${WEB_DOMAIN:-}
+      - OAUTH_CLIENT_ID=${OAUTH_CLIENT_ID:-}
+      - OAUTH_CLIENT_SECRET=${OAUTH_CLIENT_SECRET:-}
+      - OPENID_CONFIG_URL=${OPENID_CONFIG_URL:-}
+    volumes:
+      - ./scripts/preflight-prod.sh:/preflight/preflight-prod.sh:ro
+    restart: "no"
+    healthcheck:
+      # Le script écrit /tmp/ok puis dort. healthy => garde-fou franchi.
+      test: ["CMD", "test", "-f", "/tmp/ok"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Caddy — reverse-proxy TLS PUBLIC. Termine :443, HTTPS auto, 80 -> 443, HSTS.
+  # SEUL service lié à une IP/host réel (via ${BIND_IP}). Proxifie nginx:80.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      preflight:
+        condition: service_healthy
+      nginx:
+        condition: service_started
+      # Le chemin chat (forward_auth) ne doit fonctionner qu'une fois oauth2-proxy prêt.
+      oauth2-proxy:
+        condition: service_started
+    ports:
+      # Liés à l'IP/host RÉEL (défaut 0.0.0.0 = toutes interfaces). :80 sert le
+      # challenge ACME HTTP-01 + la redirection vers https ; :443 sert le trafic.
+      - "${BIND_IP:?definir BIND_IP dans .env.prod}:80:80"
+      - "${BIND_IP:?definir BIND_IP dans .env.prod}:443:443"
+      - "${BIND_IP:?definir BIND_IP dans .env.prod}:443:443/udp"  # HTTP/3 (QUIC)
+    environment:
+      - ONYX_DOMAIN=${ONYX_DOMAIN:?definir ONYX_DOMAIN (domaine public reel)}
+      - ACME_EMAIL=${ACME_EMAIL:?definir ACME_EMAIL (contact Let's Encrypt)}
+      - ACME_CA=${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
+    volumes:
+      - ./deploy/prod/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persistance des certificats/clés ACME : indispensable pour ne pas
+      # re-émettre à chaque redémarrage (rate-limit Let's Encrypt).
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/", "--header=Host: health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
+    deploy:
+      resources:
+        limits:
+          cpus: ${CADDY_CPU_LIMIT:-1}
+          memory: ${CADDY_MEM_LIMIT:-256m}
+
+  # ---------------------------------------------------------------------------
+  # nginx — repassé en INTERNE. N'est PLUS le point d'entrée public : Caddy
+  # l'atteint via le réseau onix-net (nginx:80). On re-lie le port hôte à
+  # 127.0.0.1 (défense en profondeur : jamais joignable depuis le LAN).
+  # Le routage applicatif (/api, /, WebSocket, upload 5G) reste celui de
+  # nginx/onyx.conf — surcouche minimale, config audité réutilisé.
+  # ---------------------------------------------------------------------------
+  nginx:
+    depends_on:
+      preflight:
+        condition: service_healthy
+      # Le chemin /api/chat/send-message route vers la passerelle (cf. nginx.prod.conf).
+      access-gateway:
+        condition: service_started
+      oauth2-proxy:
+        condition: service_started
+    ports: !reset []
+    expose:
+      - "80"
+    volumes:
+      # Variante prod : honore le X-Forwarded-Proto=https transmis par Caddy
+      # (sinon Onyx verrait le hop interne en http → callbacks OIDC / cookies KO).
+      - !reset []
+      - ./deploy/prod/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+
+  # ---------------------------------------------------------------------------
+  # api_server — OIDC Entra ID FORCÉ + durcissement. Ne démarre qu'après le
+  # garde-fou (preflight healthy).
+  # ---------------------------------------------------------------------------
+  api_server:
+    depends_on:
+      preflight:
+        condition: service_healthy
+    environment:
+      # --- SSO d'entreprise (OIDC / Microsoft Entra ID) ---------------------
+      - AUTH_TYPE=oidc
+      - OAUTH_CLIENT_ID=${OAUTH_CLIENT_ID:?Entra ID - definir OAUTH_CLIENT_ID}
+      - OAUTH_CLIENT_SECRET=${OAUTH_CLIENT_SECRET:?Entra ID - definir OAUTH_CLIENT_SECRET}
+      # https://login.microsoftonline.com/<TENANT_ID>/v2.0/.well-known/openid-configuration
+      - OPENID_CONFIG_URL=${OPENID_CONFIG_URL:?Entra ID - definir OPENID_CONFIG_URL}
+      - OIDC_PKCE_ENABLED=${OIDC_PKCE_ENABLED:-true}
+      - OIDC_SCOPE_OVERRIDE=${OIDC_SCOPE_OVERRIDE:-}
+      # --- Fermeture de la porte (anti prise de contrôle) -------------------
+      - REQUIRE_EMAIL_VERIFICATION=true
+      - VALID_EMAIL_DOMAINS=${VALID_EMAIL_DOMAINS:?definir VALID_EMAIL_DOMAINS - ex exemple.fr}
+      - USER_DIRECTORY_ADMIN_ONLY=true
+      # --- Domaine public en HTTPS (URL de callback OIDC dérivée) -----------
+      - WEB_DOMAIN=${WEB_DOMAIN:?definir WEB_DOMAIN=https://<ONYX_DOMAIN>}
+      - SESSION_EXPIRE_TIME_SECONDS=${SESSION_EXPIRE_TIME_SECONDS:-43200}
+      - DISABLE_TELEMETRY=true
+
+  # ---------------------------------------------------------------------------
+  # background — mêmes valeurs d'auth (cohérence) + dépendance au garde-fou.
+  # ---------------------------------------------------------------------------
+  background:
+    depends_on:
+      preflight:
+        condition: service_healthy
+    environment:
+      - AUTH_TYPE=oidc
+      - DISABLE_TELEMETRY=true
+
+  # ---------------------------------------------------------------------------
+  # web_server — domaine public HTTPS pour les redirections OIDC.
+  # ---------------------------------------------------------------------------
+  web_server:
+    depends_on:
+      preflight:
+        condition: service_healthy
+    environment:
+      - INTERNAL_URL=http://api_server:8080
+      - WEB_DOMAIN=${WEB_DOMAIN:?definir WEB_DOMAIN=https://<ONYX_DOMAIN>}
+      - AUTH_TYPE=oidc
+
+  # ---------------------------------------------------------------------------
+  # actions — ÉPINGLAGE par tag (+ digest optionnel) pour la reproductibilité.
+  # En production on NE construit PAS localement : l'image est buildée/poussée en
+  # CI (coordination WS6, cf. docs/DEPLOY_PROD.md § Reproductibilité). On neutralise
+  # le `build:` de la base via `pull_policy: always` + image épinglée au registre.
+  # Renseigner ACTIONS_IMAGE dans .env.prod, idéalement avec un digest :
+  #   ACTIONS_IMAGE=ghcr.io/<org>/onix-actions:1.0.0@sha256:<digest>
+  # ---------------------------------------------------------------------------
+  actions:
+    image: ${ACTIONS_IMAGE:?definir ACTIONS_IMAGE (tag/digest epingle, build CI - cf. WS6)}
+    pull_policy: always
+    build: !reset null
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # oauth2-proxy — VÉRIFICATEUR OIDC en amont de la passerelle RBAC.
+  # -----------------------------------------------------------------------------
+  # Pourquoi ce service ? La passerelle `access-gateway` FAIT CONFIANCE à un en-tête
+  # `X-OIDC-Claims` (claims DÉJÀ vérifiés). Rien, dans la base, ne produit cet
+  # en-tête : l'OIDC natif d'Onyx authentifie l'UI Onyx, mais n'EXPOSE PAS les
+  # claims sous forme d'en-tête réutilisable par un proxy tiers. oauth2-proxy
+  # comble ce manque : il porte la poignée de main OIDC (Entra ID), valide le
+  # jeton, tient le cookie de session, et — via `--set-xauthrequest` — RENVOIE
+  # l'identité vérifiée dans des en-têtes de réponse `X-Auth-Request-*` que Caddy
+  # (forward_auth) recopie sur la requête, puis que nginx traduit en `X-OIDC-Claims`.
+  #
+  # Identité émise (config Entra ci-dessous) :
+  #   --user-id-claim=oid          -> X-Auth-Request-User = oid (objectId STABLE,
+  #                                   clé canonique côté passerelle ET Microsoft Graph)
+  #   --oidc-email-claim=upn       -> e-mail/UPN porté dans X-Auth-Request-Email
+  #   X-Auth-Request-Preferred-Username = preferred_username/UPN
+  #
+  # INTERNE uniquement (aucun port hôte) : seul Caddy l'atteint via onix-net
+  # (oauth2-proxy:4180). Le flux navigateur passe par Caddy (/oauth2/*).
+  # ---------------------------------------------------------------------------
+  oauth2-proxy:
+    # Épinglé sur une version récente : v7.15.2+ corrige des CVE de CONTOURNEMENT
+    # d'authentification / fixation de session — critique pour un vérificateur OIDC.
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
+    restart: unless-stopped
+    depends_on:
+      preflight:
+        condition: service_healthy
+    # Écoute INTERNE seulement ; exposé au navigateur via Caddy (cf. Caddyfile).
+    expose:
+      - "4180"
+    command:
+      - --http-address=0.0.0.0:4180
+      - --reverse-proxy=true                 # derrière Caddy : honore X-Forwarded-*
+      - --provider=oidc
+      # Découverte OIDC du tenant Entra (même URL que l'OIDC natif d'Onyx).
+      - --oidc-issuer-url=${OAUTH2_PROXY_OIDC_ISSUER_URL:?definir OAUTH2_PROXY_OIDC_ISSUER_URL=https://login.microsoftonline.com/<TENANT_ID>/v2.0}
+      # Entra : identité STABLE = oid ; e-mail = upn (cf. docs/DEPLOY_PROD.md §5bis).
+      - --user-id-claim=oid
+      - --oidc-email-claim=upn
+      # Récupère le claim `groups` (utile en mode claims/auto ; voir bridge nginx).
+      - --scope=openid email profile
+      - --oidc-groups-claim=groups
+      # EXPOSE l'identité vérifiée en en-têtes de réponse (consommés par forward_auth).
+      - --set-xauthrequest=true
+      - --pass-access-token=true             # X-Auth-Request-Access-Token (JWT brut)
+      # Restreint l'accès au domaine e-mail de l'organisation (défense en profondeur,
+      # cohérent avec VALID_EMAIL_DOMAINS côté Onyx ET le filtre de la passerelle).
+      # NB : pour PLUSIEURS domaines, répéter ce flag (oauth2-proxy ne découpe PAS un
+      # CSV ici) ; ce câblage couvre le cas mono-domaine (le plus courant). Mettre
+      # `*` pour déléguer entièrement le filtrage à Onyx/passerelle.
+      - --email-domain=${VALID_EMAIL_DOMAINS:?definir VALID_EMAIL_DOMAINS - ex exemple.fr}
+      # Cookie de session : domaine public, HTTPS only (Caddy termine TLS).
+      - --cookie-domain=${ONYX_DOMAIN:?definir ONYX_DOMAIN}
+      - --cookie-secure=true
+      - --cookie-samesite=lax
+      - --whitelist-domain=${ONYX_DOMAIN:?definir ONYX_DOMAIN}
+      # L'appel /oauth2/auth ne doit JAMAIS renvoyer 200 sans session valide.
+      - --skip-provider-button=true
+    environment:
+      # --- Secrets (depuis le coffre via .env.prod ; JAMAIS en clair ici) -------
+      # App registration DÉDIÉE à oauth2-proxy (distincte de celle d'Onyx) ;
+      # Redirect URI à déclarer côté Entra : https://<ONYX_DOMAIN>/oauth2/callback
+      - OAUTH2_PROXY_CLIENT_ID=${OAUTH2_PROXY_CLIENT_ID:?Entra ID - definir OAUTH2_PROXY_CLIENT_ID (app dediee oauth2-proxy)}
+      - OAUTH2_PROXY_CLIENT_SECRET=${OAUTH2_PROXY_CLIENT_SECRET:?Entra ID - definir OAUTH2_PROXY_CLIENT_SECRET}
+      # Clé de chiffrement du cookie (32 octets ; `make secrets-prod` la génère).
+      - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_PROXY_COOKIE_SECRET:?32 octets aleatoires - cf. scripts/gen-secrets.sh}
+      # URL publique de redirection (callback) servie par Caddy.
+      - OAUTH2_PROXY_REDIRECT_URL=${WEB_DOMAIN:?definir WEB_DOMAIN=https://<ONYX_DOMAIN>}/oauth2/callback
+    healthcheck:
+      # oauth2-proxy expose /ready (prêt) — pas d'auth.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:4180/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: ${OAUTH2_PROXY_CPU_LIMIT:-1}
+          memory: ${OAUTH2_PROXY_MEM_LIMIT:-256m}
+
+  # ---------------------------------------------------------------------------
+  # access-gateway — PROXY RBAC identity-aware (cloisonnement par groupe/Document
+  # Set + cache RBAC-safe + streaming SSE + filtre ACL par-document + /metrics).
+  # -----------------------------------------------------------------------------
+  # C'EST LE COMPOSANT QUE CETTE SURCOUCHE REND ENFIN RÉEL DANS LE CHEMIN DE
+  # REQUÊTE. Jusqu'ici orphelin (présent dans access-gateway/ mais déployé NULLE
+  # PART), il est désormais : (1) construit depuis ./access-gateway ; (2) placé sur
+  # onix-net SANS port hôte (jamais joignable directement) ; (3) traversé par le
+  # chemin chat (cf. nginx.prod.conf : /api/chat/send-message -> gateway:8200/v1/...).
+  #
+  # Chaîne de confiance : navigateur -> Caddy (TLS + forward_auth oauth2-proxy) ->
+  # nginx (pose X-OIDC-Claims depuis l'identité VÉRIFIÉE, supprime tout en-tête
+  # entrant homonyme) -> access-gateway (RBAC) -> api_server. La passerelle FAIT
+  # CONFIANCE à X-OIDC-Claims : il ne doit JAMAIS être posable par le client (cf.
+  # règle anti-usurpation, Caddyfile + nginx.prod.conf).
+  #
+  # Réutilise le Redis `cache` de la base pour le cache de réponses RBAC-safe
+  # (base 1, séparée du KV interne d'Onyx en base 0) — honore REDIS_PASSWORD.
+  # ---------------------------------------------------------------------------
+  access-gateway:
+    build: ./access-gateway
+    image: onix-access-gateway:local
+    restart: unless-stopped
+    depends_on:
+      preflight:
+        condition: service_healthy
+      api_server:
+        condition: service_started
+      cache:
+        condition: service_started
+    # INTERNE : aucun port publié. Atteint uniquement par nginx via onix-net.
+    expose:
+      - "8200"
+    environment:
+      # --- Cible amont (Onyx) : nom de service interne sur onix-net -------------
+      - GATEWAY_ONYX_BASE_URL=http://api_server:8080
+      # Onyx en OIDC : l'API n'exige pas de clé pour /chat/send-message côté
+      # réseau interne (l'autorité d'accès est la passerelle elle-même). Laisser
+      # vide sauf si vous créez une clé API Onyx dédiée (Admin -> API Keys).
+      - GATEWAY_ONYX_API_KEY=${GATEWAY_ONYX_API_KEY:-}
+      # --- Source des groupes Entra --------------------------------------------
+      # PROD recommandé : 'graph'. oauth2-proxy fournit l'oid VÉRIFIÉ ; la
+      # passerelle résout l'appartenance via Microsoft Graph (transitiveMemberOf,
+      # permission app-only GroupMember.Read.All). Évite le footgun du claim
+      # `groups` (overage > ~200 groupes, ou absence) ET la fragilité d'un tableau
+      # JSON reconstruit en nginx. 'auto'/'claims' possibles si le bridge nginx
+      # fournit un tableau `groups` exploitable (cf. docs/DEPLOY_PROD.md §5bis).
+      - GATEWAY_GROUP_SOURCE=${GATEWAY_GROUP_SOURCE:-graph}
+      - GATEWAY_OIDC_GROUP_CLAIMS=${GATEWAY_OIDC_GROUP_CLAIMS:-groups,roles}
+      # --- Microsoft Graph (requis si source=graph, ou repli auto si overage) ---
+      - GATEWAY_GRAPH_TENANT_ID=${GATEWAY_GRAPH_TENANT_ID:-}
+      - GATEWAY_GRAPH_CLIENT_ID=${GATEWAY_GRAPH_CLIENT_ID:-}
+      - GATEWAY_GRAPH_CLIENT_SECRET=${GATEWAY_GRAPH_CLIENT_SECRET:-}
+      - GATEWAY_GRAPH_HOST=${GATEWAY_GRAPH_HOST:-https://graph.microsoft.com}
+      - GATEWAY_GRAPH_AUTHORITY=${GATEWAY_GRAPH_AUTHORITY:-https://login.microsoftonline.com}
+      # --- Mapping groupe -> Document Set (monté en lecture seule, cf. volumes) --
+      - GATEWAY_MAPPING_PATH=/config/group_map.json
+      # --- Politique fail-closed -----------------------------------------------
+      - GATEWAY_DENY_IF_NO_MATCH=${GATEWAY_DENY_IF_NO_MATCH:-true}
+      - GATEWAY_GROUP_CACHE_TTL=${GATEWAY_GROUP_CACHE_TTL:-300}
+      - GATEWAY_GUARDRAIL_ENABLED=${GATEWAY_GUARDRAIL_ENABLED:-true}
+      - GATEWAY_UPSTREAM_TIMEOUT=${GATEWAY_UPSTREAM_TIMEOUT:-30}
+      - GATEWAY_METRICS_ENABLED=${GATEWAY_METRICS_ENABLED:-true}
+      # --- Audit (identité HACHÉE, RGPD) : sel HMAC depuis le coffre ------------
+      - GATEWAY_AUDIT_SALT=${GATEWAY_AUDIT_SALT:?definir GATEWAY_AUDIT_SALT (cf. make secrets-prod / coffre)}
+      # --- Cache de réponses RBAC-safe (REUTILISE le Redis `cache`, base 1) -----
+      # docs/CACHE.md. Clé HMAC = périmètre Document Set TRIÉ -> aucune fuite
+      # inter-utilisateur. Secret HMAC OBLIGATOIRE (sinon cache OFF au démarrage).
+      - GATEWAY_CACHE_ENABLED=${GATEWAY_CACHE_ENABLED:-true}
+      - GATEWAY_CACHE_HMAC_SECRET=${GATEWAY_CACHE_HMAC_SECRET:?definir GATEWAY_CACHE_HMAC_SECRET (cf. make secrets-prod / coffre)}
+      # Redis partagé : base 1 (Onyx utilise la 0). Mot de passe = REDIS_PASSWORD.
+      - GATEWAY_CACHE_REDIS_URL=redis://:${REDIS_PASSWORD:?set in .env via gen-secrets.sh}@cache:6379/1
+      - GATEWAY_CACHE_TTL_SECONDS=${GATEWAY_CACHE_TTL_SECONDS:-3600}
+      - GATEWAY_CACHE_MAX_ENTRIES=${GATEWAY_CACHE_MAX_ENTRIES:-512}
+      - GATEWAY_CACHE_LOCALE=${GATEWAY_CACHE_LOCALE:-fr}
+      # --- RBAC fin par DOCUMENT (filtre de SORTIE) — cf. docs/RBAC.md ----------
+      # ACTIF seulement si le fichier ACL existe (sinon INACTIF + avertissement).
+      - GATEWAY_DOC_ACL_ENABLED=${GATEWAY_DOC_ACL_ENABLED:-true}
+      - GATEWAY_DOC_ACL_PATH=/config/doc_acl.json
+      - GATEWAY_DOC_ACL_DEFAULT_POLICY=${GATEWAY_DOC_ACL_DEFAULT_POLICY:-deny}
+      - GATEWAY_DOC_ACL_STRIP_UNCITED=${GATEWAY_DOC_ACL_STRIP_UNCITED:-true}
+      # --- Streaming SSE (latence perçue ÷10 sur CPU) — cf. docs/STREAMING.md ---
+      - GATEWAY_STREAM_ENABLED=${GATEWAY_STREAM_ENABLED:-true}
+      - GATEWAY_STREAM_IDLE_TIMEOUT=${GATEWAY_STREAM_IDLE_TIMEOUT:-60}
+      # --- ACL par-document auto-dérivée de SharePoint via Graph (opt-in) -------
+      - GATEWAY_DOC_ACL_GRAPH_ENABLED=${GATEWAY_DOC_ACL_GRAPH_ENABLED:-false}
+      - GATEWAY_DOC_ACL_MAPPING_PATH=/config/doc_acl_mapping.json
+      - GATEWAY_DOC_ACL_REFRESH_SECONDS=${GATEWAY_DOC_ACL_REFRESH_SECONDS:-900}
+      - GATEWAY_LOG_LEVEL=${GATEWAY_LOG_LEVEL:-INFO}
+    volumes:
+      # Mapping groupe -> Document Set (deny-by-default). En prod, monter votre
+      # fichier réel ; ici l'EXEMPLE versionné sert de défaut sûr (à adapter).
+      # Chemins relatifs à la RACINE du dépôt (1er fichier -f), cf. convention nginx.
+      - ./access-gateway/config/group_map.example.json:/config/group_map.json:ro
+      # ACL par-document statique : monter votre doc_acl.json (sinon filtre INACTIF).
+      # `make sync-doc-acl` peut générer access-gateway/config/doc_acl.json.
+      - ./access-gateway/config/doc_acl.example.json:/config/doc_acl.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8200/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: ${GATEWAY_CPU_LIMIT:-1}
+          memory: ${GATEWAY_MEM_LIMIT:-512m}
+
+volumes:
+  caddy_data:
+  caddy_config:

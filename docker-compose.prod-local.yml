@@ -1,0 +1,222 @@
+# =============================================================================
+# onix — Surcouche « PRODUCTION SUR MACHINE UNIQUE » (prod-local).
+# -----------------------------------------------------------------------------
+# S'EMPILE sur docker-compose.yml (jamais à la place). Usage exact :
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod-local.yml up -d
+#   (ou via systemd : deploy/local-prod/onix.service — survie au redémarrage)
+#
+# BUT : durcir la stack pour une mise en PRODUCTION RÉELLE sur UNE SEULE machine
+# perso (64 Go, bon CPU), pour 1-2 testeurs, de façon FIABLE — SANS exiger de
+# domaine public ni d'OIDC. C'est le chaînon MANQUANT entre les deux tiers :
+#
+#   * BASE  (docker-compose.yml)            : poste local / démo (nginx sur
+#     127.0.0.1, AUTH_TYPE=basic, restart: unless-stopped, peu de healthchecks).
+#   * PROD  (deploy/prod/docker-compose.prod.yml) : entreprise EXPOSÉE (Caddy +
+#     Let's Encrypt + OIDC Entra FORCÉ) ; son préflight REFUSE l'exposition sans
+#     domaine public + TLS + OIDC → trop lourd pour un PC perso sans domaine.
+#
+# Frontière : cette surcouche NE rend RIEN public (nginx reste lié à 127.0.0.1,
+# hérité de la base — non redéfini ici). L'accès des testeurs passe par un TLS
+# PRIVÉ (Tailscale Serve, recommandé) ou par le LAN de confiance via
+# docker-compose.lan.yml — cf. docs/PROD_LOCAL.md. On ne touche donc PAS aux
+# ports nginx : aucune exposition élargie n'est introduite par ce fichier.
+#
+# Ce que cette surcouche AJOUTE / DURCIT par rapport à la base :
+#   1. HEALTHCHECKS manquants sur relational_db, opensearch, cache, api_server,
+#      web_server, inference_model_server (la base n'en avait que pour minio,
+#      ollama, actions, nginx).
+#   2. DÉMARRAGE ORDONNÉ : depends_on en forme LONGUE avec condition:
+#      service_healthy. api_server attend db + opensearch + cache + minio +
+#      model-server SAINS avant de lancer `alembic upgrade head` → élimine la
+#      course « alembic avant que Postgres soit prêt ».
+#   3. restart: always (au lieu de unless-stopped) → résilience production : les
+#      services repartent même après un `docker stop` manuel suivi d'un reboot.
+#
+# RAPPEL COMPOSE : redéfinir `depends_on` en forme longue REMPLACE la liste
+# courte de la base (ce n'est pas fusionné). On REPRODUIT donc ci-dessous TOUTES
+# les dépendances utiles de chaque service. Les healthchecks et `restart`, eux,
+# se substituent simplement à ceux de la base (ou les ajoutent).
+#
+# Secrets : identiques à la base (.env généré par scripts/gen-secrets.sh).
+# Aucun secret en clair ici ; on réutilise les variables ${...} déjà définies.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Postgres — healthcheck pg_isready (authentifié par l'utilisateur Postgres).
+  # `pg_isready` est livré avec l'image officielle ; -U honore POSTGRES_USER.
+  # ---------------------------------------------------------------------------
+  relational_db:
+    restart: always
+    healthcheck:
+      # ${POSTGRES_USER:-postgres} : même défaut que la base. Pas de mot de passe
+      # requis pour pg_isready (sonde locale via socket Unix).
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # OpenSearch 3.x — le security plugin est ACTIF (OPENSEARCH_INITIAL_ADMIN_
+  # PASSWORD défini dans la base) : l'API REST écoute en HTTPS sur 9200 avec
+  # certificat AUTO-SIGNÉ et exige une authentification admin. La sonde utilise
+  # donc curl -k (ignore le cert auto-signé) -u admin:<password>, sur l'endpoint
+  # de santé du cluster. curl est présent dans l'image opensearchproject/opensearch.
+  # ---------------------------------------------------------------------------
+  opensearch:
+    restart: always
+    healthcheck:
+      # Le conteneur OpenSearch expose le secret via OPENSEARCH_INITIAL_ADMIN_PASSWORD
+      # (cf. base : OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD}).
+      # Référencer OPENSEARCH_ADMIN_PASSWORD ici donnerait un mot de passe VIDE
+      # (var absente du conteneur) → 401 → jamais healthy. Vérifié au runtime.
+      # Utilisateur admin par défaut = « admin » ; _cluster/health répond dès que prêt.
+      test:
+        - "CMD-SHELL"
+        - "curl -ksf -u admin:$${OPENSEARCH_INITIAL_ADMIN_PASSWORD} https://localhost:9200/_cluster/health >/dev/null || exit 1"
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+
+  # ---------------------------------------------------------------------------
+  # Redis — la base lance redis-server avec --requirepass : la sonde DOIT
+  # s'authentifier, sinon NOAUTH. redis-cli est inclus dans redis:7.4-alpine.
+  # ---------------------------------------------------------------------------
+  cache:
+    restart: always
+    healthcheck:
+      # -a <password> authentifie ; on filtre le « PONG » attendu. Le 2>/dev/null
+      # masque l'avertissement « using a password on the command line ».
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping 2>/dev/null | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # MinIO — la base définit déjà un healthcheck (`mc ready local`). On ne le
+  # redéfinit pas ; on durcit seulement la politique de redémarrage.
+  # ---------------------------------------------------------------------------
+  minio:
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # Model server (embeddings / reranking) — healthcheck sur le port 9000.
+  # L'image onyx-model-server embarque Python ; on sonde via un one-liner
+  # urllib (stdlib) plutôt que curl/wget (présence non garantie dans l'image).
+  # ---------------------------------------------------------------------------
+  inference_model_server:
+    restart: always
+    healthcheck:
+      # /api/health est l'endpoint de santé du model server Onyx. urllib lève une
+      # exception (→ exit 1) si le serveur n'est pas joignable ou répond != 2xx.
+      test:
+        - "CMD-SHELL"
+        - "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/api/health',timeout=5).status==200 else 1)\""
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  # ---------------------------------------------------------------------------
+  # Ollama — la base définit déjà un healthcheck (`ollama ls`). On durcit juste
+  # le redémarrage : utile car api_server/background dépendent du modèle servi.
+  # ---------------------------------------------------------------------------
+  ollama:
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # actions — la base définit déjà un healthcheck (/health). Durcissement
+  # redémarrage uniquement.
+  # ---------------------------------------------------------------------------
+  actions:
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # api_server — CŒUR du démarrage ordonné. Ne lance `alembic upgrade head`
+  # qu'une fois ses dépendances de DONNÉES + calcul réellement SAINES :
+  #   - relational_db : healthy (Postgres accepte les connexions) → fin de la
+  #     course « alembic avant que Postgres soit prêt ».
+  #   - opensearch / cache / minio / inference_model_server : healthy.
+  # depends_on en forme LONGUE → REMPLACE la liste courte de la base ; on
+  # reproduit donc l'ensemble des dépendances de la base, en condition healthy.
+  # ---------------------------------------------------------------------------
+  api_server:
+    restart: always
+    depends_on:
+      relational_db:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      inference_model_server:
+        condition: service_healthy
+    healthcheck:
+      # /health est l'endpoint de liveness d'Onyx. curl est présent dans l'image
+      # onyx-backend (utilisé par d'autres healthchecks du projet, ex. actions).
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      # Laisse le temps aux migrations Alembic + au démarrage d'uvicorn.
+      start_period: 180s
+
+  # ---------------------------------------------------------------------------
+  # background — workers d'indexation/Celery. Mêmes dépendances de données que
+  # la base, en condition healthy (forme longue → remplace la liste courte).
+  # Pas de healthcheck applicatif standard exposé (process supervisord) : on se
+  # contente du démarrage ordonné + restart: always.
+  # ---------------------------------------------------------------------------
+  background:
+    restart: always
+    depends_on:
+      relational_db:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+      inference_model_server:
+        condition: service_healthy
+      # background réutilise l'unique model-server pour l'indexation (cf. base).
+      api_server:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # web_server — frontend Next.js. Attend api_server SAIN (la base n'attendait
+  # qu'api_server « démarré »). Healthcheck HTTP sur le port interne 3000.
+  # ---------------------------------------------------------------------------
+  web_server:
+    restart: always
+    depends_on:
+      api_server:
+        condition: service_healthy
+    healthcheck:
+      # Le serveur Next.js écoute en interne sur 3000. urllib (stdlib Node absent,
+      # mais l'image web embarque wget BusyBox) : on sonde la racine via wget.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # nginx — UNIQUE point d'entrée, hérité de la base (lié à 127.0.0.1). On NE
+  # touche PAS aux ports : l'accès testeurs passe par Tailscale Serve / LAN
+  # (cf. docs/PROD_LOCAL.md). On attend web_server + api_server SAINS et on
+  # durcit le redémarrage. La base définit déjà le healthcheck nginx.
+  # ---------------------------------------------------------------------------
+  nginx:
+    restart: always
+    depends_on:
+      api_server:
+        condition: service_healthy
+      web_server:
+        condition: service_healthy

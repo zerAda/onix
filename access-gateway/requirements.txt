@@ -1,0 +1,18 @@
+# access-gateway — dépendances épinglées (reproductibilité).
+# Locales / open-source ; aucun SDK cloud (les appels Entra passent par httpx).
+#
+# Intégration : fastapi relevé de 0.115.6 à 0.137.1 (aligné sur WS6/onix-actions)
+# pour purger 8 CVE de starlette 0.41.3 tiré transitivement (CVE-2025-54121,
+# CVE-2025-62727, CVE-2026-48817/48818/54282/54283, PYSEC-2026-161). 0.137.1 tire
+# starlette 1.3.1 → pip-audit --strict = 0 CVE. API utilisée inchangée.
+fastapi==0.137.1
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+httpx==0.28.1
+prometheus-client==0.21.1
+# Client Redis (cache applicatif RBAC-safe, cf. app/cache.py + docs/CACHE.md).
+# Optionnel à l'exécution (le code dégrade en LRU mémoire si GATEWAY_CACHE_REDIS_URL
+# n'est pas défini), mais on l'embarque pour ne pas forcer un build distinct
+# selon la cible (HA = Redis, dev = mémoire). 5.2.1 = dernière 5.x stable, 0 CVE
+# vérifié via `pip-audit --strict` (cf. Makefile cible pip-audit).
+redis==5.2.1

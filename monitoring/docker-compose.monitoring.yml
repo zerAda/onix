@@ -1,0 +1,284 @@
+# =============================================================================
+# onix — Stack d'OBSERVABILITÉ (Prometheus + Alertmanager + Grafana + Loki +
+# Promtail + exporters). Fichier SÉPARÉ de la stack applicative : on l'active
+# seulement si l'on veut superviser (overhead nul sinon).
+# -----------------------------------------------------------------------------
+# Souveraineté : 100 % local, images ÉPINGLÉES, aucune télémétrie sortante.
+# Sécurité : seul Grafana publie un port, lié à 127.0.0.1 UNIQUEMENT (comme
+#   nginx dans la stack applicative). Prometheus/Alertmanager/Loki ne publient
+#   AUCUN port hôte (accès via Grafana ou `docker exec`). Promtail monte le
+#   socket Docker en LECTURE SEULE.
+#
+# Réseaux : on rejoint le réseau applicatif `onix-net` (EXTERNE) pour scraper
+#   les services (actions, postgres, redis, opensearch, nginx) par leur nom,
+#   plus un réseau interne `monitoring` pour le trafic Prometheus<->exporters.
+#
+# Démarrage :
+#   1) stack applicative lancée (make up) -> le réseau onix-net existe ;
+#   2) docker compose -f monitoring/docker-compose.monitoring.yml up -d
+#   (ou bien : make monitor-up / make monitor-down — cf. Makefile bloc WS6).
+#
+# DÉPENDANCE WS2 : le job Prometheus `onix-actions` cible actions:8100/metrics.
+#   Tant que WS2 n'expose pas /metrics, ce job est `down` (les autres signaux —
+#   sonde blackbox /health, exporters infra — fonctionnent immédiatement).
+# =============================================================================
+
+name: onix-monitoring
+
+networks:
+  # Réseau applicatif existant (créé par docker-compose.yml — `name: onix-net`).
+  onix-net:
+    external: true
+  # Réseau privé propre à l'observabilité.
+  monitoring:
+    name: onix-monitoring-net
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:
+  loki_data:
+
+services:
+  # ---------------------------------------------------------------------------
+  # Prometheus — collecte des métriques + évaluation des règles d'alerte.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    user: "65534:65534"   # nobody : n'écrit que dans le volume (chown au 1er run via init).
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    networks: [monitoring, onix-net]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+
+  # ---------------------------------------------------------------------------
+  # Alertmanager — routage / déduplication / notification des alertes.
+  # ---------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    environment:
+      # URL de webhook optionnelle (non committée). Vide = pas de notif sortante.
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks: [monitoring]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9093/-/healthy >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # ---------------------------------------------------------------------------
+  # Grafana — visualisation. SEUL service exposé (127.0.0.1 uniquement).
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+    environment:
+      # Mot de passe admin via .env (généré). À défaut : 'admin' (à changer).
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Souveraineté : pas d'appels sortants (analytics, gravatar, news, MAJ).
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
+      - GF_NEWS_NEWS_FEED_ENABLED=false
+      - GF_USERS_DEFAULT_THEME=dark
+      # Pas d'inscription / pas d'accès anonyme.
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    env_file:
+      - path: ../.env
+        required: false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      # localhost UNIQUEMENT (cohérent avec la posture de sécurité onix/nginx).
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-3001}:3000"
+    networks: [monitoring]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ---------------------------------------------------------------------------
+  # Loki — agrégation de logs (stockage disque local).
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.3.0
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks: [monitoring]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3100/ready >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ---------------------------------------------------------------------------
+  # Promtail — pousse les logs des conteneurs Docker vers Loki.
+  # ---------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:3.3.0
+    restart: unless-stopped
+    depends_on:
+      - loki
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      # Socket Docker en LECTURE SEULE : découverte + lecture des logs.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [monitoring]
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ---------------------------------------------------------------------------
+  # node-exporter — métriques hôte (CPU/RAM/disque/réseau).
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks: [monitoring]
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # ---------------------------------------------------------------------------
+  # postgres-exporter — métriques PostgreSQL (relational_db sur onix-net).
+  # Identifiants lus depuis .env (mêmes que la stack applicative).
+  # ---------------------------------------------------------------------------
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_NAME=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@relational_db:5432/postgres?sslmode=disable
+    env_file:
+      - path: ../.env
+        required: false
+    networks: [monitoring, onix-net]
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # ---------------------------------------------------------------------------
+  # redis-exporter — métriques Redis (cache sur onix-net).
+  # ---------------------------------------------------------------------------
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    restart: unless-stopped
+    environment:
+      - REDIS_ADDR=redis://cache:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    env_file:
+      - path: ../.env
+        required: false
+    networks: [monitoring, onix-net]
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # ---------------------------------------------------------------------------
+  # opensearch-exporter — OpenSearch expose une API compatible Elasticsearch,
+  # donc l'elasticsearch_exporter convient (lecture des stats du cluster).
+  # ---------------------------------------------------------------------------
+  opensearch-exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.7.0
+    restart: unless-stopped
+    command:
+      - "--es.uri=https://admin:${OPENSEARCH_ADMIN_PASSWORD:-admin}@opensearch:9200"
+      - "--es.ssl-skip-verify"
+      - "--es.all"
+    env_file:
+      - path: ../.env
+        required: false
+    networks: [monitoring, onix-net]
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # ---------------------------------------------------------------------------
+  # blackbox-exporter — sondes HTTP « boîte noire » (santé indépendante).
+  # ---------------------------------------------------------------------------
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/blackbox/blackbox.yml"
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    networks: [monitoring, onix-net]
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m

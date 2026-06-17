@@ -1,0 +1,150 @@
+{{- /*
+access-gateway — proxy RBAC identity-aware (cloisonnement par groupe/Document Set,
+ACL par-document FOSS, cache RBAC-safe, streaming SSE, /metrics) DEVANT l'API Onyx.
+NATIF du chart (auparavant seulement dans deploy/azure/access-gateway.yaml). Stateless
+en HA : replicas>=2 + HPA + PDB. Gaté par .Values.accessGateway.enabled (OFF par défaut).
+
+Split env (12-factor, cf. access-gateway/app/config.py) :
+  * NON-SECRET (flags, URLs, seuils) -> ConfigMap dédiée ci-dessous (.Values.accessGateway.config).
+  * SECRETS (clés Graph/Onyx, HMAC, sel d'audit, URL Redis TLS) -> Secret applicatif partagé
+    (secrets.existingSecret) via le helper onix.gatewaySecretEnv. JAMAIS de secret en clair.
+GATEWAY_ONYX_BASE_URL est CÂBLÉ sur le Service api in-cluster ; l'override reste possible
+via .Values.accessGateway.config.onyxBaseUrl si l'amont est externe.
+*/ -}}
+{{- if .Values.accessGateway.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "onix.fullname" . }}-gateway-config
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "access-gateway") | nindent 4 }}
+data:
+  # --- Amont Onyx (cible du proxy) : Service api in-cluster par défaut ---------
+  GATEWAY_ONYX_BASE_URL: {{ .Values.accessGateway.config.onyxBaseUrl | default (printf "http://%s-api:%v" (include "onix.fullname" .) .Values.api.port) | quote }}
+  # --- Source des groupes Entra (claims | graph | auto) -----------------------
+  GATEWAY_GROUP_SOURCE: {{ .Values.accessGateway.config.groupSource | quote }}
+  GATEWAY_DENY_IF_NO_MATCH: {{ .Values.accessGateway.config.denyIfNoMatch | quote }}
+  # --- Microsoft Graph (non-secret : tenant + hôtes souverains) ---------------
+  GATEWAY_GRAPH_TENANT_ID: {{ .Values.accessGateway.config.graph.tenantId | quote }}
+  GATEWAY_GRAPH_HOST: {{ .Values.accessGateway.config.graph.host | quote }}
+  GATEWAY_GRAPH_AUTHORITY: {{ .Values.accessGateway.config.graph.authority | quote }}
+  # --- Garde-fous (post-filtre) + observabilité Prometheus --------------------
+  GATEWAY_GUARDRAIL_ENABLED: {{ .Values.accessGateway.config.guardrailEnabled | quote }}
+  GATEWAY_METRICS_ENABLED: {{ .Values.accessGateway.config.metricsEnabled | quote }}
+  # --- Filtre ACL par-document (FOSS, filtre de SORTIE) -----------------------
+  GATEWAY_DOC_ACL_ENABLED: {{ .Values.accessGateway.config.docAcl.enabled | quote }}
+  GATEWAY_DOC_ACL_PATH: {{ .Values.accessGateway.config.docAcl.path | quote }}
+  GATEWAY_DOC_ACL_DEFAULT_POLICY: {{ .Values.accessGateway.config.docAcl.defaultPolicy | quote }}
+  GATEWAY_DOC_ACL_STRIP_UNCITED: {{ .Values.accessGateway.config.docAcl.stripUncited | quote }}
+  # ACL Graph (SharePoint) auto-dérivée, OR-mergée avec le doc_acl.json statique.
+  GATEWAY_DOC_ACL_GRAPH_ENABLED: {{ .Values.accessGateway.config.docAcl.graphEnabled | quote }}
+  GATEWAY_DOC_ACL_MAPPING_PATH: {{ .Values.accessGateway.config.docAcl.mappingPath | quote }}
+  GATEWAY_DOC_ACL_REFRESH_SECONDS: {{ .Values.accessGateway.config.docAcl.refreshSeconds | quote }}
+  # --- Cache applicatif RBAC-safe (clé HMAC = secret ; URL Redis = secret) ----
+  GATEWAY_CACHE_ENABLED: {{ .Values.accessGateway.config.cache.enabled | quote }}
+  GATEWAY_CACHE_TTL_SECONDS: {{ .Values.accessGateway.config.cache.ttlSeconds | quote }}
+  GATEWAY_CACHE_MAX_ENTRIES: {{ .Values.accessGateway.config.cache.maxEntries | quote }}
+  GATEWAY_CACHE_LOCALE: {{ .Values.accessGateway.config.cache.locale | quote }}
+  # --- Tier SÉMANTIQUE du cache (OPT-IN : risque de précision documenté) ------
+  GATEWAY_SEMANTIC_CACHE_ENABLED: {{ .Values.accessGateway.config.semantic.enabled | quote }}
+  GATEWAY_SEMANTIC_EMBED_URL: {{ .Values.accessGateway.config.semantic.embedUrl | default (printf "http://%s-ollama:%v/api/embeddings" (include "onix.fullname" .) .Values.ollama.port) | quote }}
+  GATEWAY_SEMANTIC_EMBED_MODEL: {{ .Values.accessGateway.config.semantic.embedModel | quote }}
+  GATEWAY_SEMANTIC_THRESHOLD: {{ .Values.accessGateway.config.semantic.threshold | quote }}
+  # --- Streaming SSE token-par-token (latence perçue ÷10 sur CPU) -------------
+  GATEWAY_STREAM_ENABLED: {{ .Values.accessGateway.config.stream.enabled | quote }}
+  GATEWAY_STREAM_IDLE_TIMEOUT: {{ .Values.accessGateway.config.stream.idleTimeout | quote }}
+  {{- with .Values.accessGateway.config.extra }}
+  # --- Clés GATEWAY_* libres supplémentaires (non-secret) ---------------------
+  {{- range $k, $v := . }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "onix.fullname" . }}-access-gateway
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "access-gateway") | nindent 4 }}
+spec:
+  {{- if not .Values.accessGateway.autoscaling.enabled }}
+  replicas: {{ .Values.accessGateway.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "access-gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "onix.componentLabels" (dict "ctx" . "component" "access-gateway") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "access-gateway") | nindent 6 }}
+      # Durcissement : conteneur non-root + seccomp RuntimeDefault (aligné
+      # deploy/azure/access-gateway.yaml ; l'image tourne en uid non privilégié).
+      securityContext:
+        {{- toYaml .Values.accessGateway.securityContext | nindent 8 }}
+      containers:
+        - name: access-gateway
+          image: "{{ .Values.accessGateway.image.repository }}:{{ .Values.accessGateway.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.accessGateway.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "onix.fullname" . }}-gateway-config
+          env:
+            {{- include "onix.gatewaySecretEnv" . | nindent 12 }}
+            {{- with .Values.accessGateway.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # doc_acl.json (et mapping SharePoint) montés en lecture seule sous
+          # /config. ConfigMap optionnelle (générée par le CronJob de sync Graph→ACL).
+          volumeMounts:
+            - name: doc-acl
+              mountPath: /config
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml .Values.accessGateway.resources | nindent 12 }}
+      volumes:
+        - name: doc-acl
+          configMap:
+            name: {{ .Values.accessGateway.docAclConfigMap | default (printf "%s-doc-acl" (include "onix.fullname" .)) }}
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "onix.fullname" . }}-access-gateway
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "access-gateway") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.accessGateway.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "onix.componentSelector" (dict "ctx" . "component" "access-gateway") | nindent 4 }}
+{{- if .Values.accessGateway.autoscaling.enabled }}
+---
+{{ include "onix.hpa" (dict "ctx" . "component" "access-gateway" "target" (printf "%s-access-gateway" (include "onix.fullname" .)) "cfg" .Values.accessGateway.autoscaling) }}
+{{- end }}
+{{- if .Values.accessGateway.pdb.enabled }}
+---
+{{ include "onix.pdb" (dict "ctx" . "component" "access-gateway" "cfg" .Values.accessGateway.pdb) }}
+{{- end }}
+{{- end }}

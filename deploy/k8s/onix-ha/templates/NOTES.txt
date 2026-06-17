@@ -1,0 +1,45 @@
+onix-ha déployé : {{ include "onix.fullname" . }} (namespace {{ .Release.Namespace }})
+
+ÉTAT HA des services stateless (replicas / HPA) :
+  - api .................. min {{ .Values.api.autoscaling.minReplicas }} / max {{ .Values.api.autoscaling.maxReplicas }}  (HPA={{ .Values.api.autoscaling.enabled }})
+  - webserver ............ min {{ .Values.webserver.autoscaling.minReplicas }} / max {{ .Values.webserver.autoscaling.maxReplicas }}  (HPA={{ .Values.webserver.autoscaling.enabled }})
+  - background ........... min {{ .Values.background.autoscaling.minReplicas }} / max {{ .Values.background.autoscaling.maxReplicas }}  (HPA={{ .Values.background.autoscaling.enabled }})
+  - inference-model ...... min {{ .Values.inferenceModelServer.autoscaling.minReplicas }} / max {{ .Values.inferenceModelServer.autoscaling.maxReplicas }}
+  - index-model .......... min {{ .Values.indexModelServer.autoscaling.minReplicas }} / max {{ .Values.indexModelServer.autoscaling.maxReplicas }}
+  - actions .............. min {{ .Values.actions.autoscaling.minReplicas }} / max {{ .Values.actions.autoscaling.maxReplicas }}
+{{- if .Values.actionsQueue.enabled }}
+  - actions-worker ....... min {{ .Values.actionsQueue.worker.autoscaling.minReplicas }} / max {{ .Values.actionsQueue.worker.autoscaling.maxReplicas }}  (file Celery)
+{{- end }}
+{{- if .Values.accessGateway.enabled }}
+  - access-gateway ....... min {{ .Values.accessGateway.autoscaling.minReplicas }} / max {{ .Values.accessGateway.autoscaling.maxReplicas }}  (proxy RBAC devant l'API)
+{{- end }}
+
+SOCLE DE DONNÉES HA (sous-charts officiels) :
+  - PostgreSQL (CNPG) ..... cluster={{ .Values.postgresql.cluster.enabled }} ({{ .Values.postgresql.cluster.instances }} instances)
+  - OpenSearch ............ enabled={{ .Values.opensearch.enabled }} ({{ .Values.opensearch.replicas }} noeuds)
+  - Redis (operator) ...... enabled={{ .Values.redis.enabled }}
+  - MinIO ................. enabled={{ .Values.minio.enabled }} (mode {{ .Values.minio.mode }})
+
+{{- if .Values.ingress.enabled }}
+
+ACCÈS : https://{{ .Values.ingress.host }}  (Ingress class {{ .Values.ingress.className }}{{ if .Values.ingress.tls.enabled }}, TLS={{ .Values.ingress.tls.secretName }}{{ end }})
+{{- end }}
+
+{{- if not (or .Values.postgresql.cluster.enabled .Values.opensearch.enabled .Values.minio.enabled) }}
+
+⚠ Le socle de données HA est DÉSACTIVÉ (défaut sûr : les CRD/opérateurs doivent
+  exister AVANT de rendre un Cluster CNPG / cluster OpenSearch). En production :
+    1) installer l'opérateur : --set postgresql.operator.enabled=true (etc.)
+    2) puis activer le cluster : --set postgresql.cluster.enabled=true, opensearch,
+       redis*, minio (sous-charts officiels déjà vendorisés dans charts/*.tgz)
+    3) fournir le Secret applicatif (secrets.existingSecret) — JAMAIS de secret dans Git.
+  Détails et procédures : docs/HA_SCALING.md §8.
+{{- end }}
+
+{{- if not .Values.secrets.existingSecret }}
+{{- if not .Values.secrets.create }}
+
+⚠ Aucun Secret référencé (secrets.existingSecret vide, secrets.create=false).
+  Créez le Secret « {{ include "onix.secretName" . }} » avant le déploiement.
+{{- end }}
+{{- end }}

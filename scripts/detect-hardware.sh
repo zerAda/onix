@@ -187,6 +187,19 @@ if [ "$USE_GPU" = 1 ]; then NPAR=$([ "$VRAM_GB" -ge 12 ] && echo 4 || echo 2)
 else NPAR=$([ "$AVAIL_OLLAMA" -ge 12 ] && echo 2 || echo 1); fi
 PERF_OK=$([ "$RAM_GB" -ge 32 ] || { [ "$USE_GPU" = 1 ] && [ "$RAM_GB" -ge 24 ]; } && echo 1 || echo 0)
 
+# Fenêtre de contexte (num_ctx) au plus juste du plafond Ollama FINAL (après la
+# garantie anti-OOM et l'éventuelle rétrogradation du modèle). Le défaut Ollama
+# (4096) tronque silencieusement le contexte RAG ; on l'élargit sans risque grâce
+# au cache KV q8_0 (~/2). Mémoire KV ~ OLLAMA_CONTEXT_LENGTH × OLLAMA_NUM_PARALLEL.
+if [ "$USE_GPU" = 1 ]; then
+  OLLAMA_CTX=16384
+else
+  om_ctx_gb=$(( OLLAMA_MEM / GB ))
+  if   [ "$om_ctx_gb" -ge 7 ]; then OLLAMA_CTX=12288   # 7-14B (la RAM suit par construction)
+  elif [ "$om_ctx_gb" -ge 3 ]; then OLLAMA_CTX=8192    # 3B (≈ 16 Go)
+  else OLLAMA_CTX=4096; fi                              # postes minuscules : prudence
+fi
+
 # Formate des Mo en unité Docker : multiple de 1024 → "Ng", sinon "Nm".
 fmt_mem() { if [ $(( $1 % GB )) -eq 0 ]; then printf '%sg' $(( $1 / GB )); else printf '%sm' "$1"; fi; }
 # Valeur en Go (1 décimale) pour l'affichage du détail de la somme.
@@ -220,6 +233,7 @@ emit OLLAMA_KV_CACHE_TYPE q8_0
 emit OLLAMA_KEEP_ALIVE "$KEEP_ALIVE"
 emit OLLAMA_NUM_PARALLEL "$NPAR"
 emit OLLAMA_MAX_LOADED_MODELS "$MAXLOAD"
+emit OLLAMA_CONTEXT_LENGTH "$OLLAMA_CTX"
 emit OLLAMA_CPU_LIMIT "$CORES"
 emit OLLAMA_MEM_LIMIT "$(fmt_mem "$OLLAMA_MEM")"
 emit OPENSEARCH_HEAP "${HEAP}g"
@@ -264,6 +278,7 @@ set_force OLLAMA_KV_CACHE_TYPE q8_0
 set_force OLLAMA_KEEP_ALIVE "$KEEP_ALIVE"
 set_force OLLAMA_NUM_PARALLEL "$NPAR"
 set_force OLLAMA_MAX_LOADED_MODELS "$MAXLOAD"
+set_force OLLAMA_CONTEXT_LENGTH "$OLLAMA_CTX"
 set_force OLLAMA_CPU_LIMIT "$CORES"
 set_force OLLAMA_MEM_LIMIT "$(fmt_mem "$OLLAMA_MEM")"
 set_force OPENSEARCH_HEAP "${HEAP}g"

@@ -1,0 +1,19 @@
+# Dépendances du harnais de tests RAG (`tests/rag/`).
+# Le MODE CONTRAT (hors-LLM, celui de la CI) n'a besoin que de pytest + PyYAML.
+# `requests` n'est utilisé que par le MODE LIVE optionnel (ONIX_RAG_LIVE=1).
+#
+# Pins relevés (gate pip-audit --strict = 0 CVE — comme actions/access-gateway) :
+#   pytest 8.3.4 → 9.0.3   (CVE-2025-71176)
+#   requests 2.32.3 → 2.33.0 (CVE-2024-47081 + CVE-2026-25645)
+# Compatibilité validée : suites tests/rag + actions + access-gateway vertes sous pytest 9.
+pytest==9.0.3
+PyYAML==6.0.2
+requests==2.33.0
+
+# ── MODE LIVE OLLAMA (optionnel, ONIX_LIVE_OLLAMA=1) ────────────────────────
+# Le harnais live red-team (`test_live_ollama.py` / `run_live.py`) appelle
+# l'endpoint OpenAI-compatible d'Ollama via la stdlib (urllib) — AUCUNE dépendance
+# supplémentaire requise pour le red-team.
+# La comparaison d'extraction audit (`live_extraction.py`) réutilise la brique de
+# production `actions/app/llm.py`, qui s'appuie sur httpx ; installer dans ce cas :
+httpx==0.27.2

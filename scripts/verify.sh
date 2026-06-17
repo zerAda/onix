@@ -5,7 +5,7 @@
 # échoue → utilisable en CI / contrôle d'acceptation ("ne rien laisser dire").
 # =============================================================================
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || { echo "✗ Impossible d'accéder à la racine du dépôt." >&2; exit 1; }
 
 DC="docker compose"; $DC version >/dev/null 2>&1 || DC="docker-compose"
 PASS=0; FAIL=0; WARN=0
@@ -28,7 +28,9 @@ if [ "$(uname -s)" = "Linux" ]; then
 fi
 
 echo "== Services =="
-for s in api_server background web_server relational_db opensearch cache minio ollama nginx; do
+# Liste alignée sur docker-compose.yml : on n'oublie NI le model-server (embeddings
+# /reranking, indispensable au RAG), NI le microservice actions (couche onix).
+for s in api_server background web_server relational_db opensearch cache minio inference_model_server ollama actions nginx; do
   state="$($DC ps --format '{{.Service}} {{.State}}' 2>/dev/null | awk -v s="$s" '$1==s{print $2}')"
   case "$state" in
     running) ok "$s : running" ;;
@@ -37,19 +39,29 @@ for s in api_server background web_server relational_db opensearch cache minio o
   esac
 done
 
-echo "== Câblage Onyx ↔ Ollama (réseau interne) =="
+echo "== Câblage Onyx ↔ Ollama (réseau interne, PAS localhost) =="
 if $DC exec -T ollama ollama ls >/dev/null 2>&1; then
   ok "API Ollama répond (http://ollama:11434, interne)"
   models="$($DC exec -T ollama ollama ls 2>/dev/null | awk 'NR>1{print $1}' | tr '\n' ' ')"
-  [ -n "$models" ] && ok "modèles présents : $models" || warn "aucun modèle (make models)"
-  # Onyx atteint-il Ollama par le DNS de service ? Test depuis api_server.
+  [ -n "$models" ] && ok "modèle(s) tiré(s) : $models" || ko "aucun modèle tiré (make models)"
+  # Onyx atteint-il Ollama par le DNS de service ? Test depuis api_server : on
+  # exige le NOM DE SERVICE interne 'ollama' (un 'localhost' dans la conf LLM
+  # d'Onyx pointerait sur le conteneur lui-même → échec garanti, cf. POC_LOCAL §7).
   if $DC exec -T api_server python -c "import socket; socket.create_connection(('ollama',11434),5)" >/dev/null 2>&1; then
-    ok "api_server peut joindre ollama:11434"
+    ok "api_server joint ollama:11434 (résolution DNS interne OK)"
   else
     warn "api_server n'a pas joint ollama:11434 (services pas encore prêts ?)"
   fi
+  # Le microservice actions doit lui aussi pointer sur l'URL interne (ONIX_OLLAMA_URL).
+  ourl="$($DC exec -T actions sh -c 'printf %s "$ONIX_OLLAMA_URL"' 2>/dev/null)"
+  case "$ourl" in
+    *localhost*|*127.0.0.1*) ko "actions: ONIX_OLLAMA_URL=$ourl pointe sur localhost (doit être http://ollama:11434)" ;;
+    http://ollama:11434)     ok "actions: ONIX_OLLAMA_URL=http://ollama:11434 (interne)" ;;
+    "")                      warn "actions: ONIX_OLLAMA_URL indéterminée (service pas prêt ?)" ;;
+    *)                       warn "actions: ONIX_OLLAMA_URL=$ourl (attendu http://ollama:11434)" ;;
+  esac
 else
-  ko "API Ollama injoignable"
+  ko "API Ollama injoignable (http://ollama:11434)"
 fi
 
 echo "== Test de génération (LLM local, français) =="
@@ -61,6 +73,28 @@ if [ -n "$first_model" ]; then
 else
   warn "pas de modèle pour tester la génération (make models)"
 fi
+
+echo "== Santé HTTP (nginx + API, réseau interne) =="
+# nginx expose /nginx-health (cf. healthcheck du compose) et /health est l'endpoint
+# de l'API Onyx. On teste DEPUIS le conteneur nginx (réseau interne) pour ne pas
+# dépendre d'un curl/d'un port publié côté hôte : c'est le vrai chemin de service.
+nginx_http() { # nginx_http CHEMIN → code HTTP (via wget busybox présent dans l'image)
+  $DC exec -T nginx sh -c "wget -qO- -S 'http://127.0.0.1$1' 2>&1 | sed -n 's/.*HTTP\\/[0-9.]* \\([0-9]*\\).*/\\1/p' | head -n1" 2>/dev/null
+}
+nh="$(nginx_http /nginx-health)"
+case "$nh" in
+  200) ok "nginx /nginx-health → HTTP 200" ;;
+  "")  ko "nginx /nginx-health injoignable (nginx down ou pas prêt ?)" ;;
+  *)   ko "nginx /nginx-health → HTTP $nh" ;;
+esac
+# /health de l'API traverse nginx (proxy_pass vers api_server). 200 attendu.
+ah="$(nginx_http /health)"
+case "$ah" in
+  200)      ok "API /health (via nginx) → HTTP 200" ;;
+  "")       warn "API /health injoignable via nginx (api_server pas encore prêt ?)" ;;
+  401|307)  ok "API /health → HTTP $ah (auth/redirection : route active)" ;;
+  *)        warn "API /health → HTTP $ah (démarrage en cours ?)" ;;
+esac
 
 echo "== Frontend (localhost) =="
 PORT="$(sed -n 's/^ONYX_HOST_PORT=//p' .env 2>/dev/null | head -n1)"; PORT="${PORT:-3000}"

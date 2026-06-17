@@ -1,0 +1,157 @@
+# =============================================================================
+# values-azure.yaml — onix-ha sur AKS (France Central)
+# Décisions actées : Ollama CPU (GPU plus tard) · RBAC = access-gateway FOSS ·
+# Postgres + Redis MANAGÉS Azure · OpenSearch + MinIO in-cluster.
+#
+# Remplacez les <PLACEHOLDERS> (voir docs/DEPLOY_AZURE.md) :
+#   <ACR>        nom du registre ACR (ex: onixacr → onixacr.azurecr.io)
+#   <PG_FQDN>    FQDN du serveur Azure DB for PostgreSQL Flexible
+#   <REDIS_FQDN> FQDN de l'Azure Cache for Redis
+#   <DOMAIN>     nom DNS public (ingress TLS)
+#   <RELEASE>    nom de la release helm (ex: onix)
+#
+# Déploiement :
+#   helm install onix deploy/k8s/onix-ha -f deploy/azure/values-azure.yaml
+# =============================================================================
+
+global:
+  imageTag: "4.1.1"
+  imagePullPolicy: IfNotPresent
+  # AKS Premium SSD v2 / Premium-LRS CSI (disques HA pour OpenSearch/MinIO).
+  storageClass: "managed-csi-premium"
+  # AUDIT Onyx : télémétrie ON par défaut → on la COUPE (souveraineté/RGPD).
+  disableTelemetry: true
+  imagePullSecrets: []   # AKS↔ACR : attacher l'ACR à l'AKS (az aks update --attach-acr), pas de secret
+
+# Secret applicatif créé depuis Azure Key Vault via le Secret Store CSI Driver
+# (clés : POSTGRES_PASSWORD, OPENSEARCH_ADMIN_PASSWORD, REDIS_PASSWORD, SECRET,
+#  USER_AUTH_SECRET, S3_AWS_ACCESS_KEY_ID, S3_AWS_SECRET_ACCESS_KEY,
+#  ONIX_ACTIONS_API_KEY, BROKER_PASSWORD). Cf. DEPLOY_AZURE.md §Secrets.
+secrets:
+  existingSecret: "onix-secrets"
+
+# --- Onyx stateless (images amont via ACR pull-through cache — repos inchangés) -
+api:
+  replicaCount: 2
+  runMigrationsJob: true          # IMPORTANT : Job de migration (pas inline) — corrige la course alembic de l'audit
+webserver:
+  replicaCount: 2
+background:
+  replicaCount: 2
+# CPU : un seul model-server d'inférence (embeddings + rerank) ; pas de GPU.
+inferenceModelServer:
+  replicaCount: 1
+  resources:
+    requests: { cpu: "2", memory: 3Gi }
+    limits:   { cpu: "4", memory: 8Gi }
+indexModelServer:
+  replicaCount: 1
+
+# --- onix-actions : image CUSTOM buildée → poussée sur ACR --------------------
+actions:
+  image:
+    repository: <ACR>.azurecr.io/onix-actions
+    tag: "prod"
+  replicaCount: 2
+  config:
+    globalEnabled: true
+    ocrLang: "fra+eng"
+    llmModel: "qwen2.5:7b-instruct"        # CPU : 7b (ou llama3.2:3b si RAM node serrée)
+    ollamaUrl: "http://<RELEASE>-ollama:11434"
+    dbBackend: "postgres"                  # état déporté → Postgres managé
+    objectStore: "s3"                      # .docx → MinIO in-cluster (S3)
+    s3Bucket: "onyx-file-store-bucket"
+
+# File asynchrone (OCR lourd / audits batch) : broker RabbitMQ in-cluster.
+actionsQueue:
+  enabled: true
+
+# --- Postgres MANAGÉ : Azure DB for PostgreSQL Flexible (HA zone-redondant) ---
+# On DÉSACTIVE le CNPG in-cluster et on pointe le FQDN managé. SSL requis
+# (sslmode=require) — Onyx/psycopg s'y connecte ; cf. gotchas DEPLOY_AZURE.md.
+postgresql:
+  operator: { enabled: false }
+  cluster:  { enabled: false }
+  host: "<PG_FQDN>.postgres.database.azure.com"
+
+# --- Redis MANAGÉ : Azure Cache for Redis (Premium, persistance + zone) -------
+# Pas d'operator in-cluster. ⚠ Azure Cache = TLS sur 6380 + clé d'accès :
+# poser REDIS_SSL/REDIS_PORT côté Onyx (cf. gotchas). Corrige le SPOF Redis de l'audit.
+redisOperator: { enabled: false }
+redis:
+  enabled: false
+  host: "<REDIS_FQDN>.redis.cache.windows.net"
+
+# --- OpenSearch IN-CLUSTER (aucun managé Azure équivalent) : 3 nœuds HA -------
+opensearch:
+  enabled: true
+  replicas: 3
+  majorVersion: 3
+  persistence: { enabled: true, size: 100Gi }
+  opensearchJavaOpts: "-Xms2g -Xmx2g"
+  resources:
+    requests: { cpu: "1", memory: 3Gi }
+    limits:   { cpu: "2", memory: 4Gi }
+
+# --- MinIO IN-CLUSTER (S3 ; pas de Blob natif Onyx) : distribué erasure-coded -
+minio:
+  enabled: true
+  mode: distributed
+  replicas: 4
+  persistence: { enabled: true, size: 100Gi }
+  buckets:
+    - { name: onyx-file-store-bucket, policy: none }
+    - { name: onyx-os-snapshots, policy: none }
+
+# --- Ollama : CPU (GPU plus tard via un node pool dédié — cf. DEPLOY_AZURE.md) -
+ollama:
+  enabled: true
+  replicaCount: 1
+  tuning:
+    flashAttention: 1
+    kvCacheType: q8_0
+    numParallel: 1
+    maxLoadedModels: 1
+    keepAlive: "30m"
+    contextLength: 8192          # CPU 7b ; 12288 si node RAM ≥ ~24Gi
+  resources:
+    requests: { cpu: "4", memory: 10Gi }
+    limits:   { cpu: "8", memory: 16Gi }   # 7b Q4 + contexte ; aligner au SKU node (ex: Standard_E8s_v5)
+  # GPU plus tard : ajouter nodeSelector/tolerations vers un pool GPU + extraEnv.
+
+# --- Ingress + TLS (le chat est routé vers la passerelle native, cf. accessGateway) -
+ingress:
+  enabled: true
+  className: "webapprouting.kubernetes.io"   # addon AKS App Routing (ou "nginx" si ingress-nginx)
+  host: "<DOMAIN>"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    enabled: true
+    secretName: onix-tls
+
+# --- Passerelle RBAC : TEMPLATE NATIF du chart (accessGateway) — ACTIVÉE sur Azure ---
+# RBAC (cloisonnement + ACL par-doc FOSS) + cache RBAC-safe + streaming + /metrics.
+# Secrets (GATEWAY_CACHE_HMAC_SECRET, GATEWAY_GRAPH_CLIENT_*, et GATEWAY_CACHE_REDIS_URL
+# en TLS `rediss://:<clé>@<REDIS_FQDN>:6380/1`) → Secret `onix-secrets` (Key Vault CSI).
+accessGateway:
+  enabled: true
+  image:
+    repository: <ACR>.azurecr.io/onix-access-gateway
+    tag: "prod"
+  config:
+    groupSource: "graph"          # groupes via Graph (claims OIDC en CSV insuffisants)
+    graph:
+      tenantId: "<TENANT_ID>"
+    docAcl:
+      enabled: true               # RBAC par-document (filtre de SORTIE FOSS)
+    # cache/stream/guardrail/metrics : défauts ON. doc_acl.json via ConfigMap
+    # `onix-doc-acl` (généré par `make sync-doc-acl` en CronJob) → docAclConfigMap.
+
+# --- Ollama GPU : à activer quand vous ajoutez un pool GPU (Bicep gpuEnabled=true) ---
+# ollama:
+#   gpu:
+#     enabled: true
+#     count: 1
+#     nodeSelector: { agentpool: gpu }
+#     tolerations: [ { key: sku, operator: Equal, value: gpu, effect: NoSchedule } ]

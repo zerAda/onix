@@ -1,0 +1,35 @@
+{{- /*
+ConfigMap NON-SECRET partagé : hôtes data-tier, flags de confidentialité,
+endpoints. Les SECRETS (mots de passe, clés) sont dans le Secret K8s, jamais ici.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "onix.fullname" . }}-config
+  labels:
+    {{- include "onix.labels" . | nindent 4 }}
+data:
+  # --- Onyx : câblage data-tier (hôtes en clair, pas de secret) ---
+  POSTGRES_HOST: {{ include "onix.postgresHost" . | quote }}
+  POSTGRES_USER: "postgres"
+  OPENSEARCH_HOST: {{ include "onix.opensearchHost" . | quote }}
+  REDIS_HOST: {{ include "onix.redisHost" . | quote }}
+  S3_ENDPOINT_URL: {{ include "onix.minioEndpoint" . | quote }}
+  MODEL_SERVER_HOST: {{ printf "%s-inference-model-server" (include "onix.fullname" .) | quote }}
+  INDEXING_MODEL_SERVER_HOST: {{ printf "%s-index-model-server" (include "onix.fullname" .) | quote }}
+  WEB_DOMAIN: {{ printf "https://%s" .Values.ingress.host | quote }}
+  DISABLE_TELEMETRY: {{ .Values.global.disableTelemetry | quote }}
+  AUTH_TYPE: "basic"
+  # --- onix-actions : flags / kill-switch (alignés docker-compose) ---
+  ONIX_GLOBAL_ENABLED: {{ .Values.actions.config.globalEnabled | quote }}
+  ONIX_OCR_LANG: {{ .Values.actions.config.ocrLang | quote }}
+  ONIX_LLM_MODEL: {{ .Values.actions.config.llmModel | quote }}
+  ONIX_OLLAMA_URL: {{ .Values.actions.config.ollamaUrl | quote }}
+  ONIX_BUDGET_WARN_PCT: {{ .Values.actions.config.budgetWarnPct | quote }}
+  # Persistance déportée (HA) : SQLite local remplacé par Postgres partagé.
+  ONIX_DB_BACKEND: "postgres"
+{{- if .Values.actionsQueue.enabled }}
+  # File asynchrone : backend de résultats (Postgres) ; le broker (mot de passe)
+  # est injecté côté Deployment via le Secret.
+  ONIX_QUEUE_ENABLED: "true"
+{{- end }}

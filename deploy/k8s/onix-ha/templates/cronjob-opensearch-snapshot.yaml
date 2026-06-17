@@ -1,0 +1,91 @@
+{{- /*
+Snapshot OpenSearch À CHAUD (sans interruption). CronJob qui :
+  1. s'assure que le repository S3 (MinIO) est enregistré (idempotent) ;
+  2. déclenche un snapshot incrémental horodaté (wait_for_completion) ;
+  3. purge les snapshots plus vieux que retentionDays.
+Le cluster OpenSearch reste EN LIGNE pendant toute l'opération (snapshots conçus
+pour le hot backup). Pré-requis : plugin repository-s3 actif sur les nœuds OS et
+endpoint S3 configuré (cf. opensearch.config.s3SnapshotEndpoint).
+*/ -}}
+{{- if .Values.backups.opensearchSnapshot.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "onix.fullname" . }}-os-snapshot
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "os-snapshot") | nindent 4 }}
+spec:
+  schedule: {{ .Values.backups.opensearchSnapshot.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            {{- include "onix.componentLabels" (dict "ctx" . "component" "os-snapshot") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: snapshot
+              image: {{ .Values.backups.opensearchSnapshot.image | quote }}
+              env:
+                - name: OS_HOST
+                  value: "https://{{ include "onix.opensearchHost" . }}:9200"
+                - name: REPO
+                  value: {{ .Values.backups.opensearchSnapshot.repository | quote }}
+                - name: BUCKET
+                  value: {{ .Values.backups.opensearchSnapshot.bucket | quote }}
+                - name: S3_ENDPOINT
+                  value: {{ .Values.opensearch.config.s3SnapshotEndpoint | default (include "onix.minioEndpoint" .) | quote }}
+                - name: RETENTION_DAYS
+                  value: {{ .Values.backups.opensearchSnapshot.retentionDays | quote }}
+                - name: OS_USER
+                  value: "admin"
+                - name: OS_PASS
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "onix.secretName" . }}
+                      key: OPENSEARCH_ADMIN_PASSWORD
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  AUTH="-u ${OS_USER}:${OS_PASS} -k -sS"
+                  SNAP="snap-$(date +%Y%m%d-%H%M%S)"
+                  echo "→ Enregistrement (idempotent) du repository ${REPO}…"
+                  curl ${AUTH} -X PUT "${OS_HOST}/_snapshot/${REPO}" \
+                    -H 'Content-Type: application/json' -d "{
+                      \"type\": \"s3\",
+                      \"settings\": {
+                        \"bucket\": \"${BUCKET}\",
+                        \"endpoint\": \"${S3_ENDPOINT}\",
+                        \"protocol\": \"http\",
+                        \"path_style_access\": true
+                      }
+                    }"
+                  echo "→ Snapshot À CHAUD ${SNAP} (cluster reste en ligne)…"
+                  curl ${AUTH} -X PUT "${OS_HOST}/_snapshot/${REPO}/${SNAP}?wait_for_completion=true" \
+                    -H 'Content-Type: application/json' -d '{"indices":"*","include_global_state":true}'
+                  echo "→ Purge des snapshots > ${RETENTION_DAYS} jours…"
+                  CUTOFF=$(( $(date +%s) - RETENTION_DAYS*86400 ))
+                  for s in $(curl ${AUTH} "${OS_HOST}/_snapshot/${REPO}/_all" | tr ',' '\n' | sed -n 's/.*"snapshot":"\(snap-[0-9-]*\)".*/\1/p'); do
+                    TS=$(echo "$s" | sed 's/snap-//; s/-//')
+                    SDATE=$(date -d "$(echo $s | sed 's/snap-\([0-9]\{8\}\)-\([0-9]\{2\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)/\1 \2:\3:\4/')" +%s 2>/dev/null || echo 0)
+                    if [ "$SDATE" -gt 0 ] && [ "$SDATE" -lt "$CUTOFF" ]; then
+                      echo "  suppression $s"; curl ${AUTH} -X DELETE "${OS_HOST}/_snapshot/${REPO}/${s}" || true
+                    fi
+                  done
+                  echo "✓ Snapshot terminé."
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+{{- end }}

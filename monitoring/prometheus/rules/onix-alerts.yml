@@ -1,0 +1,181 @@
+# =============================================================================
+# onix — Règles d'alerte Prometheus.
+# -----------------------------------------------------------------------------
+# Couvre les exigences WS6 : budget FinOps dépassé, service down, taux d'erreur,
+# 403 kill-switch, saturation ressources. Les seuils sont volontairement
+# prudents et commentés ; ajustez-les par déploiement.
+#
+# NB : les règles `onix_*` (groupe onix-actions-app) dépendent de l'endpoint
+# /metrics que WS2 doit exposer (cf. docs/OBSERVABILITY.md). Elles restent
+# inertes (aucune série) tant que la cible est down — sans casser l'évaluation
+# des autres groupes (infra/blackbox), qui eux fonctionnent immédiatement.
+# =============================================================================
+groups:
+  # ---------------------------------------------------------------------------
+  # 1. Disponibilité des cibles (toutes : infra + actions).
+  # ---------------------------------------------------------------------------
+  - name: onix-availability
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cible Prometheus injoignable ({{ $labels.job }})"
+          description: >-
+            La cible {{ $labels.job }} ({{ $labels.instance }}) ne répond plus
+            depuis 2 minutes (up == 0). Service potentiellement arrêté.
+
+      - alert: ServiceProbeFailed
+        expr: probe_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sonde HTTP en échec ({{ $labels.instance }})"
+          description: >-
+            La sonde blackbox vers {{ $labels.instance }} échoue depuis 2 min
+            (probe_success == 0) : endpoint de santé indisponible.
+
+      - alert: ActionsServiceDown
+        # Double signal : la sonde /health du service actions échoue.
+        expr: probe_success{instance="http://actions:8100/health"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: onix-actions
+        annotations:
+          summary: "onix-actions est DOWN"
+          description: >-
+            Le microservice onix-actions ne répond plus sur /health depuis
+            1 minute. Audit / génération / OCR indisponibles.
+
+  # ---------------------------------------------------------------------------
+  # 2. Application onix-actions : erreurs, latence, kill-switch (DÉPEND DE WS2).
+  #    Toutes ces règles consomment des métriques /metrics non encore exposées.
+  # ---------------------------------------------------------------------------
+  - name: onix-actions-app
+    rules:
+      - alert: HighErrorRate
+        # Taux d'erreur 5xx > 5 % des requêtes sur 5 min.
+        expr: >-
+          (
+            sum(rate(onix_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(onix_http_requests_total[5m])), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: onix-actions
+        annotations:
+          summary: "Taux d'erreur 5xx élevé sur onix-actions"
+          description: >-
+            Plus de 5 % des requêtes renvoient une erreur serveur (5xx) sur les
+            5 dernières minutes ({{ $value | humanizePercentage }}).
+
+      - alert: HighLatencyP95
+        # p95 de latence > 2 s sur 5 min (histogramme).
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le, endpoint) (rate(onix_http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          component: onix-actions
+        annotations:
+          summary: "Latence p95 élevée ({{ $labels.endpoint }})"
+          description: >-
+            La latence au 95e percentile dépasse 2 s sur {{ $labels.endpoint }}
+            depuis 5 min ({{ $value }} s).
+
+      - alert: KillSwitchBlockingTraffic
+        # 403 du kill-switch (global/feature/user). Informationnel : signale
+        # qu'une fonction est COUPÉE et rejette du trafic (≥ 1 req/s sur 5 min).
+        expr: sum(rate(onix_killswitch_blocked_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: info
+          component: onix-actions
+        annotations:
+          summary: "Kill-switch actif : trafic rejeté en 403"
+          description: >-
+            onix-actions rejette du trafic en 403 (kill-switch / feature flag /
+            utilisateur bloqué) : {{ $value | printf "%.2f" }} req/s sur 5 min.
+            Vérifiez que la coupure est intentionnelle.
+
+  # ---------------------------------------------------------------------------
+  # 3. FinOps : budget dépassé / proche du seuil (DÉPEND DE WS2 /metrics).
+  # ---------------------------------------------------------------------------
+  - name: onix-finops
+    rules:
+      - alert: BudgetWarning
+        # Consommation >= seuil d'alerte (par défaut 80 %) mais < 100 %.
+        expr: onix_budget_ratio >= 0.8 and onix_budget_ratio < 1
+        for: 5m
+        labels:
+          severity: warning
+          component: finops
+        annotations:
+          summary: "Budget FinOps proche du seuil"
+          description: >-
+            La consommation atteint {{ $value | humanizePercentage }} du budget
+            ({{ with query "onix_budget_spent_eur" }}{{ . | first | value | printf "%.2f" }}{{ end }} €
+            / {{ with query "onix_budget_limit_eur" }}{{ . | first | value | printf "%.2f" }}{{ end }} €).
+
+      - alert: BudgetExceeded
+        # Budget dépassé (>= 100 %).
+        expr: onix_budget_ratio >= 1
+        for: 1m
+        labels:
+          severity: critical
+          component: finops
+        annotations:
+          summary: "Budget FinOps DÉPASSÉ"
+          description: >-
+            La consommation estimée a dépassé le budget alloué
+            ({{ $value | humanizePercentage }}). Action requise : revoir la
+            rate card / les quotas, ou activer le kill-switch.
+
+  # ---------------------------------------------------------------------------
+  # 4. Saturation des ressources hôte/infra (node-exporter — disponible direct).
+  # ---------------------------------------------------------------------------
+  - name: onix-infra
+    rules:
+      - alert: HostHighCpu
+        expr: >-
+          100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 10m
+        labels:
+          severity: warning
+          component: node
+        annotations:
+          summary: "CPU hôte saturé (> 90 %)"
+          description: "Charge CPU > 90 % depuis 10 min ({{ $value | printf \"%.1f\" }} %)."
+
+      - alert: HostLowMemory
+        expr: >-
+          (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 10
+        for: 10m
+        labels:
+          severity: warning
+          component: node
+        annotations:
+          summary: "Mémoire hôte faible (< 10 % disponible)"
+          description: "Moins de 10 % de RAM disponible depuis 10 min ({{ $value | printf \"%.1f\" }} %)."
+
+      - alert: HostLowDisk
+        expr: >-
+          (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100 < 10
+        for: 10m
+        labels:
+          severity: warning
+          component: node
+        annotations:
+          summary: "Espace disque faible (< 10 %)"
+          description: >-
+            Le point de montage {{ $labels.mountpoint }} a moins de 10 %
+            d'espace libre ({{ $value | printf "%.1f" }} %).

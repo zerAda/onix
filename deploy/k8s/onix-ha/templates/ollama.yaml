@@ -1,0 +1,110 @@
+{{- /* Ollama — runtime LLM local. Stateful (modèles sur PVC) => StatefulSet. */ -}}
+{{- if .Values.ollama.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "onix.fullname" . }}-ollama
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "ollama") | nindent 4 }}
+spec:
+  serviceName: {{ include "onix.fullname" . }}-ollama
+  replicas: {{ .Values.ollama.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "ollama") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "onix.componentLabels" (dict "ctx" . "component" "ollama") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* Pool GPU OPT-IN : placement sur nœuds GPU + runtime NVIDIA. Désactivé
+             par défaut (CPU) ⇒ aucun de ces champs n'est rendu (comportement inchangé). */}}
+      {{- if .Values.ollama.gpu.enabled }}
+      {{- with .Values.ollama.gpu.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.ollama.gpu.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ollama.gpu.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      containers:
+        - name: ollama
+          image: "{{ .Values.ollama.image.repository }}:{{ .Values.ollama.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          # Réglages de performance (alignés docker-compose / detect-hardware.sh).
+          # Mémoire KV ~ contextLength × numParallel (q8_0 ~/2). Cf. PERFORMANCE.md §2bis.
+          env:
+            - name: OLLAMA_FLASH_ATTENTION
+              value: {{ .Values.ollama.tuning.flashAttention | quote }}
+            - name: OLLAMA_KV_CACHE_TYPE
+              value: {{ .Values.ollama.tuning.kvCacheType | quote }}
+            - name: OLLAMA_NUM_PARALLEL
+              value: {{ .Values.ollama.tuning.numParallel | quote }}
+            - name: OLLAMA_MAX_LOADED_MODELS
+              value: {{ .Values.ollama.tuning.maxLoadedModels | quote }}
+            - name: OLLAMA_KEEP_ALIVE
+              value: {{ .Values.ollama.tuning.keepAlive | quote }}
+            - name: OLLAMA_CONTEXT_LENGTH
+              value: {{ .Values.ollama.tuning.contextLength | quote }}
+            {{- with .Values.ollama.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ollama.port }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          resources:
+            {{- if .Values.ollama.gpu.enabled }}
+            {{- /* Fusionne nvidia.com/gpu:<count> dans resources.limits sans muter
+                   les valeurs CPU/mémoire de base. Requiert le NVIDIA device plugin. */}}
+            {{- $gpuLimit := dict "nvidia.com/gpu" .Values.ollama.gpu.count }}
+            {{- $res := mergeOverwrite (deepCopy .Values.ollama.resources) (dict "limits" $gpuLimit) }}
+            {{- toYaml $res | nindent 12 }}
+            {{- else }}
+            {{- toYaml .Values.ollama.resources | nindent 12 }}
+            {{- end }}
+  {{- if .Values.ollama.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: ollama-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.ollama.persistence.size }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "onix.fullname" . }}-ollama
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "ollama") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.ollama.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "onix.componentSelector" (dict "ctx" . "component" "ollama") | nindent 4 }}
+{{- if .Values.ollama.pdb.enabled }}
+---
+{{ include "onix.pdb" (dict "ctx" . "component" "ollama" "cfg" .Values.ollama.pdb) }}
+{{- end }}
+{{- end }}

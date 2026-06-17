@@ -1,0 +1,4 @@
+# Déposez ici vos enregistrements de référence (JSON ou CSV) montés en lecture
+# seule dans le conteneur sous /data/reference. Exemple d'appel d'audit :
+#   { "reference_path": "/data/reference/clients.json", "client_key": "ACME SAS", ... }
+# Le fichier reference/clients.example.json illustre le format attendu.

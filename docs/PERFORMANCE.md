@@ -44,6 +44,54 @@ Sources : [Ollama FAQ](https://docs.ollama.com/faq) · [Ollama — Troubleshooti
 > Sur **CPU**, le nombre de threads est auto-détecté par Ollama (= cœurs physiques),
 > ce qui est optimal : on **ne** force **pas** `num_thread` (le forcer dégrade souvent).
 
+## 2bis. Fenêtre de contexte (`num_ctx`) — le levier QUALITÉ n°1
+
+Le défaut Ollama est **4096 tokens** et **tronque silencieusement** le contexte
+RAG : sur cette stack CPU, un prompt de ~3000 tokens n'a vu que **~2035 tokens
+ingérés** avec le défaut + `NUM_PARALLEL=2`. On fixe donc explicitement la
+fenêtre — `make tune` écrit `OLLAMA_CONTEXT_LENGTH` = **8192** (≤3B) / **12288**
+(7-8B) / **16384** (GPU), et `make models` (pull-models.sh) **grave** en plus
+`num_ctx` + `temperature 0.2` dans chaque modèle de chat via un Modelfile (le même
+réglage est injecté dans le chart Helm `deploy/k8s/.../values.yaml: ollama.tuning`).
+
+**Règle mémoire (à retenir) :** la **KV-cache** croît avec
+`OLLAMA_CONTEXT_LENGTH × OLLAMA_NUM_PARALLEL` ; `OLLAMA_KV_CACHE_TYPE=q8_0` la
+~divise par 2. Source : [Ollama FAQ](https://docs.ollama.com/faq) (« `NUM_PARALLEL`
+scales RAM requirements ») + [context-length](https://docs.ollama.com/context-length).
+- **Mono-utilisateur, qualité maximale** : `NUM_PARALLEL=1` + contexte large.
+- **Multi-utilisateur** : `NUM_PARALLEL≥2` ⇒ prévoir **RAM ∝ contexte × parallèle**.
+
+**Interaction à NE PAS rater (`num_ctx` × chunks RAG) :** Onyx peut injecter
+`MAX_CHUNKS_FED_TO_CHAT=25` morceaux de 512 tok ≈ **12,8k tok**, ce qui **sature**
+un `num_ctx` mal dimensionné. Le bon réglage = **reranker activé +
+`MAX_CHUNKS_FED_TO_CHAT=8`** (≈ 4k tok) **+** un `OLLAMA_CONTEXT_LENGTH`
+confortable. Procédure côté Onyx (embedder FR, reranker, analyseur, ré-index) :
+[`PLAYBOOK_ONYX_RAG.md`](PLAYBOOK_ONYX_RAG.md). Audit complet :
+[`RAG_OPTIMIZATION.md`](RAG_OPTIMIZATION.md).
+
+> Sur **CPU**, augmenter `num_ctx` **ne coûte que de la mémoire** (KV), pas de
+> latence par token : aucune raison de rester au défaut tronquant.
+
+### Capacité d'inférence MESURÉE (4 vCPU, sans GPU)
+
+| Modèle | tok/s (mono) | Réponse ~300 tok | Utilisateurs interactifs |
+|---|---|---|---|
+| `qwen2.5:7b` Q4_K_M | **~5,8** | ~52 s | **1** (2-3 sporadiques) |
+| `llama3.2:3b` | ~12-14 | ~25 s | 2-3 |
+| `llama3.2:1b` | ~15,5 | ~12 s | 4-5 |
+
+Au-delà de ~3 utilisateurs simultanés sur un 7B, **seul un GPU** débloque le débit
+(→ `qwen2.5:14b`, `NUM_PARALLEL=4`, 30-60+ tok/s). `NUM_PARALLEL ≈ vCPU/2` (utile
+jusqu'à ~2 sur 4 vCPU).
+
+### Quantification (réf. 7B) — qualité vs vitesse
+
+| Quant | Perte perplexité | Reco |
+|---|---|---|
+| Q4_K_M | +1,68 % | **CPU** (la vitesse prime) |
+| Q5_K_M | +0,39 % | sweet spot **GPU / ≥ 32 Go** |
+| Q6_K / Q8_0 | +0,13 / +0,03 % | GPU avec VRAM confortable |
+
 ## 3. Choix du modèle (qualité vs vitesse)
 
 `make tune` retient le plus gros modèle qui **tient dans la RAM réellement libre**

@@ -293,6 +293,11 @@ services:
       # de contexte, quasi sans perte. Le KV n'est quantifié QUE si flash attn = 1.
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-1}
       - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
+      # Fenêtre de contexte (num_ctx) par défaut. Le défaut Ollama (4096) tronque
+      # SILENCIEUSEMENT le contexte RAG ; on l'élargit. Mémoire KV ~ contexte ×
+      # OLLAMA_NUM_PARALLEL (q8_0 ci-dessus la ~divise par 2). `make tune` ajuste
+      # au matériel (8192 ≤3B / 12288 7-8B / 16384 GPU). Cf. docs/PERFORMANCE.md §2bis.
+      - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-8192}
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
@@ -307,6 +312,65 @@ services:
         limits:
           cpus: ${OLLAMA_CPU_LIMIT:-4}
           memory: ${OLLAMA_MEM_LIMIT:-6g}
+
+  # ---------------------------------------------------------------------------
+  # onix-actions — couche applicative LOCALE (audit OCR, génération .docx,
+  # tâches, notification, usage, coût, administration). Microservice interne :
+  # AUCUN port publié sur l'hôte ; Onyx l'appelle via http://actions:8100 sur le
+  # réseau onix-net (Custom Actions / Tools — cf. docs/ACTIONS.md). 100 % local,
+  # aucune dépendance externe ni cloud. L'image embarque tesseract + poppler
+  # pour l'OCR. Gouverné par clé API + kill-switch (variables ONIX_*).
+  # ---------------------------------------------------------------------------
+  actions:
+    build:
+      context: ./actions
+      dockerfile: Dockerfile
+    image: onix-actions:local
+    restart: unless-stopped
+    environment:
+      # Clé API (générée par scripts/gen-secrets.sh). Obligatoire : sans elle, le
+      # service refuse toute requête (503) — pas d'ouverture par défaut.
+      - ONIX_ACTIONS_API_KEY=${ONIX_ACTIONS_API_KEY:?Lancez scripts/gen-secrets.sh}
+      # FinOps : rate card (JSON) + budget + seuil d'alerte.
+      - ONIX_RATE_CARD=${ONIX_RATE_CARD:-}
+      - ONIX_BUDGET_EUR=${ONIX_BUDGET_EUR:-}
+      - ONIX_BUDGET_WARN_PCT=${ONIX_BUDGET_WARN_PCT:-80}
+      # Kill-switch / feature flags (gatent réellement les endpoints).
+      - ONIX_GLOBAL_ENABLED=${ONIX_GLOBAL_ENABLED:-true}
+      - ONIX_AUDIT_ENABLED=${ONIX_AUDIT_ENABLED:-true}
+      - ONIX_GENERATE_ENABLED=${ONIX_GENERATE_ENABLED:-true}
+      - ONIX_TASKS_ENABLED=${ONIX_TASKS_ENABLED:-true}
+      - ONIX_NOTIFY_ENABLED=${ONIX_NOTIFY_ENABLED:-true}
+      - ONIX_USAGE_ENABLED=${ONIX_USAGE_ENABLED:-true}
+      - ONIX_COST_ENABLED=${ONIX_COST_ENABLED:-true}
+      - ONIX_OCR_ENABLED=${ONIX_OCR_ENABLED:-true}
+      - ONIX_LLM_ENABLED=${ONIX_LLM_ENABLED:-true}
+      # Assistance LLM locale (extraction de champs) — pointe sur Ollama interne.
+      - ONIX_OLLAMA_URL=${ONIX_OLLAMA_URL:-http://ollama:11434}
+      - ONIX_LLM_MODEL=${ONIX_LLM_MODEL:-llama3.2:3b}
+      # Notification générique (webhook Slack/Mattermost/Teams-compatible).
+      - ONIX_NOTIFY_WEBHOOK=${ONIX_NOTIFY_WEBHOOK:-}
+      - ONIX_OCR_LANG=${ONIX_OCR_LANG:-fra+eng}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # Persistance : SQLite (usage/tâches/admin), fiches .docx générées, et
+      # un répertoire de RÉFÉRENCES en lecture seule (JSON/CSV de comparaison).
+      - actions_data:/data
+      - ./actions/reference:/data/reference:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: ${ACTIONS_CPU_LIMIT:-1}
+          memory: ${ACTIONS_MEM_LIMIT:-512m}
 
   # ---------------------------------------------------------------------------
   # nginx — UNIQUE point d'entrée. Lié à 127.0.0.1 (localhost) uniquement.
@@ -346,3 +410,4 @@ volumes:
   api_server_logs:
   background_logs:
   inference_model_server_logs:
+  actions_data:

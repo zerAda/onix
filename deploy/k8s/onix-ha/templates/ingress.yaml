@@ -1,0 +1,50 @@
+{{- /*
+Ingress + TLS — point d'entrée unique chiffré.
+Route :  /api, /openapi.json -> api ;  / -> webserver  (comme nginx/onyx.conf).
+TLS via cert-manager (annotations) ou Secret TLS fourni.
+*/ -}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "onix.fullname" . }}
+  labels:
+    {{- include "onix.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "onix.fullname" . }}-api
+                port:
+                  number: {{ .Values.api.port }}
+          - path: /openapi.json
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "onix.fullname" . }}-api
+                port:
+                  number: {{ .Values.api.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "onix.fullname" . }}-webserver
+                port:
+                  number: {{ .Values.webserver.port }}
+{{- end }}

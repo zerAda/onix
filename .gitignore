@@ -1,8 +1,30 @@
 # Secrets locaux (générés par scripts/gen-secrets.sh) — NE JAMAIS committer.
 .env
+# Fichiers d'environnement multi-env (dev/test/prod) — secrets, jamais committés.
+.env.*
+deploy/prod/.env
+deploy/prod/.env.*
 
 # Sauvegardes locales (scripts/backup.sh)
 backups/
 
 # Override de test sandbox (proxy TLS) — purement local, jamais livré
 docker-compose.sandbox.yml
+
+# onix-actions — artefacts locaux (venv, données runtime, caches Python)
+actions/.venv/
+actions/data/
+actions/.pytest_cache/
+
+# access-gateway — artefacts locaux (venv, caches, .env local du composant)
+access-gateway/.venv/
+access-gateway/.pytest_cache/
+access-gateway/.env
+access-gateway/config/group_map.json
+
+**/__pycache__/
+*.pyc
+
+# Bicep — ARM compilé généré par `bicep build` (regénérable depuis *.bicep ;
+# `az deployment` compile à la volée). Ne pas committer l'artefact.
+deploy/azure/bicep/main.json

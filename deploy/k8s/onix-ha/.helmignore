@@ -1,0 +1,9 @@
+# Patterns à exclure du package Helm.
+.DS_Store
+.git/
+.gitignore
+*.tmp
+*.bak
+*.orig
+.vscode/
+.idea/

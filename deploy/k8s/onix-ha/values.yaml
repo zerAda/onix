@@ -1,0 +1,605 @@
+# =============================================================================
+# onix-ha — values par défaut : HAUTE DISPONIBILITÉ & SCALE-OUT « by design ».
+# -----------------------------------------------------------------------------
+# Philosophie : ce chart REPREND la structure du chart Onyx OFFICIEL
+# (deployment/helm/charts/onyx, v0.6.0) mais inverse les défauts de l'amont :
+#   * upstream : replicaCount=1, autoscaling.enabled=false, single-node data-tier.
+#   * onix-ha  : replicas>=2, HPA ON, data-tier multi-noeuds, PDB, continuité.
+#
+# Aucun secret en clair ici : tout passe par un Secret K8s (cf. secrets.*).
+# Les sous-charts data-tier (CloudNativePG, OpenSearch, Redis, MinIO) sont les
+# subcharts OFFICIELS Onyx, VENDORISÉS dans charts/*.tgz (verrouillés par
+# Chart.lock) => chart auto-porté, installable hors-ligne. Ils sont DÉSACTIVÉS
+# par défaut (.enabled=false) car un Cluster CNPG / cluster OpenSearch exigent
+# que l'OPÉRATEUR/les CRD soient déjà installés : on active EN DEUX TEMPS en prod
+# (opérateur puis cluster). Voir docs/HA_SCALING.md §"Installation".
+# =============================================================================
+
+# Surcharge de nommage (optionnel).
+nameOverride: ""
+fullnameOverride: ""
+
+# -----------------------------------------------------------------------------
+# Réglages globaux partagés par tous les composants.
+# -----------------------------------------------------------------------------
+global:
+  # Tag d'image Onyx (épinglé). Repris de l'appVersion du Chart si vide.
+  imageTag: "4.1.1"
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+  # storageClass des volumes persistants data-tier. "" = classe par défaut du cluster.
+  storageClass: ""
+  # Confidentialité / souveraineté (aligné docker-compose).
+  disableTelemetry: true
+
+# -----------------------------------------------------------------------------
+# Secrets applicatifs. Deux modes :
+#   1. existingSecret : l'intégrateur crée le Secret hors-chart (RECOMMANDÉ en
+#      prod / GitOps — jamais de secret dans Git). Le chart le RÉFÉRENCE.
+#   2. create=true + valeurs ci-dessous (uniquement pour démo/CI éphémère).
+# Par défaut : create=false ET existingSecret vide => le template Secret n'est
+# PAS rendu et les Deployments lisent un Secret que l'intégrateur fournit.
+# -----------------------------------------------------------------------------
+secrets:
+  existingSecret: ""        # ex: "onix-secrets" (Secret géré hors-chart)
+  create: false             # true => rend templates/secret.yaml (démo seulement)
+  # Clés attendues dans le Secret (noms FIXES, lus par les Deployments) :
+  #   POSTGRES_PASSWORD, OPENSEARCH_ADMIN_PASSWORD, REDIS_PASSWORD,
+  #   S3_AWS_ACCESS_KEY_ID, S3_AWS_SECRET_ACCESS_KEY, SECRET, USER_AUTH_SECRET,
+  #   ONIX_ACTIONS_API_KEY, BROKER_PASSWORD
+  values: {}                # rempli SEULEMENT si create=true (déconseillé)
+
+# -----------------------------------------------------------------------------
+# Anti-affinité par défaut : étale les répliques d'un même composant sur des
+# nœuds DIFFÉRENTS (supprime le SPOF « tout sur un nœud »). soft par défaut
+# (preferred) pour rester schedulable sur petit cluster ; passer en "hard"
+# (required) sur cluster multi-nœuds garanti.
+# -----------------------------------------------------------------------------
+podAntiAffinity:
+  enabled: true
+  type: soft                # soft (preferred) | hard (required)
+  topologyKey: kubernetes.io/hostname
+
+# =============================================================================
+# 1) SERVICES STATELESS ONYX — replicas>=2 + HPA + PDB
+#    (noms alignés sur le chart officiel : api, webserver, background,
+#     inferenceCapability, indexCapability)
+# =============================================================================
+
+api:
+  image:
+    repository: onyxdotapp/onyx-backend
+    tag: ""                 # vide => global.imageTag / appVersion
+  replicaCount: 2
+  port: 8080
+  # Migrations Alembic : exécutées UNE FOIS via un Job pre-install/upgrade
+  # (cf. templates/migrations-job.yaml) pour éviter la course entre N répliques.
+  runMigrationsJob: true
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+  env: {}
+
+webserver:
+  image:
+    repository: onyxdotapp/onyx-web-server
+    tag: ""
+  replicaCount: 2
+  port: 3000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# Workers d'arrière-plan Onyx (indexation, Celery interne Onyx via supervisord).
+background:
+  image:
+    repository: onyxdotapp/onyx-backend
+    tag: ""
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 5Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 75
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# Model server d'INFÉRENCE (embeddings + reranking au moment de la requête).
+inferenceModelServer:
+  image:
+    repository: onyxdotapp/onyx-model-server
+    tag: ""
+  replicaCount: 2
+  port: 9000
+  resources:
+    requests:
+      cpu: "2"
+      memory: 3Gi
+    limits:
+      cpu: "4"
+      memory: 10Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 75
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# Model server d'INDEXATION (embeddings au moment de l'ingestion).
+indexModelServer:
+  image:
+    repository: onyxdotapp/onyx-model-server
+    tag: ""
+  replicaCount: 2
+  port: 9000
+  resources:
+    requests:
+      cpu: "2"
+      memory: 3Gi
+    limits:
+      cpu: "6"
+      memory: 6Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 75
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# =============================================================================
+# 2) onix-actions — microservice applicatif (audit OCR, génération, etc.)
+#    Stateless en HA (replicas>=2 + HPA + PDB). État DÉPORTÉ vers Postgres/Redis/
+#    MinIO (cf. docs/HA_SCALING.md §"Hook code attendu côté actions").
+# =============================================================================
+actions:
+  image:
+    # Image construite depuis ./actions (cf. actions/Dockerfile). En prod, la
+    # CI publie cette image dans un registre ; renseigner repository:tag ici.
+    repository: onix-actions
+    tag: "local"
+  replicaCount: 2
+  port: 8100
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    minAvailable: 1
+  # Feature flags / kill-switch (gatent réellement les endpoints) — alignés
+  # docker-compose. Surchargeables par l'intégrateur.
+  config:
+    globalEnabled: true
+    ocrLang: "fra+eng"
+    llmModel: "llama3.2:3b"
+    ollamaUrl: "http://ollama:11434"
+    budgetWarnPct: "80"
+    # --- WS-CW1 : persistance & stockage STATELESS (multi-réplica) -----------
+    # Noms de variables ALIGNÉS sur le code (actions/app/db.py & objstore.py),
+    # cf. docs/STATELESS_ACTIONS.md. La ConfigMap pose déjà ONIX_DB_BACKEND=postgres
+    # et ONIX_QUEUE_ENABLED ; ici on documente/aligne les clés consommées.
+    #
+    # Persistance partagée : ONIX_DB_BACKEND=postgres + soit ONIX_DB_URL (DSN
+    # complet), soit les variables POSTGRES_* déjà câblées par la ConfigMap/Secret
+    # (POSTGRES_HOST/POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB). Le code compose
+    # le DSN depuis POSTGRES_* si ONIX_DB_URL est vide.
+    dbBackend: "postgres"        # -> ONIX_DB_BACKEND (sqlite en mono-poste)
+    dbUrl: ""                    # -> ONIX_DB_URL (optionnel ; sinon dérivé de POSTGRES_*)
+    dbName: "onyx"               # -> POSTGRES_DB (base partagée Onyx/onix_actions)
+    dbSchema: ""                 # -> ONIX_DB_SCHEMA (search_path dédié, optionnel)
+    # Stockage objet partagé pour les .docx (sinon GET /download casse en HA).
+    objectStore: "s3"           # -> ONIX_OBJECT_STORE (local en mono-poste)
+    s3Bucket: "onyx-file-store-bucket"  # -> ONIX_S3_BUCKET (S3_ENDPOINT_URL déjà en ConfigMap)
+    # Chaîne d'audit HMAC tamper-evident : clé via Secret (ONIX_ACTIONS_AUDIT_HMAC_KEY).
+    # En prod, l'ajouter au Secret applicatif (cf. docs/STATELESS_ACTIONS.md).
+
+# -----------------------------------------------------------------------------
+# File ASYNCHRONE pour onix-actions : worker Celery + broker AMQP (RabbitMQ).
+# Décharge les traitements LONGS (OCR de gros PDF scannés, audits par lot) hors
+# du chemin requête, et permet le scale-out INDÉPENDANT des workers.
+# NB: nécessite un petit hook code côté actions (endpoints async + tâches
+# Celery) — voir docs/HA_SCALING.md. Le worker partage l'image onix-actions.
+# -----------------------------------------------------------------------------
+actionsQueue:
+  enabled: true
+  # WS-CW1 — backend de RÉSULTATS Celery (statut/résultat des tâches async, lu par
+  # GET /jobs/{task_id}). Aligné sur le code (ONIX_RESULT_BACKEND). Vide => le code
+  # dérive de Redis si le broker est Redis, sinon rpc:// (résultats via AMQP). En
+  # prod HA, pointer sur Postgres partagé : "db+postgresql://<user>:<pwd>@<host>/<db>".
+  resultBackend: ""            # -> ONIX_RESULT_BACKEND
+  worker:
+    replicaCount: 2
+    # Commande Celery (le module `app.celery_app` est le hook à ajouter côté code).
+    command:
+      - celery
+      - -A
+      - app.celery_app.celery
+      - worker
+      - --loglevel=info
+      - --concurrency=4
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 12
+      targetCPUUtilizationPercentage: 70
+    pdb:
+      enabled: true
+      minAvailable: 1
+  # Broker RabbitMQ minimal et autonome (StatefulSet 1 réplique avec PVC).
+  # En prod multi-AZ : remplacer par un cluster RabbitMQ (operator) ou Redis HA.
+  broker:
+    enabled: true
+    image:
+      repository: rabbitmq
+      tag: "3.13-management-alpine"
+    username: onix
+    port: 5672
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+# =============================================================================
+# 2bis) access-gateway — proxy RBAC identity-aware DEVANT l'API Onyx
+#    (cloisonnement par groupe/Document Set, ACL par-document FOSS, cache
+#    RBAC-safe, streaming SSE, /metrics). Stateless en HA (replicas>=2 + HPA + PDB).
+#    Auparavant déployé HORS-CHART (deploy/azure/access-gateway.yaml) ; désormais
+#    NATIF mais DÉSACTIVÉ par défaut (enabled=false) : c'est une couche optionnelle.
+#    Câblage : l'Ingress route SEUL le chemin chat vers ce Service (cf. ingress.yaml
+#    / docs/DEPLOY_AZURE.md). Secrets via le Secret applicatif partagé (secrets.*).
+# =============================================================================
+accessGateway:
+  enabled: false            # true => rend ConfigMap + Deployment + Service + HPA + PDB
+  image:
+    # Image construite depuis ./access-gateway (cf. access-gateway/Dockerfile). En
+    # prod, la CI la publie sur un registre ; renseigner repository:tag ici.
+    repository: onix-access-gateway
+    tag: "local"
+  replicaCount: 2
+  port: 8200                # port HTTP du proxy (uvicorn) — aligné Dockerfile/manifeste
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    minAvailable: 1
+  # Durcissement du pod (aligné deploy/azure/access-gateway.yaml) : non-root +
+  # seccomp RuntimeDefault. L'image tourne déjà en utilisateur non privilégié.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  # ConfigMap (optionnelle) contenant doc_acl.json / mapping SharePoint, montée en
+  # lecture seule sous /config. Générée hors-chart par le CronJob de sync Graph→ACL.
+  # Vide => <fullname>-doc-acl (montage `optional: true`, absente = ACL vide).
+  docAclConfigMap: ""
+  # Variables d'environnement libres supplémentaires (non-secret) côté conteneur.
+  extraEnv: []
+  # ---------------------------------------------------------------------------
+  # Knobs GATEWAY_* NON-SECRET (rendus dans la ConfigMap dédiée). Les SECRETS
+  # (clés Graph/Onyx, HMAC, sel d'audit, URL Redis TLS) ne sont JAMAIS ici : ils
+  # viennent du Secret applicatif (secrets.existingSecret). Noms/défauts alignés
+  # sur access-gateway/app/config.py (get_settings).
+  # ---------------------------------------------------------------------------
+  config:
+    # Amont Onyx : vide => Service api in-cluster (http://<fullname>-api:<api.port>).
+    # Renseigner uniquement si l'amont Onyx est EXTERNE au chart.
+    onyxBaseUrl: ""
+    # Source des groupes Entra : "graph" (Microsoft Graph app-only) | "claims"
+    # (groupes dans le header X-OIDC-Claims) | "auto" (claims puis Graph si overage).
+    groupSource: "graph"
+    # deny-by-default : un utilisateur sans aucun groupe mappé est REFUSÉ.
+    denyIfNoMatch: true
+    # Microsoft Graph (NON-SECRET). tenantId REQUIS en mode graph/auto ; client_id
+    # & client_secret sont des SECRETS (cf. Secret applicatif). Hôtes surchargeables
+    # pour les clouds souverains (Gov/China).
+    graph:
+      tenantId: ""                                   # -> GATEWAY_GRAPH_TENANT_ID
+      host: "https://graph.microsoft.com"            # -> GATEWAY_GRAPH_HOST
+      authority: "https://login.microsoftonline.com" # -> GATEWAY_GRAPH_AUTHORITY
+    # Garde-fous (post-filtre réponse) — contrôle de sécurité DÉPLOYÉ (laisser ON).
+    guardrailEnabled: true        # -> GATEWAY_GUARDRAIL_ENABLED
+    # Endpoint Prometheus GET /metrics (réseau interne, pas d'auth).
+    metricsEnabled: true          # -> GATEWAY_METRICS_ENABLED
+    # Filtre ACL par-DOCUMENT (FOSS) appliqué sur la réponse (filtre de SORTIE).
+    docAcl:
+      enabled: true               # -> GATEWAY_DOC_ACL_ENABLED
+      path: "/config/doc_acl.json"          # -> GATEWAY_DOC_ACL_PATH (volume /config)
+      defaultPolicy: "deny"       # -> GATEWAY_DOC_ACL_DEFAULT_POLICY (deny | allow)
+      stripUncited: true          # -> GATEWAY_DOC_ACL_STRIP_UNCITED (refus sûr si 0 citation)
+      # ACL VIVANTE dérivée de SharePoint via Graph, OR-mergée avec le JSON statique.
+      graphEnabled: false         # -> GATEWAY_DOC_ACL_GRAPH_ENABLED (opt-in)
+      mappingPath: "/config/doc_acl_mapping.json"  # -> GATEWAY_DOC_ACL_MAPPING_PATH
+      refreshSeconds: 900         # -> GATEWAY_DOC_ACL_REFRESH_SECONDS (re-sync ACL Graph)
+    # Cache applicatif RBAC-safe (clé HMAC inclut le périmètre trié). La clé HMAC
+    # (GATEWAY_CACHE_HMAC_SECRET) et l'URL Redis (GATEWAY_CACHE_REDIS_URL) sont des
+    # SECRETS ; URL Redis vide côté secret => LRU mémoire (pas de cache partagé).
+    cache:
+      enabled: true               # -> GATEWAY_CACHE_ENABLED
+      ttlSeconds: 3600            # -> GATEWAY_CACHE_TTL_SECONDS
+      maxEntries: 512             # -> GATEWAY_CACHE_MAX_ENTRIES (borne LRU mémoire)
+      locale: "fr"                # -> GATEWAY_CACHE_LOCALE (différencie FR/EN dans la clé)
+    # Tier SÉMANTIQUE du cache — OPT-IN strict (risque de précision sur corpus
+    # factuel). Embeddings via Ollama (nomic-embed-text). embedUrl vide => Service
+    # ollama in-cluster (http://<fullname>-ollama:<ollama.port>/api/embeddings).
+    semantic:
+      enabled: false              # -> GATEWAY_SEMANTIC_CACHE_ENABLED
+      embedUrl: ""                # -> GATEWAY_SEMANTIC_EMBED_URL (vide => Ollama in-cluster)
+      embedModel: "nomic-embed-text"  # -> GATEWAY_SEMANTIC_EMBED_MODEL (doit être déterministe)
+      threshold: 0.95             # -> GATEWAY_SEMANTIC_THRESHOLD (cosinus mini ; haut = sûr)
+    # Streaming SSE token-par-token devant Onyx (latence perçue ÷10 sur CPU).
+    stream:
+      enabled: true               # -> GATEWAY_STREAM_ENABLED
+      idleTimeout: 60             # -> GATEWAY_STREAM_IDLE_TIMEOUT (s d'inactivité tolérée)
+    # Clés GATEWAY_* libres supplémentaires (non-secret) rendues telles quelles.
+    extra: {}
+
+# =============================================================================
+# 3) OLLAMA — runtime LLM local. Stateful (modèles sur PVC). Réplicable mais
+#    chaque réplique recharge les modèles : par défaut 1, scalable si la VRAM/RAM
+#    suit. PDB pour éviter l'éviction simultanée.
+# =============================================================================
+ollama:
+  enabled: true
+  image:
+    repository: ollama/ollama
+    tag: "0.30.8"
+  # replicaCount=1 : chaque réplique recharge les modèles en mémoire (pas de
+  # partage de KV-cache entre pods) ⇒ c'est un SPOF de DÉBIT, pas de disponibilité
+  # (Onyx tolère une coupure LLM transitoire). Passez à >=2 (PVC par pod) si la
+  # VRAM/RAM par nœud le permet et que le débit l'exige. Cf. docs/PERFORMANCE.md.
+  replicaCount: 1
+  port: 11434
+  # Réglages de performance Ollama (injectés en env dans le StatefulSet). Alignés
+  # sur docker-compose / scripts/detect-hardware.sh. Mémoire KV ~ contextLength ×
+  # numParallel (q8_0 ~/2). Adaptez à la RAM/VRAM RÉELLE du nœud.
+  tuning:
+    flashAttention: 1
+    kvCacheType: q8_0
+    numParallel: 1
+    maxLoadedModels: 1
+    keepAlive: "5m"
+    contextLength: 8192     # 4096 (défaut Ollama) tronque le contexte RAG ; 12288 pour 7-8B si RAM OK
+  # ---------------------------------------------------------------------------
+  # Pool GPU — chemin PRÊT À ACTIVER (OPT-IN). Par défaut OFF => Ollama tourne en
+  # CPU (comportement INCHANGÉ : aucun nodeSelector/toleration/limite GPU rendu).
+  # Activer quand un node pool GPU NVIDIA est dispo + NVIDIA device plugin installé
+  # (cf. docs/DEPLOY_AZURE.md « GPU plus tard »). Bascule alors le débit LLM ×10.
+  # ---------------------------------------------------------------------------
+  gpu:
+    enabled: false          # true => place le pod sur le pool GPU et demande le GPU
+    count: 1                # nb de GPU réclamés (resources.limits["nvidia.com/gpu"])
+    # Sélecteur du pool GPU (clé/valeur du label de nœud). Ex AKS : { agentpool: gpu }
+    # ou { "nvidia.com/gpu.present": "true" }. Vide => pas de contrainte de placement.
+    nodeSelector: {}
+    # Tolérances pour le taint du pool GPU (ex AKS : sku=gpu:NoSchedule). Vide => aucune.
+    tolerations: []
+    # runtimeClass NVIDIA (si le cluster route le GPU via une RuntimeClass dédiée,
+    # ex. "nvidia"). Vide => runtime par défaut (cas device-plugin classique).
+    runtimeClassName: ""
+  # Variables d'environnement Ollama supplémentaires (libres) ajoutées telles quelles.
+  extraEnv: []
+  persistence:
+    enabled: true
+    size: 50Gi
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 6Gi
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# =============================================================================
+# 4) INGRESS + TLS — point d'entrée unique, chiffré.
+# =============================================================================
+ingress:
+  enabled: true
+  className: nginx
+  host: onix.example.com
+  # Annotations cert-manager (émission auto). Adapter à votre émetteur.
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  tls:
+    enabled: true
+    secretName: onix-tls           # Secret TLS (géré par cert-manager ou fourni)
+
+# =============================================================================
+# SOCLE DE DONNÉES HA — sous-charts OFFICIELS (mêmes que le chart Onyx amont).
+# Désactivés par défaut pour la validation hors-ligne ; ACTIVER en prod après
+# `helm dependency build`. Les valeurs ci-dessous sont des overrides HA prêts.
+# =============================================================================
+
+# --- PostgreSQL HA via CloudNativePG (opérateur + Cluster 3 instances) -------
+postgresql:
+  # Activer l'opérateur CNPG (sous-chart). Le Cluster Postgres lui-même est
+  # rendu par templates/postgres-cluster.yaml (CRD CloudNativePG).
+  operator:
+    enabled: false            # PROD: true (après `helm dependency build`)
+  # Cluster applicatif (CRD postgresql.cnpg.io/Cluster).
+  cluster:
+    enabled: false            # PROD: true — rend le Cluster CNPG 3 instances
+    instances: 3              # 1 primaire + 2 réplicas en streaming synchrone
+    storageSize: 50Gi
+    database: onyx
+    owner: postgres
+    # Secret CNPG d'identifiants applicatifs (clés `username`/`password`). Vide =>
+    # CNPG génère le Secret lui-même. Pour CÂBLER le même mdp côté Onyx, créer un
+    # Secret basic-auth dédié et le nommer ici (cf. docs/HA_SCALING.md §8).
+    appSecret: ""
+    # PITR / WAL archiving + base backups vers MinIO/S3 (continuité sans arrêt).
+    backup:
+      enabled: true
+      destinationPath: "s3://onyx-pg-backups/"
+      endpointURL: ""         # vide => endpoint MinIO interne dérivé du <fullname>
+      retentionPolicy: "30d"
+      scheduledBackup:
+        enabled: true
+        schedule: "0 0 2 * * *"   # tous les jours 02:00 (format CNPG, 6 champs)
+  host: ""                    # vide => <fullname>-postgresql-rw (service CNPG)
+
+# --- OpenSearch >=3 noeuds (sous-chart officiel opensearch) -------------------
+opensearch:
+  enabled: false              # PROD: true (après `helm dependency build`)
+  # Le sous-chart officiel consomme ces clés directement.
+  replicas: 3
+  majorVersion: 3
+  persistence:
+    enabled: true
+    size: 100Gi
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  opensearchJavaOpts: "-Xms1g -Xmx1g"
+  config:
+    # 1 réplica de shard mini (redondance des données) imposé via index template.
+    # Endpoint S3 (MinIO) pour le repository de snapshots à chaud. Vide => dérivé
+    # de l'endpoint MinIO interne (<fullname>-minio).
+    s3SnapshotEndpoint: ""
+  host: ""                    # vide => <fullname>-opensearch
+
+# --- Redis HA via Redis Operator (sentinel/cluster) --------------------------
+redisOperator:
+  enabled: false              # PROD: true
+redis:
+  enabled: false              # PROD: true — déploie un Redis répliqué (operator)
+  mode: replication           # replication (sentinel) | cluster
+  replicas: 3
+  persistence:
+    enabled: true
+    size: 5Gi
+  host: ""                    # vide => <fullname>-redis
+
+# --- MinIO distribué (sous-chart officiel minio) -----------------------------
+minio:
+  enabled: false              # PROD: true (après `helm dependency build`)
+  mode: distributed
+  replicas: 4                 # 4 noeuds = erasure coding (tolère 1-2 pertes)
+  persistence:
+    enabled: true
+    size: 100Gi
+  resources:
+    requests:
+      memory: 1Gi
+  buckets:
+    - name: onyx-file-store-bucket
+      policy: none
+    - name: onyx-pg-backups
+      policy: none
+    - name: onyx-os-snapshots
+      policy: none
+  endpoint: ""                # vide => http://<fullname>-minio:9000
+
+# =============================================================================
+# 5) CONTINUITÉ — CronJobs de sauvegarde À CHAUD (sans interruption).
+# =============================================================================
+backups:
+  # Snapshot OpenSearch à chaud (repository S3/MinIO). N'arrête jamais le cluster.
+  opensearchSnapshot:
+    enabled: true
+    schedule: "0 1 * * *"     # tous les jours 01:00
+    repository: onyx-os-snapshots
+    bucket: onyx-os-snapshots
+    retentionDays: 14
+    image: curlimages/curl:8.11.1
+  # Miroir MinIO -> bucket de sauvegarde (objets), à chaud via `mc mirror`.
+  minioMirror:
+    enabled: true
+    schedule: "0 3 * * *"
+    sourceBucket: onyx-file-store-bucket
+    targetBucket: onyx-file-store-bucket-backup
+    image: minio/mc:RELEASE.2024-11-21T17-21-54Z
+  # NB: la sauvegarde Postgres (base backup + WAL/PITR) est gérée NATIVEMENT par
+  # CloudNativePG (postgresql.cluster.backup.scheduledBackup) — pas de CronJob ici.
+
+# =============================================================================
+# Sondes de santé (réutilisées par tous les Deployments stateless).
+# =============================================================================
+probes:
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 5
+  readiness:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3

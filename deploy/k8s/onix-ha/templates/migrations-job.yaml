@@ -1,0 +1,50 @@
+{{- /*
+Migrations Alembic — Job exécuté UNE FOIS via hook Helm (pre-install,pre-upgrade).
+En HA, les N répliques d'`api` NE lancent PAS `alembic upgrade head` chacune
+(course/lock) : on centralise la migration dans ce Job qui doit réussir AVANT le
+déploiement des pods applicatifs. C'est la pratique recommandée multi-réplique.
+*/ -}}
+{{- if .Values.api.runMigrationsJob }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "onix.fullname" . }}-migrations
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "migrations") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "onix.componentLabels" (dict "ctx" . "component" "migrations") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrations
+          image: {{ include "onix.image" (dict "image" .Values.api.image "root" .) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - "alembic upgrade head"
+          envFrom:
+            - configMapRef:
+                name: {{ include "onix.fullname" . }}-config
+          env:
+            {{- include "onix.dataTierSecretEnv" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+{{- end }}

@@ -1,0 +1,65 @@
+{{- /*
+Miroir MinIO À CHAUD (sans interruption). CronJob `mc mirror` qui réplique le
+bucket de fichiers Onyx vers un bucket de sauvegarde. MinIO reste EN LIGNE.
+Pour une cible HORS-SITE (3-2-1), pointer l'alias `dst` vers un autre endpoint S3.
+*/ -}}
+{{- if .Values.backups.minioMirror.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "onix.fullname" . }}-minio-mirror
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "minio-mirror") | nindent 4 }}
+spec:
+  schedule: {{ .Values.backups.minioMirror.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 7200
+      template:
+        metadata:
+          labels:
+            {{- include "onix.componentLabels" (dict "ctx" . "component" "minio-mirror") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: mirror
+              image: {{ .Values.backups.minioMirror.image | quote }}
+              env:
+                - name: MINIO_ENDPOINT
+                  value: {{ include "onix.minioEndpoint" . | quote }}
+                - name: SRC_BUCKET
+                  value: {{ .Values.backups.minioMirror.sourceBucket | quote }}
+                - name: DST_BUCKET
+                  value: {{ .Values.backups.minioMirror.targetBucket | quote }}
+                - name: ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "onix.secretName" . }}
+                      key: S3_AWS_ACCESS_KEY_ID
+                - name: SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "onix.secretName" . }}
+                      key: S3_AWS_SECRET_ACCESS_KEY
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  mc alias set src "${MINIO_ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}"
+                  mc mb --ignore-existing "src/${DST_BUCKET}"
+                  echo "→ Miroir À CHAUD ${SRC_BUCKET} -> ${DST_BUCKET}…"
+                  mc mirror --overwrite --remove "src/${SRC_BUCKET}" "src/${DST_BUCKET}"
+                  echo "✓ Miroir terminé."
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+{{- end }}
