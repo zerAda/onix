@@ -55,6 +55,7 @@ Détail : [`ARCHITECTURE.md`](ARCHITECTURE.md) (racine) + [`docs/ARCHITECTURE.md
 # Mono-poste (dev/démo)
 make tune && make secrets && make up && make verify     # détecte HW, génère secrets, démarre, vérifie
 make models                                             # pré-tire les modèles Ollama (num_ctx gravé)
+# POC local complet (machine perso, connexion SharePoint, 1-2 testeurs) → docs/POC_LOCAL.md
 
 # Qualité (DOIT rester vert — voir §5)
 make test            # lint + compose-validate + pytest + bandit + pip-audit + gitleaks + trivy

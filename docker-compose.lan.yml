@@ -1,0 +1,16 @@
+# =============================================================================
+# Override d'ACCÈS LAN (POC) — expose nginx sur TOUTES les interfaces (0.0.0.0)
+# pour que 1-2 testeurs du MÊME réseau ouvrent http://<IP-LAN-de-ta-machine>:3000
+#
+# Par défaut, nginx est lié à 127.0.0.1 (localhost only) — cet override le retire.
+# ⚠️ SÉCURITÉ : à n'utiliser QUE sur un réseau de CONFIANCE, avec AUTH_TYPE=basic
+#    et le compte admin DÉJÀ créé. Pour des testeurs hors réseau, préférer
+#    **Tailscale Serve** (privé + TLS, zéro exposition) — cf. docs/POC_LOCAL.md.
+#
+# Usage :
+#   docker compose -f docker-compose.yml -f docker-compose.lan.yml up -d
+# =============================================================================
+services:
+  nginx:
+    ports: !override
+      - "${ONYX_HOST_PORT:-3000}:80"   # 0.0.0.0 (toutes interfaces) au lieu de 127.0.0.1

@@ -45,6 +45,7 @@
 ## ☁️ Déploiement · HA · exploitation
 | Doc | Contenu |
 |---|---|
+| [`POC_LOCAL.md`](POC_LOCAL.md) | **POC local** (machine perso 64 Go) : démarrage, **connexion SharePoint pas-à-pas**, accès 1-2 testeurs (Tailscale/LAN), dépannage |
 | [`RUNBOOK.md`](RUNBOOK.md) | Mono-poste : upgrade, incidents, scaling, Ollama natif |
 | [`HA_SCALING.md`](HA_SCALING.md) · [`HA_ACCEPTANCE.md`](HA_ACCEPTANCE.md) | Chart Helm HA, scale-out, preuves |
 | [`DEPLOY_PROD.md`](DEPLOY_PROD.md) | Prod compose (Caddy TLS + OIDC + passerelle) |
