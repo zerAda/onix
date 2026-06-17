@@ -31,6 +31,7 @@ import json
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Callable, Dict, List, Optional
 
@@ -62,6 +63,21 @@ def live_ollama_enabled() -> bool:
 # ───────────────────────────────────────────────────────────────────────────
 # Client minimal /v1/chat/completions (stdlib uniquement — pas de dépendance).
 # ───────────────────────────────────────────────────────────────────────────
+def _http_request(target, *, timeout: float):
+    """Ouvre une requête HTTP(S) après contrôle du schéma.
+
+    `target` est soit une URL (str), soit un `urllib.request.Request`. On
+    n'autorise QUE http/https : cela écarte les schémas `file:`/custom qui
+    transformeraient `urlopen` en lecture de fichier local ou en vecteur SSRF
+    (l'URL Ollama provient de l'environnement, donc potentiellement non sûre).
+    """
+    url = target.full_url if isinstance(target, urllib.request.Request) else target
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        raise ValueError(f"schéma d'URL non autorisé (http/https requis) : {url!r}")
+    # Schéma déjà validé ci-dessus (http/https uniquement) -> B310 maîtrisé.
+    return urllib.request.urlopen(target, timeout=timeout)  # nosec B310
+
+
 def _max_tokens() -> int:
     # Borne la longueur de réponse : les assertions comportementales portent sur
     # le contenu (refus, fuite, dump), pas sur la prolixité. Une borne évite les
@@ -91,16 +107,18 @@ def chat(system: str, user: str, *, temperature: float = 0.0,
         headers={"Content-Type": "application/json", "Authorization": "Bearer ollama"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=_read_timeout()) as resp:
+    with _http_request(req, timeout=_read_timeout()) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return data["choices"][0]["message"]["content"]
 
 
 def ollama_reachable() -> bool:
     try:
-        with urllib.request.urlopen(f"{ollama_base()}/api/version", timeout=5):
+        with _http_request(f"{ollama_base()}/api/version", timeout=5):
             return True
-    except (urllib.error.URLError, OSError):
+    except (ValueError, urllib.error.URLError, OSError):
+        # ValueError = schéma d'URL non autorisé ; URLError/OSError = endpoint
+        # injoignable. Dans tous les cas, Ollama n'est pas exploitable ici.
         return False
 
 

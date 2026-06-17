@@ -97,15 +97,32 @@ Content-Type: application/json
 
 **Admin → Connectors → SharePoint → Set up** :
 - **Connector Name** : ex. `clients-sharepoint`.
-- **Sites** : liste d'**URL de sites complètes**, ou **vide** = tout le tenant.
-  Format attendu (validé par le connecteur) :
-  `https://<tenant>.sharepoint.com/sites/<site>` ou `…/teams/<team>`.
+- **Sites** (libellé du champ : **Sites** ; invite UI **« Enter SharePoint sites: »**) :
+  liste d'**URL de sites complètes**, ou **vide** = tout le tenant
+  (**`Sites.Read.All` requis** si vide — cf. description du champ dans l'UI).
+  Format **validé par le connecteur** (`validate_connector_settings`,
+  `connector.py:1219-1225`) : l'URL **doit** commencer par `https://` **et** contenir
+  `/sites/` **ou** `/teams/`, sinon : *« Site URLs must be full Sharepoint URLs… »*.
+  → `https://<tenant>.sharepoint.com/sites/<site>` ou `…/teams/<team>`.
 - **Auth** : *Client Secret* (App ID, Directory ID, Secret) **ou** *Certificate*.
 - **Permission Sync** : **uniquement** en mode **certificat** + édition **Cloud/EE**.
 - Lancer l'indexation, puis **regrouper le connecteur dans un Document Set**
   (`Admin → Document Sets`) que l'agent utilisera (cf. `../AGENT_COMMERCIAL.md` ;
   pour le cloisonnement par groupe, **un Document Set par périmètre**, cf.
   [`../RBAC.md`](../RBAC.md) §4).
+
+> **Champs de credential (noms exacts).** Le connecteur lit
+> (`connector.py:2310-2314`) : **`sp_client_id`**, **`sp_client_secret`** (mode
+> client secret), **`sp_directory_id`**, plus **`sp_private_key`** (PFX base64) et
+> **`sp_certificate_password`** (mode certificat). Le mode est porté par
+> **`authentication_method`** ∈ {`client_secret`, `certificate`} (défaut
+> `client_secret`, `connector.py:2307-2308`, `2343`/`2323`).
+>
+> **Variables d'env (runner CLI uniquement).** Le `__main__` du connecteur
+> (`connector.py:3170-3177`) lit `SHAREPOINT_SITES`, `SHAREPOINT_CLIENT_ID`,
+> `SHAREPOINT_CLIENT_SECRET`, `SHAREPOINT_CLIENT_DIRECTORY_ID` — c'est le **harnais
+> de test standalone**, **pas** le flux normal Onyx (qui passe par la *credential*
+> ci-dessus). Ne pas confondre.
 
 ### 4.1 Pages SharePoint vs documents — activer / désactiver
 
@@ -353,7 +370,85 @@ on fournit un **mapping explicite** (JSON) :
 > qualité dépend du **mapping `doc_id ↔ item`** ; (c) la propagation est
 > **différée** (cadence du sync), pas instantanée.
 
-## 7. Validation
+## 7. Dépannage / vérification opérationnelle (checklist)
+
+### 7.0 Vérifier l'indexation côté Onyx
+1. **Admin → Connectors → SharePoint** : le connecteur doit afficher le statut
+   **`succeeded`** (et non `failed`/`in progress` figé). Cliquer dessus ouvre
+   l'**historique des runs** et le **dernier message d'erreur** éventuel.
+2. **Admin → Indexing** : suivre l'avancement (docs traités / restants) ; un run
+   qui **n'avance pas** ou se termine à **0 document** pointe vers un problème de
+   permissions ou de cible (voir ci-dessous).
+3. Quand le run est `succeeded`, **poser une question** sur un document connu :
+   la réponse doit **citer** le document (preuve que l'index contient le contenu).
+
+### 7.1 Erreur `401 / 403` à l'auth ou à la lecture
+Symptôme : le run échoue immédiatement, ou les sites sont rejetés. Causes, par
+ordre de fréquence :
+- ❌ **Consentement admin manquant.** `Sites.Read.All` (ou `Sites.Selected` +
+  octroi par site) **ajoutée mais non consentie** → toujours 401/403. Fix :
+  *Azure → API permissions → **Grant admin consent***
+  (ou `az ad app permission admin-consent --id <APPID>`).
+- ❌ **Secret client expiré.** Les secrets Azure ont une **durée de vie** ; un
+  secret périmé donne un échec d'auth. Fix : régénérer le secret
+  (*Certificates & secrets*) et **mettre à jour la credential** Onyx
+  (`sp_client_secret`).
+- ❌ **Mauvais tenant / IDs.** `sp_directory_id` (Directory/tenant ID) ou
+  `sp_client_id` (Application ID) erronés → l'autorité MSAL
+  (`{authority_host}/{sp_directory_id}`, `connector.py:2321`) pointe au mauvais
+  endroit. Vérifier les deux IDs sur la page **Overview** de l'app.
+- ❌ **(Permission sync EE / certificat)** `403` à la lecture des
+  *RoleAssignments* : il **manque `Sites.FullControl.All`** (SharePoint REST) sur
+  le(s) site(s). Le connecteur le signale explicitement à la validation :
+  *« missing the required SharePoint permission to read role assignments… grant
+  'Sites.FullControl.All' »* (`connector.py:1277-1284`). Idem `GroupMember.Read.All`
+  pour l'expansion des groupes (`connector.py:1308-1313`).
+
+### 7.2 Site introuvable / aucun drive (URL vs nom)
+- ❌ **URL incomplète.** Le connecteur **exige une URL complète** contenant
+  `/sites/<site>` ou `/teams/<team>` (`connector.py:1219-1225`, `1444-1489`). Un
+  simple **nom de site** est **rejeté**. → Toujours coller l'**URL complète**.
+- ❌ **Bibliothèque par défaut non résolue (tenant FR/autre).** La résolution du
+  **nom de drive localisé** ne couvre que **EN/DE/ES** via `SHARED_DOCUMENTS_MAP`
+  (`connector.py:95-99`). Sur un tenant **FR** (« Documents partagés »), désigner
+  **explicitement** la bibliothèque dans l'URL (cf. §4.2) plutôt que compter sur
+  « la bibliothèque par défaut ». La résolution **du site**, elle, est **purement
+  basée sur l'URL** (`get_by_url`) — **indépendante de la langue**. Le texte de
+  l'UI « works for English, Spanish, or German » concerne la **bibliothèque**, pas
+  le site (cf. §0).
+- ❌ **Drive name mal orthographié.** La correspondance est **insensible à la
+  casse** (`connector.py:1505-1513`) mais doit correspondre au **libellé réel** du
+  drive ; sinon : *« Drive '…' not found »* (warning, drive ignoré).
+
+### 7.3 Indexation « réussie » mais **vide** (0 document)
+- ❌ **`Sites.Selected` sans octroi par site.** L'app a la permission mais **aucun
+  site ne lui est accordé** → rien à lire. Fix : `POST …/sites/{id}/permissions`
+  (cf. §3) ou basculer sur `Sites.Read.All` (moins restrictif).
+- ❌ **Site / bibliothèque réellement vide**, ou **filtre trop strict** :
+  *Excluded Sites* / *Excluded Paths* (glob) qui excluent tout, ou *folder_path*
+  pointant un dossier inexistant.
+- ❌ **Les deux types de contenu désactivés** : impossible (le connecteur refuse,
+  cf. §4.1) — mais vérifier que la cible **contient bien** des documents et/ou des
+  pages selon les cases cochées (*Include Site Documents* / *Include Site Pages*).
+- ❌ **Fichiers au-dessus du seuil de taille** (`SHAREPOINT_CONNECTOR_SIZE_THRESHOLD`)
+  ou **types image exclus** : ignorés silencieusement (warning dans les logs).
+
+### 7.4 Frontière FOSS / EE (à toujours garder en tête)
+| Capacité | FOSS (indexation) | EE / Cloud (permission sync) |
+|---|---|---|
+| Auth | client secret **ou** certificat | **certificat obligatoire** |
+| Scope Graph mini | **`Sites.Read.All`** (ou `Sites.Selected`) | + `Directory.Read.All`, `GroupMember.Read.All`… |
+| Scope SharePoint | — | **`Sites.FullControl.All`** (RoleAssignments) |
+| ACL **par document** (trimming à la recherche) | ❌ **index partagé** | ✅ par utilisateur |
+| Cloisonnement onix en FOSS | **Document Sets + `access-gateway`** (filtre de SORTIE) | — |
+
+> Le **trimming par document à la recherche** n'existe **qu'en EE** (permission
+> sync, certificat). En **FOSS**, l'index est partagé ; le cloisonnement onix est
+> un **filtre de sortie** (Document Sets + passerelle, cf. §6 et
+> [`../RBAC.md`](../RBAC.md)). Ne jamais présenter le FOSS comme un « zéro-fuite à
+> la recherche » (cf. §6.2).
+
+## 8. Validation
 - L'indexation se termine (Admin → Connectors → statut « succeeded »).
 - Une question sur un document **connu** renvoie une **réponse sourcée** (citation).
 - (FOSS + gateway) un commercial **d'une autre équipe** n'obtient **rien** sur un

@@ -22,14 +22,32 @@ SITES_READ_ALL="332a536c-c7ef-4017-ab91-336970924f0d"   # Graph Sites.Read.All (
 command -v az >/dev/null || { echo "az CLI requis (script à lancer sur VOTRE poste)"; exit 1; }
 az account show >/dev/null || { echo "Lancez 'az login' d'abord."; exit 1; }
 
-echo "→ Création de l'app Entra 'onix-sharepoint'…"
-APPID=$(az ad app create --display-name "onix-sharepoint" --sign-in-audience AzureADMyOrg --query appId -o tsv)
+APP_NAME="onix-sharepoint"
+
+# Idempotence : réutilise l'app si elle existe déjà (ré-exécution sans doublon).
+# `az ad app list` renvoie une liste vide (pas d'erreur) si aucune app ne matche.
+echo "→ Recherche d'une app Entra '$APP_NAME' existante…"
+APPID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv)
+if [ -n "$APPID" ]; then
+  echo "   App déjà présente (appId=$APPID) — réutilisée, pas de doublon."
+else
+  echo "→ Création de l'app Entra '$APP_NAME'…"
+  APPID=$(az ad app create --display-name "$APP_NAME" --sign-in-audience AzureADMyOrg --query appId -o tsv)
+fi
+
 echo "→ Permission Graph Sites.Read.All (Application)…"
+# `permission add` est idempotent côté manifeste (re-pose le même appRole sans doublon).
 az ad app permission add --id "$APPID" --api "$GRAPH_APPID" --api-permissions "${SITES_READ_ALL}=Role"
+
+# Service principal : indispensable pour le consentement ; ignore l'erreur s'il existe déjà.
 az ad sp create --id "$APPID" >/dev/null 2>&1 || true
+
 echo "→ Génération du secret client…"
+# `credential reset` crée un NOUVEAU secret à chaque exécution (les anciens restent
+# valides jusqu'à expiration). À ré-exécuter justement quand le secret a expiré.
 SECRET=$(az ad app credential reset --id "$APPID" --display-name "onix" --query password -o tsv)
-echo "→ Consentement administrateur…"
+
+echo "→ Consentement administrateur (Grant admin consent)…"
 az ad app permission admin-consent --id "$APPID"
 
 cat <<EOF
