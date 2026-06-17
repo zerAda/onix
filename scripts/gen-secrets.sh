@@ -111,19 +111,27 @@ ensure ONIX_ACTIONS_AUDIT_HMAC_KEY     rand 48
 # génération, Grafana démarrerait sur 'admin' par défaut → on le force ici.
 ensure GRAFANA_ADMIN_PASSWORD          rand 32
 
-# --- Secrets de la PASSERELLE (access-gateway) ------------------------------
-# Générés UNIQUEMENT quand on cible le fichier d'env de la passerelle
-# (ENV_FILE=access-gateway/.env ; cf. `make secrets-gateway`). On ne génère QUE
-# les secrets ALÉATOIRES : le secret client Graph et la clé API Onyx proviennent
-# de systèmes externes et restent à renseigner à la main.
+# --- Secrets PASSERELLE / PROD (aléatoires) --------------------------------
+# Générés quand on cible l'env de la passerelle (access-gateway/.env) OU l'env de
+# PROD (deploy/prod/.env.prod, qui DÉPLOIE la passerelle + oauth2-proxy). On ne
+# génère QUE les secrets ALÉATOIRES ; les valeurs Entra EXTERNES (OAUTH_CLIENT_ID,
+# OAUTH_CLIENT_SECRET, OAUTH2_PROXY_OIDC_ISSUER_URL, GATEWAY_GRAPH_*) restent à
+# renseigner à la main (cf. docs/DEPLOY_PROD.md).
 case "$ENV_FILE" in
-  *access-gateway*)
-    echo "Secrets passerelle (access-gateway) :"
+  *access-gateway*|deploy/prod/*|*/deploy/prod/*)
+    echo "Secrets passerelle :"
     # REQUIS si le cache est activé : sans lui le cache se DÉSACTIVE au démarrage
     # (log CRITICAL). Évite le footgun « cache silencieusement OFF ».
     ensure GATEWAY_CACHE_HMAC_SECRET     rand 48
     # Sel HMAC de pseudonymisation du journal d'accès (RGPD : pas d'UPN en clair).
     ensure GATEWAY_AUDIT_SALT            rand 48
+    ;;
+esac
+# Secret de cookie oauth2-proxy (PROD uniquement) : sessions OIDC chiffrées.
+case "$ENV_FILE" in
+  deploy/prod/*|*/deploy/prod/*)
+    echo "Secrets prod (oauth2-proxy) :"
+    ensure OAUTH2_PROXY_COOKIE_SECRET    rand 32
     ;;
 esac
 
