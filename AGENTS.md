@@ -45,7 +45,7 @@ Détail : [`ARCHITECTURE.md`](ARCHITECTURE.md) (racine) + [`docs/ARCHITECTURE.md
 | `monitoring/` | Observabilité locale (Prometheus/Grafana/Loki/alertes) |
 | `deploy/k8s/onix-ha/` | **Chart Helm HA** (OpenSearch/Postgres/MinIO/Redis HA, HPA, Celery, +gateway, +GPU) |
 | `deploy/prod/` | Compose prod (Caddy TLS + OIDC oauth2-proxy + passerelle) |
-| `deploy/azure/` | **Azure/AKS** : `values-azure.yaml`, `access-gateway.yaml`, `setup-entra.sh`, **`bicep/`** (IaC) |
+| `deploy/azure/` | **Azure/AKS** : `values-azure.yaml`, `setup-entra.sh`, **`bicep/`** (IaC validée `bicep build`) — passerelle = template natif du chart |
 | `scripts/` | `detect-hardware`(.sh/.ps1), `gen-secrets.sh`, `pull-models.sh`, `sync-doc-acl.py`, backup/restore, verify |
 | `docs/` | Toute la doc de scope (index : [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md)) |
 | `docs/audit-onyx/` | Audit byte-level d'Onyx (7 dimensions + verdict) |

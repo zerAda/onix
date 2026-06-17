@@ -119,7 +119,7 @@ ollama:
     limits:   { cpu: "8", memory: 16Gi }   # 7b Q4 + contexte ; aligner au SKU node (ex: Standard_E8s_v5)
   # GPU plus tard : ajouter nodeSelector/tolerations vers un pool GPU + extraEnv.
 
-# --- Ingress + TLS (chat routé vers l'access-gateway, cf. access-gateway.yaml) -
+# --- Ingress + TLS (le chat est routé vers la passerelle native, cf. accessGateway) -
 ingress:
   enabled: true
   className: "webapprouting.kubernetes.io"   # addon AKS App Routing (ou "nginx" si ingress-nginx)
@@ -129,3 +129,29 @@ ingress:
   tls:
     enabled: true
     secretName: onix-tls
+
+# --- Passerelle RBAC : TEMPLATE NATIF du chart (accessGateway) — ACTIVÉE sur Azure ---
+# RBAC (cloisonnement + ACL par-doc FOSS) + cache RBAC-safe + streaming + /metrics.
+# Secrets (GATEWAY_CACHE_HMAC_SECRET, GATEWAY_GRAPH_CLIENT_*, et GATEWAY_CACHE_REDIS_URL
+# en TLS `rediss://:<clé>@<REDIS_FQDN>:6380/1`) → Secret `onix-secrets` (Key Vault CSI).
+accessGateway:
+  enabled: true
+  image:
+    repository: <ACR>.azurecr.io/onix-access-gateway
+    tag: "prod"
+  config:
+    groupSource: "graph"          # groupes via Graph (claims OIDC en CSV insuffisants)
+    graph:
+      tenantId: "<TENANT_ID>"
+    docAcl:
+      enabled: true               # RBAC par-document (filtre de SORTIE FOSS)
+    # cache/stream/guardrail/metrics : défauts ON. doc_acl.json via ConfigMap
+    # `onix-doc-acl` (généré par `make sync-doc-acl` en CronJob) → docAclConfigMap.
+
+# --- Ollama GPU : à activer quand vous ajoutez un pool GPU (Bicep gpuEnabled=true) ---
+# ollama:
+#   gpu:
+#     enabled: true
+#     count: 1
+#     nodeSelector: { agentpool: gpu }
+#     tolerations: [ { key: sku, operator: Equal, value: gpu, effect: NoSchedule } ]

@@ -20,4 +20,9 @@ paths = [
 # Valeur FACTICE de test (actions/tests/conftest.py) — non-secret confirmé.
 regexes = [
   '''test-key-0123456789''',
+  # GUIDs de RÔLES INTÉGRÉS Azure (publics, documentés Microsoft) — PAS des secrets.
+  # AcrPull / Key Vault Secrets User / Monitoring Data Reader (deploy/azure/bicep/).
+  '''7f951dda-4ed3-4680-a7ca-43fe172d538d''',
+  '''4633458b-17de-408a-b874-0445c86b69e6''',
+  '''b0d8363b-8ddd-447d-831f-62ca05bff136''',
 ]

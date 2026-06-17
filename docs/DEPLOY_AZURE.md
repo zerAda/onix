@@ -43,7 +43,7 @@ az keyvault create -g $RG -n $KV -l $LOC --enable-rbac-authorization true
 # App Routing (ingress managé) + cert-manager (TLS Let's Encrypt) — ou ingress-nginx
 az aks approuting enable -g $RG -n $AKS
 ```
-> **GPU plus tard** : `az aks nodepool add -g $RG --cluster-name $AKS -n gpu --node-vm-size Standard_NC8as_T4_v3 --node-count 0 --enable-cluster-autoscaler --min-count 0 --max-count 2 --node-taints sku=gpu:NoSchedule` puis installer le **NVIDIA GPU Operator** et router le pod Ollama (`nodeSelector`+`tolerations`) vers ce pool.
+> **GPU plus tard** : `az aks nodepool add -g $RG --cluster-name $AKS -n gpu --node-vm-size Standard_NC8as_T4_v3 --node-count 0 --enable-cluster-autoscaler --min-count 0 --max-count 2 --node-taints sku=gpu:NoSchedule` (ou **Bicep `gpuEnabled=true`**) puis installer le **NVIDIA GPU Operator** et router Ollama via le chart : `--set ollama.gpu.enabled=true` (+ `nodeSelector`/`tolerations` vers le pool gpu).
 
 ## P1 — Data tier MANAGÉ (corrige les SPOF de l'audit)
 ```bash
@@ -91,12 +91,11 @@ az acr build -r $ACR -t onix-access-gateway:prod access-gateway/
 helm dependency build deploy/k8s/onix-ha
 helm install $NS deploy/k8s/onix-ha -n $NS -f deploy/azure/values-azure.yaml
 
-# La passerelle n'est pas (encore) dans le chart → manifeste dédié
-#  (éditer <ACR>,<RELEASE>,<NS>,<TENANT_ID> dans le fichier)
-kubectl apply -n $NS -f deploy/azure/access-gateway.yaml
+# La passerelle RBAC est un TEMPLATE NATIF du chart (accessGateway.enabled=true dans
+# values-azure.yaml) → déployée par le `helm install` ci-dessus. Rien d'autre à appliquer.
 ```
 **Ingress + OIDC (anti-spoofing)** : déployer **oauth2-proxy** (forward-auth) + une
-règle d'ingress qui route **uniquement `/api/chat/send-message` → `access-gateway:8200`**
+règle d'ingress qui route **uniquement `/api/chat/send-message` → `<RELEASE>-access-gateway:8200`** (service du chart)
 (le reste → Onyx natif), en **strippant tout `X-OIDC-Claims` entrant** à l'edge et en
 le posant depuis l'identité vérifiée. Schéma identique à `deploy/prod/` (Caddy/nginx)
 porté en annotations d'ingress AKS.
@@ -139,6 +138,6 @@ AKS 3× E8s_v5 (~600-900 $) + Postgres Flexible HA D4s (~300-450 $) + Redis Prem
 
 ## Limites honnêtes
 - IaC `az`/`helm` **non validée dans le sandbox** (pas d'`az`/cluster ici) → `--what-if` + `helm template` avant prod.
-- Le chart `onix-ha` ne **template pas** encore la passerelle → manifeste `access-gateway.yaml` fourni à part (candidat à intégrer au chart).
+- Passerelle = **template natif du chart** (`accessGateway.enabled=true`) ; pool **GPU activable** (`ollama.gpu.enabled` côté chart + `gpuEnabled` côté Bicep).
 - RBAC FOSS = **filtre de sortie** (le LLM a vu le périmètre indexé) ; zéro-fuite strict = Onyx EE perm-sync ou instances par tier.
-- Bicep/Terraform repeatables = **étape suivante recommandée** (je peux les produire une fois ce runbook validé sur votre tenant).
+- **IaC Bicep** repeatable : `deploy/azure/bicep/` (modulaire, **`bicep build` propre — 0 erreur/0 warning**), alternative au runbook `az`. Terraform : sur demande. Seul un `az deployment group --what-if` réel confirme quotas/SKU/unicité sur votre tenant.
