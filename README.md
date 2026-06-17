@@ -27,11 +27,13 @@ dimensions au vert** (3 avec astérisque honnête — détails et preuves :
 - 🏢 **Prod / TLS** : `deploy/prod/` (Caddy HTTPS auto + OIDC Entra forcé + démarrage défaut-sûr) — [`docs/DEPLOY_PROD.md`](docs/DEPLOY_PROD.md)
 - ☸️ **HA / scale** : `deploy/k8s/onix-ha/` (Helm — OpenSearch/Postgres/MinIO/Redis HA, HPA, file Celery) — [`docs/HA_SCALING.md`](docs/HA_SCALING.md)
 - 🛡️ **RBAC** : `access-gateway/` (groupes Entra → Document Sets, deny-by-default) — [`docs/RBAC.md`](docs/RBAC.md)
-- 📊 **Observabilité** : `monitoring/` (Prometheus/Grafana + alertes) + CI bloquante (pytest/bandit/pip-audit/trivy) — [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)
+- 📊 **Observabilité** : `monitoring/` (Prometheus/Grafana + alertes) + **`/metrics` qualité de la passerelle** (citation, no-context, garde-fous, P95) + CI bloquante (pytest/bandit/pip-audit/trivy) — [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)
 - 🧪 **Garde-fous** : `tests/rag/` (red-team + éval + anti-régression du prompt) — [`docs/QA_GUARDRAILS.md`](docs/QA_GUARDRAILS.md)
-- 🎚️ **Optimisation RAG / Ollama** (audit consultant : `num_ctx`, embedding FR, reranker, éval RAGAS, capacité *mesurée*) — [`docs/RAG_OPTIMIZATION.md`](docs/RAG_OPTIMIZATION.md)
+- 🎚️ **Optimisation RAG / Ollama** (audit consultant : `num_ctx` câblé, embedding FR, reranker, capacité *mesurée*) — [`docs/RAG_OPTIMIZATION.md`](docs/RAG_OPTIMIZATION.md)
+- 🛠️ **Playbook Onyx RAG** (embedder FR, reranker, analyseur, **ré-index unique**) — [`docs/PLAYBOOK_ONYX_RAG.md`](docs/PLAYBOOK_ONYX_RAG.md) · **Éval RAGAS souveraine** `make rag-eval` — [`docs/RAG_EVAL.md`](docs/RAG_EVAL.md)
+- 🏁 **Comparatif vs Microsoft Copilot & AC360** (par secteur, honnête) — [`docs/COMPARATIF_COPILOT_AC360.md`](docs/COMPARATIF_COPILOT_AC360.md)
 
-> Validation : **red-team E2E 21/21 (qwen2.5:7b, post-filtre déployé dans access-gateway) · HA multi-réplica prouvée + manifests validés server-side (vrai kube-apiserver) · pip-audit 0 CVE · bandit 0 · gitleaks 0 · helm lint 0 · caddy validate OK**. Clôture des 3 réserves : [`docs/PARITE_ENTREPRISE.md`](docs/PARITE_ENTREPRISE.md).
+> Validation : **red-team E2E 21/21 (qwen2.5:7b, post-filtre déployé dans access-gateway) · éval RAGAS `make rag-eval` (juge LOCAL) · `/metrics` qualité passerelle · HA multi-réplica prouvée + manifests validés server-side (vrai kube-apiserver) · pip-audit 0 CVE · bandit 0 · gitleaks 0 · helm lint 0 · caddy validate OK**. Clôture des 3 réserves : [`docs/PARITE_ENTREPRISE.md`](docs/PARITE_ENTREPRISE.md).
 
 ---
 
