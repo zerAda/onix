@@ -7,6 +7,7 @@
 #   make models    (pré)télécharge les modèles Ollama
 #   make verify    contrôle de bout en bout (santé + câblage + génération)
 #   make logs / ps / stats / down / restart / update / backup / restore / destroy
+#   make sync-doc-acl  synchronise l'ACL par-document SharePoint→doc_acl.json (Graph)
 # Pré-requis : Docker + Docker Compose v2 (`docker compose`).
 # =============================================================================
 
@@ -93,6 +94,17 @@ destroy:
 	 else \
 	   echo "Annulé."; \
 	 fi
+
+# --- RBAC par document : sync ACL SharePoint → doc_acl.json (Microsoft Graph) ---
+# Lit un mapping { doc_id: {site_id, drive_id, item_id} } + les creds Graph (env
+# GATEWAY_GRAPH_*) et ÉCRIT access-gateway/config/doc_acl.json (chemin StaticDocACL).
+# Surcharge des chemins : MAPPING=... OUT=...  (cf. docs/connectors/SHAREPOINT.md).
+# À lancer périodiquement (cron/CI) pour propager les changements d'accès.
+.PHONY: sync-doc-acl
+MAPPING ?= access-gateway/config/doc_acl_mapping.json
+OUT ?= access-gateway/config/doc_acl.json
+sync-doc-acl:
+	@python scripts/sync-doc-acl.py --mapping "$(MAPPING)" --out "$(OUT)"
 
 # --- WS1 ---
 # Recette QA/garde-fous de l'agent commercial RAG (cf. docs/QA_GUARDRAILS.md).

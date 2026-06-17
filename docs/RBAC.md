@@ -185,11 +185,47 @@ Onyx /chat/send-message ─▶ access-gateway
 - Politique par défaut **deny** (parité avec `GATEWAY_DENY_IF_NO_MATCH`) :
   un `doc_id` non listé est INVISIBLE. Configurable
   (`GATEWAY_DOC_ACL_DEFAULT_POLICY=allow` pour les POCs / corpus historique).
-- `CompositeDocACL` permet d'OR-merger plusieurs sources (statique + cache
-  Graph à venir).
+- `CompositeDocACL` permet d'OR-merger plusieurs sources (statique **+ ACL
+  auto-dérivée de SharePoint via Graph**, cf. §4.3 bis).
 - **Fail-OPEN sur erreur interne** (loader cassé p.ex.) → body inchangé, log
   `doc_acl_error` (concern disponibilité), versus **fail-CLOSED sur
   doc_id inconnu** quand `default_policy=deny` (concern autorisation).
+
+#### 4.3 bis — ACL **auto-dérivée de SharePoint** via Microsoft Graph
+
+**Nouveau (workstream `feat/sharepoint-acl-sync`).** L'ACL par-document n'a plus
+besoin d'être maintenue **à la main**. Le module
+[`graph_acl.py`](../access-gateway/app/graph_acl.py) lit les **permissions par
+item** réelles de SharePoint (Microsoft Graph) et en construit une ACL **vivante**
+(`GraphDocACL`), OR-mergée avec le statique (`CompositeDocACL`).
+
+- **Endpoint (app-only)** :
+  `GET /v1.0/sites/{site-id}/drives/{drive-id}/items/{item-id}/permissions`.
+  **Permission APPLICATION : `Sites.Read.All`** (ou `Sites.Selected` + octroi par
+  site), **admin consent**. Mêmes creds que la passerelle (`GATEWAY_GRAPH_*`),
+  secrets **en env uniquement**, jamais journalisés.
+- **Parsing** : pour chaque permission de **lecture** (directe **ou héritée**), on
+  recoupe `grantedToV2.user.id` → utilisateurs, `grantedToV2.group.id` → groupes
+  Entra, `grantedToV2.siteGroup.id` → groupes SharePoint (+ variante liste
+  `grantedToIdentitiesV2`). Casse-insensible.
+- **Maillon dur `doc_id ↔ item`** : un **mapping explicite**
+  `{ doc_id: {site_id, drive_id, item_id} }` relie un doc Onyx à son item
+  SharePoint (Onyx stocke l'URL source / l'id de drive-item dans les métadonnées).
+  **On ne le devine pas.** Obtention détaillée :
+  [`connectors/SHAREPOINT.md`](connectors/SHAREPOINT.md) §6.1.
+- **Discipline fail-CLOSED par item** : un item dont la lecture **échoue** est
+  **OMIS** de l'ACL Graph → **refusé** sous `default_policy=deny` (on n'invente pas
+  d'accès sur une donnée non vérifiée) ; un item cassé ne fait **pas** échouer le
+  sync global.
+- **Deux modes** : (a) **matérialisé** — `make sync-doc-acl` écrit `doc_acl.json`
+  (le chemin `StaticDocACL` marche sans changement de code, résultat auditable) ;
+  (b) **en vif** — `GATEWAY_DOC_ACL_GRAPH_ENABLED=true` tient l'ACL en mémoire,
+  rafraîchie selon `GATEWAY_DOC_ACL_REFRESH_SECONDS` (défaut 900 s).
+
+> **L'honnêteté du §4.4 reste entière** : ceci automatise un **filtre de SORTIE**.
+> On synchronise *qui peut voir la citation*, pas *ce que le LLM a récupéré*. Le
+> trimming **strict à la RECHERCHE** demeure EE/Cloud. La dérivation Graph
+> supprime le caractère **manuel** de l'ACL, pas sa **nature**.
 
 **Configuration** (variables d'env) :
 
@@ -236,7 +272,7 @@ Fichier d'exemple : [`../access-gateway/config/doc_acl.example.json`](../access-
 | Empêcher un commercial de voir le périmètre d'un autre | ✅ (deny-by-default, non-élargissement) | ✅ |
 | Trimming **par document à la RECHERCHE** (le LLM ne voit que les chunks autorisés) | ❌ **non** (filtrage uniquement à la sortie, cf. §4.4) | ✅ **oui** (ACL par document rejouée) |
 | Filtre **par document côté RÉPONSE** (retire les citations vers les docs non autorisés, refus substitué si plus aucune citation) | ✅ **NOUVEAU** (`doc_acl.py`, §4.3) | ✅ (intégré) |
-| ACL **suivant automatiquement** SharePoint (un retrait d'accès se propage) | ⚠️ **manuel** (mettre à jour `doc_acl.json` / re-cloisonner) | ✅ **auto** (sync périodique) |
+| ACL **suivant automatiquement** SharePoint (un retrait d'accès se propage) | ✅ **auto côté SORTIE** : `graph_acl.py` dérive `doc_acl.json` des permissions Graph par item (`make sync-doc-acl` en cron, ou en vif TTL). Propagation **différée** (cadence du sync). NB : la RÉCUPÉRATION reste non trimée (§4.4). | ✅ **auto à la RECHERCHE** (sync périodique des ACL, le LLM ne voit que les chunks autorisés) |
 | Effort d'admin | Moyen (Document Sets + mapping groupes + ACL par-document) | Faible (sync) mais **licence EE** |
 
 **Verdict honnête.** En FOSS, onix atteint la parité **au niveau groupe d'accès /
@@ -284,6 +320,7 @@ certificat) est requise**. Ce n'est pas l'OBO par-document d'un AC360/Copilot.
 | Overage de groupes OIDC (liste tronquée) | Repli Graph `transitiveMemberOf` (mode `auto`) | `test_auto_falls_back_to_graph_on_overage` |
 | Traçabilité d'un accès (audit/RGPD) | **Journal des décisions** allow/deny, **identité hachée** (HMAC) | `test_decision_record_never_leaks_plaintext_identity` |
 | Citation rendue vers un document non-autorisé pour l'appelant (même Document Set) | **Couvert côté sortie** : `filter_citations` retire la citation, refus substitué si zéro citation restante | `test_rbac_isolation_two_users_same_body_different_filtered`, `test_strip_uncited_substitutes_safe_refusal` |
+| ACL par-document **désynchronisée de la source** (maintenue à la main, retrait d'accès SharePoint non répercuté côté citation) | **Couvert côté sortie** : `graph_acl.py` dérive l'ACL des permissions par item Graph (`make sync-doc-acl` / TTL) → la citation suit la source (propagation **différée**) | `test_build_graph_acl_omits_failing_item`, `test_rbac_isolation_two_users_distinct_authorized_sets`, `test_sync_cli_writes_valid_doc_acl` |
 | Le LLM **a vu** le contenu d'un document non-autorisé pendant la génération (fuite indirecte par le texte) | **Non couvert** côté FOSS : nécessite Onyx EE (permission sync) OU instances séparées par tier d'accès (§4.4) | — |
 | Deux droits différents sur un même document **à la RECHERCHE** (zéro-leak strict) | **Non couvert** → EE requis (assumé, §5 ; quantifié `DECISION_RBAC.md` §4) | — |
 

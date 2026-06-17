@@ -37,7 +37,7 @@ page est **honnête** : elle distingue ce qui est **natif**, **par configuration
 | **Lecture seule** (pas d'écriture SharePoint) | L'agent ne fait que de la recherche | ✅ **par conception** |
 | SSO entreprise | **OIDC Entra ID** | ✅ **config** (`SECURITY.md` §6) |
 | **RBAC par utilisateur — RECHERCHE** (le LLM ne voit que les chunks autorisés) | **Permission sync** du connecteur SharePoint | ⚠️ **EE / Cloud uniquement** (FOSS : index par groupe, LLM voit tout le Document Set autorisé) |
-| **RBAC par utilisateur — RÉPONSE** (citations rendues retirées si doc non autorisé pour l'appelant ; refus substitué si zéro citation restante) | Filtre [`doc_acl.py`](../access-gateway/app/doc_acl.py) dans la **passerelle FOSS** | ✅ **FOSS** (NOUVEAU `feat/rbac-perdoc`) — granularité **par document** sur la sortie, intégré à l'audit HMAC |
+| **RBAC par utilisateur — RÉPONSE** (citations rendues retirées si doc non autorisé pour l'appelant ; refus substitué si zéro citation restante) | Filtre [`doc_acl.py`](../access-gateway/app/doc_acl.py) dans la **passerelle FOSS**, **ACL auto-dérivée de SharePoint** via Graph ([`graph_acl.py`](../access-gateway/app/graph_acl.py), `make sync-doc-acl`) | ✅ **FOSS** (NOUVEAU `feat/rbac-perdoc` puis `feat/sharepoint-acl-sync`) — granularité **par document** sur la sortie, **désormais auto-synchronisée** depuis les permissions par item SharePoint (plus de JSON manuel), intégrée à l'audit HMAC |
 | LLM | **Ollama local** (souverain) ou tout LLM | ✅ **natif** |
 | Multi-format (PDF, Office…) | Indexation native Onyx | ✅ **natif** |
 | Souveraineté / hors-ligne / zéro transfert | Tout en local (Ollama + OpenSearch + MinIO) | ✅ **supérieur** au cloud |
@@ -54,13 +54,19 @@ page est **honnête** : elle distingue ce qui est **natif**, **par configuration
    document est appliqué côté RÉPONSE** par la passerelle
    ([`access-gateway/app/doc_acl.py`](../access-gateway/app/doc_acl.py)) :
    citations vers les fichiers non-autorisés **retirées**, refus substitué si
-   zéro citation restante. **Cela ferme la fuite VISIBLE** (citations
-   affichées). Le **trimming à la RECHERCHE** (le LLM ne voit jamais les
+   zéro citation restante. Cette ACL par-document est désormais **auto-dérivée
+   des permissions réelles de SharePoint** via Microsoft Graph
+   ([`access-gateway/app/graph_acl.py`](../access-gateway/app/graph_acl.py),
+   `make sync-doc-acl` / TTL en vif) — **plus besoin de la maintenir à la
+   main**, elle **suit la source** (un retrait d'accès disparaît au sync
+   suivant). **Cela ferme la fuite VISIBLE** (citations affichées) **et
+   l'automatise**. Le **trimming à la RECHERCHE** (le LLM ne voit jamais les
    chunks non autorisés — zéro fuite indirecte par le texte généré) **reste
-   une fonction EE/Cloud** (permission sync, certificat). Mitigations FOSS
-   recommandées : périmètres conçus **homogènes**, ou instances Onyx
+   une fonction EE/Cloud** (permission sync, certificat) : la dérivation Graph
+   automatise un filtre de SORTIE, elle n'en change pas la nature. Mitigations
+   FOSS recommandées : périmètres conçus **homogènes**, ou instances Onyx
    **séparées par tier d'accès**. Détails et matrice :
-   [`RBAC.md`](RBAC.md) §4.3/4.4 + [`DECISION_RBAC.md`](DECISION_RBAC.md) §4.
+   [`RBAC.md`](RBAC.md) §4.3/4.3 bis/4.4 + [`DECISION_RBAC.md`](DECISION_RBAC.md) §4.
 2. **Fonctions « applicatives » au-delà du RAG** (audit OCR, génération de
    documents, relances, notifications, usage/FinOps, kill-switch) sont
    **implémentées** dans le microservice local **`onix-actions`** (cf.

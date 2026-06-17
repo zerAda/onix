@@ -24,7 +24,7 @@
 | Question | Réponse |
 |---|---|
 | Le RBAC **par-document** est-il faisable en FOSS ? | **Non.** C'est une fonction **Onyx EE / Cloud** (permission sync + certificat). Confirmé par les docs Onyx (§5, sources datées). |
-| Que couvre la voie FOSS (`access-gateway`) ? | Un cloisonnement **par groupe d'accès → Document Set**, deny-by-default, non-élargissable, **+ un filtre par document côté RÉPONSE** (`doc_acl.py`) qui retire les citations vers les fichiers non autorisés individuellement (refus substitué si zéro citation restante). Suffisant pour **équipes/périmètres homogènes** (multi-commerciaux) **avec un cloisonnement supplémentaire visible par fichier**. |
+| Que couvre la voie FOSS (`access-gateway`) ? | Un cloisonnement **par groupe d'accès → Document Set**, deny-by-default, non-élargissable, **+ un filtre par document côté RÉPONSE** (`doc_acl.py`) qui retire les citations vers les fichiers non autorisés individuellement (refus substitué si zéro citation restante). Depuis `feat/sharepoint-acl-sync`, cette ACL par-document est **auto-synchronisée depuis SharePoint** (permissions par item via Microsoft Graph — `graph_acl.py`, `make sync-doc-acl`), **plus besoin de la maintenir à la main**. Suffisant pour **équipes/périmètres homogènes** (multi-commerciaux) **avec un cloisonnement supplémentaire visible par fichier, désormais piloté par la source**. |
 | Recommandation **équipe homogène par périmètre** | **FOSS + `access-gateway`.** Coût licence = **0 €**. |
 | Recommandation **droits hétérogènes fins intra-équipe** OU **révocation auto exigée** | **EE / Cloud.** Coût licence ≠ 0 (cf. §3, daté **2026-06-16**). |
 | L'astérisque est-il « cadré » ? | **Oui** : la limite est documentée, le risque résiduel quantifié (§4), la passerelle durcie/testée (§6), la décision outillée (cette matrice). Il **n'est pas supprimé** : le par-document strict reste EE. |
@@ -72,7 +72,7 @@ Légende : ✅ couvert · ⚠️ partiel/contrainte · ❌ non couvert.
 | Isolation inter-équipes (commercial A ↮ B) | ✅ filtre forcé + deny-by-default | ✅ | ✅ |
 | Droits **hétérogènes** intra-équipe (même dossier, accès ≠) — **rendu visible** | ✅ **NOUVEAU** : la citation est retirée pour celui qui n'a pas accès au fichier | ✅ | ✅ |
 | Droits **hétérogènes** intra-équipe — **fuite indirecte par le texte généré** | ❌ (le LLM a pu lire le contenu pendant la génération, cf. §4) | ✅ (le LLM ne voit jamais les chunks non autorisés) | ✅ **sur périmètre EE** |
-| **Propagation de révocation** | ⚠️ **manuelle/différée** : retrait du groupe Entra → effet au ré-login ou expiration du cache (`GATEWAY_GROUP_CACHE_TTL`, défaut 300 s) ; retrait d'accès **fichier** SharePoint **non** propagé | ✅ **auto** : la sync ACL reflète les changements (ordre de grandeur **minutes**, selon l'intervalle) | ✅ auto sur périmètre EE ; différé ailleurs |
+| **Propagation de révocation** | ⚠️ **auto côté SORTIE, différée** : retrait du groupe Entra → effet au ré-login ou expiration du cache (`GATEWAY_GROUP_CACHE_TTL`, défaut 300 s) ; retrait d'accès **fichier** SharePoint → **propagé automatiquement à l'ACL par-document** par `graph_acl.py` (sync Graph, cadence `make sync-doc-acl` ou TTL `GATEWAY_DOC_ACL_REFRESH_SECONDS`) — mais **côté CITATION uniquement** (la RÉCUPÉRATION reste non trimée, cf. §4) | ✅ **auto à la RECHERCHE** : la sync ACL reflète les changements (ordre de grandeur **minutes**, selon l'intervalle) | ✅ auto sur périmètre EE ; différé ailleurs |
 | Anti-contournement requête | ✅ intersection `document_set`, `search_doc_ids` neutralisé | ✅ (filtre moteur natif) | ✅ |
 | Surface de confiance | en-tête `X-OIDC-Claims` (vérifié en amont) + passerelle = **seul point d'entrée** | moteur Onyx + sync ACL (composant EE) | les deux |
 | **Fail-closed** | ✅ identité illisible→401, groupes irrésolvables→502, sans périmètre→403 | ✅ (natif) | ✅ |
@@ -220,8 +220,14 @@ au **même Document Set DS** :
 - **Révocation différée.** Le retrait de U1 d'un **groupe Entra** ne prend effet
   qu'au **ré-login** (claim) ou à l'**expiration du cache** Graph
   (`GATEWAY_GROUP_CACHE_TTL`, défaut **300 s**). Le retrait de l'accès **fichier**
-  côté SharePoint **n'est pas** propagé à l'index FOSS (il faut **ré-indexer/re-
-  cloisonner**). En EE, la sync ACL le reflète automatiquement (ordre **minutes**).
+  côté SharePoint est désormais **propagé automatiquement à l'ACL par-document
+  côté RÉPONSE** par `graph_acl.py` (sync des permissions Graph par item ;
+  `make sync-doc-acl` en cron ou TTL `GATEWAY_DOC_ACL_REFRESH_SECONDS`) : la
+  **citation** vers le fichier disparaît au sync suivant. **Mais** l'**index FOSS
+  lui-même n'est pas re-trimé** — le LLM continue de récupérer le contenu à la
+  recherche jusqu'à ré-indexation. La propagation **à la RECHERCHE** (zéro fuite
+  indirecte) reste EE (la sync ACL EE le reflète à la recherche, ordre
+  **minutes**).
 - **Confiance dans l'amont.** Si l'UI/API Onyx native est **exposée**, le filtre est
   **contournable** (l'utilisateur appelle Onyx en direct). ⇒ **Mitigation
   obligatoire : la passerelle est le SEUL point d'entrée** (§6).
@@ -230,10 +236,13 @@ au **même Document Set DS** :
 même groupe d'accès partagent la visibilité **à la recherche** de tout le périmètre
 (Document Set) qui leur est mappé. Le **rendu** (citations visibles, refus si zéro
 citation accessible) est cloisonné **par document** côté passerelle (`doc_acl.py`,
-filtre de sortie). La séparation **stricte par document à la recherche** (zéro
-fuite indirecte par le texte généré) et la propagation automatique des révocations
-SharePoint requièrent l'Enterprise Edition (permission sync). Les périmètres sont
-donc conçus homogènes ; le filtre par-document côté réponse renforce le rendu. »*
+filtre de sortie), et cette ACL par-document est **auto-dérivée des permissions
+réelles de SharePoint** via Microsoft Graph (`graph_acl.py`, sync périodique) —
+elle suit donc automatiquement les changements d'accès **côté citation**. La
+séparation **stricte par document à la recherche** (zéro fuite indirecte par le
+texte généré) reste, elle, une fonction Enterprise Edition (permission sync). Les
+périmètres sont donc conçus homogènes ; le filtre par-document côté réponse,
+synchronisé depuis la source, renforce le rendu. »*
 
 ---
 
