@@ -28,6 +28,12 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Met à niveau les outils d'empaquetage Python EMBARQUÉS dans la base slim : elle
+# fige des versions anciennes porteuses de CVE HIGH (setuptools 65.5.1 →
+# CVE-2024-6345 / CVE-2025-47273 ; wheel 0.45.1 → CVE-2026-24049) qu'`apt` ne peut
+# pas corriger (paquets pip, hors gestion OS) → le scan trivy de l'image les bloque.
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
