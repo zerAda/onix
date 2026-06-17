@@ -1,0 +1,55 @@
+# =============================================================================
+# onix — Unit systemd « production sur machine unique » (prod-local).
+# -----------------------------------------------------------------------------
+# Démarre la stack onix au BOOT et l'arrête proprement à l'extinction, via
+# l'overlay durci docker-compose.prod-local.yml empilé sur la base. Garantit la
+# SURVIE AU REDÉMARRAGE de la machine (avec `restart: always` côté conteneurs,
+# c'est la double assurance : Docker relance les conteneurs, et cette unit
+# relance la composition complète si Docker lui-même redémarre).
+#
+# INSTALLATION (Linux, systemd) :
+#   1. Adapter WorkingDirectory au chemin RÉEL du dépôt (voir ci-dessous).
+#      Au besoin, ajuster User=/Group= si vous ne lancez pas en root.
+#   2. sudo cp deploy/local-prod/onix.service /etc/systemd/system/onix.service
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable docker          # Docker doit démarrer au boot
+#   5. sudo systemctl enable --now onix       # active + démarre maintenant
+#
+# VÉRIFICATION :   systemctl status onix   ·   journalctl -u onix -f
+# DÉSINSTALLATION : sudo systemctl disable --now onix
+#                   sudo rm /etc/systemd/system/onix.service && sudo systemctl daemon-reload
+#
+# NB : oneshot + RemainAfterExit=yes → l'unit est « active (exited) » une fois
+# `up -d` terminé ; `systemctl stop onix` déclenche alors le `down`.
+# Le `.env` (secrets) doit exister dans WorkingDirectory AVANT activation
+# (make secrets). Cf. docs/PROD_LOCAL.md.
+# =============================================================================
+
+[Unit]
+Description=onix — stack IA souveraine (prod sur machine unique)
+# Démarre après le démon Docker et l'exige (sinon échec contrôlé au boot).
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# --- À ADAPTER : chemin ABSOLU du dépôt onix sur cette machine ---------------
+# Doit contenir docker-compose.yml, docker-compose.prod-local.yml et .env.
+WorkingDirectory=/home/user/onix
+
+# Démarrage ordonné via l'overlay prod-local (healthchecks + depends_on healthy).
+# Le `up -d` rend la main une fois les conteneurs lancés ; les dépendances
+# service_healthy ordonnent le reste en arrière-plan.
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod-local.yml up -d
+
+# Arrêt propre de la composition (les volumes/données sont CONSERVÉS : pas de -v).
+ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod-local.yml down
+
+# Laisse le temps au premier démarrage (téléchargement images/modèles possible).
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
