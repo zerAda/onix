@@ -1,0 +1,8 @@
+{
+  "_comment": "Baseline anti-régression RAGAS — agrégats d'un run de référence SAIN. Rafraîchir UNIQUEMENT via `compare_scores --update` après revue. Le comparateur échoue si une métrique chute de plus de la tolérance sous ces valeurs. Cf. docs/RAG_EVAL.md.",
+  "aggregates": {
+    "faithfulness": 0.75,
+    "context_precision": 0.875,
+    "answer_relevancy": 1.0
+  }
+}

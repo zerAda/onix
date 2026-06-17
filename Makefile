@@ -116,8 +116,9 @@ sync-doc-acl:
 #   make rag-test       recette hors-LLM (anti-régression prompt + red-team + dataset)
 #   make rag-test-live  recette live contre une vraie API Onyx (ONIX_API_URL requis)
 #   make rag-eval       éval qualité RAGAS (LLM-juge LOCAL Ollama ; gate qualité)
+#   make rag-eval-ci    éval RAGAS + gate absolu + compare anti-régression (nightly)
 #   make rag-deps       installe les dépendances de test (pytest, PyYAML, requests)
-.PHONY: rag-test rag-test-live rag-eval rag-deps
+.PHONY: rag-test rag-test-live rag-eval rag-eval-ci rag-deps
 
 rag-deps:
 	@pip install -r tests/rag/requirements.txt
@@ -140,6 +141,30 @@ rag-test-live:
 # NB : les tests OFFLINE (juge mocké, sans réseau) tournent via `make rag-test`/CI.
 rag-eval:
 	@cd tests/rag && ONIX_LIVE_OLLAMA=1 python -m ragas_eval.runner
+
+# Éval RAGAS « CI/nightly » : exécute l'éval LIVE en écrivant les scores JSON,
+# applique le GATE ABSOLU (seuils) ET la COMPARAISON ANTI-RÉGRESSION vs la
+# baseline committée. Échoue si le gate échoue OU si une métrique régresse de
+# plus de la tolérance. C'est la cible utilisée par .github/workflows/ragas-nightly.yml.
+# Deux garde-fous complémentaires : gate absolu (« assez bon ? ») + relatif (« régressé ? »).
+# Pré-requis identiques à `rag-eval` (Ollama joignable, ONIX_LIVE_OLLAMA=1, ONIX_LIVE_MODEL).
+# Variables surchargeables :
+#   SCORES=tests/rag/scores.json   fichier de scores produit par le runner
+#   BASELINE=tests/rag/ragas_eval/baseline_scores.json   baseline anti-régression
+#   TOL=0.05                       tolérance de régression (bruit du juge)
+# Rafraîchir la baseline après un run sain (revoir le diff !) :
+#   python -m ragas_eval.compare_scores ../scores.json --baseline ragas_eval/baseline_scores.json --update
+SCORES   ?= scores.json
+BASELINE ?= ragas_eval/baseline_scores.json
+TOL      ?= 0.05
+rag-eval-ci:
+	@cd tests/rag && set -e; \
+	  rc=0; \
+	  ONIX_LIVE_OLLAMA=1 python -m ragas_eval.runner --json "$(SCORES)" || rc=$$?; \
+	  echo ""; \
+	  python -m ragas_eval.compare_scores "$(SCORES)" --baseline "$(BASELINE)" --tolerance "$(TOL)" || rc=$$?; \
+	  [ "$$rc" = "0" ] && echo "✓ RAGAS : gate absolu PASS et aucune régression." || \
+	    { echo "✗ RAGAS : gate ÉCHOUÉ et/ou régression détectée (code $$rc)."; exit 1; }
 
 # Mini-bench OFFLINE du cache applicatif RBAC-safe (cf. docs/CACHE.md).
 # Émet N requêtes identiques (sans réseau) contre un `Cache` en mémoire et
