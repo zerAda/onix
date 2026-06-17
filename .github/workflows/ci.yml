@@ -96,6 +96,17 @@ jobs:
             echo "::notice::tests/rag absent (fourni par un autre workstream) — étape ignorée."
           fi
 
+      - name: pytest — éval RAGAS OFFLINE (juge mocké, AUCUN modèle live)
+        # Ne lance QUE les tests offline du harnais d'éval RAGAS (juge injecté,
+        # zéro réseau, zéro Ollama). La CI ne dépend JAMAIS d'un modèle live :
+        # l'éval live (`make rag-eval`) reste manuelle/recette. Cf. docs/RAG_EVAL.md.
+        run: |
+          if [ -d tests/rag/ragas_eval ]; then
+            pytest -q tests/rag/ragas_eval
+          else
+            echo "::notice::tests/rag/ragas_eval absent — étape ignorée."
+          fi
+
       - name: pytest — access-gateway/tests (si présent)
         run: |
           if [ -d access-gateway/tests ]; then

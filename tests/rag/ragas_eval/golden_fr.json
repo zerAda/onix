@@ -1,0 +1,138 @@
+{
+  "version": "1.0",
+  "agent": "Assistant Commercial 360 (onix) — golden set RAGAS",
+  "description": "Jeu doré (golden set) en français pour l'évaluation qualité RAG façon RAGAS, scoré par LLM-juge sur l'Ollama LOCAL (souverain, hors-cloud). Chaque item fournit la question, la réponse de référence, les chunks de contexte récupérés et la réponse À NOTER (answer_to_grade). Domaine : assurance collective frais de santé (client ALPHA SAS) + assistanat commercial. Noms de clients/concurrents fictifs.",
+  "last_updated": "2026-06-17",
+  "notes": "Deux items sont volontairement DÉGRADÉS pour prouver que les métriques discriminent : G07 contient une réponse hallucinée (chiffres inventés non étayés par le contexte) → faithfulness doit s'effondrer ; G08 fournit un contexte hors-sujet (autre client/thème) → context_precision doit s'effondrer. Tous les autres items sont fidèles et bien contextualisés.",
+  "items": [
+    {
+      "id": "G01",
+      "topic": "Cotisation ALPHA",
+      "question": "Quelle est la cotisation mensuelle par salarié du contrat santé du client ALPHA ?",
+      "reference_answer": "La cotisation mensuelle est de 142 € par salarié (contrat collectif frais de santé n° GRP-ALPHA-2025), d'après le contrat ALPHA.",
+      "retrieved_contexts": [
+        "[Document: ALPHA_contrat_sante_2025.pdf | SharePoint/Clients/ALPHA] Client : ALPHA SAS. Contrat collectif frais de santé n° GRP-ALPHA-2025. Cotisation mensuelle : 142 € par salarié. Date d'effet : 01/01/2025.",
+        "[Document: ALPHA_fiche_synthese.pdf | SharePoint/Clients/ALPHA] Échéance de renouvellement : 31/12/2025. Plafond hospitalisation : 1 200 €."
+      ],
+      "answer_to_grade": "D'après le contrat ALPHA_contrat_sante_2025.pdf, la cotisation mensuelle du contrat collectif GRP-ALPHA-2025 est de 142 € par salarié.",
+      "expected": {
+        "faithfulness": "high",
+        "context_precision": "high",
+        "answer_relevancy": "high"
+      }
+    },
+    {
+      "id": "G02",
+      "topic": "Échéance de renouvellement ALPHA",
+      "question": "À quelle date le contrat santé du client ALPHA arrive-t-il à échéance ?",
+      "reference_answer": "Le contrat ALPHA arrive à échéance de renouvellement le 31/12/2025 (date d'effet : 01/01/2025).",
+      "retrieved_contexts": [
+        "[Document: ALPHA_contrat_sante_2025.pdf | SharePoint/Clients/ALPHA] Date d'effet : 01/01/2025. Échéance de renouvellement : 31/12/2025.",
+        "[Document: ALPHA_fiche_synthese.pdf | SharePoint/Clients/ALPHA] Contrat collectif frais de santé GRP-ALPHA-2025. Plafond hospitalisation : 1 200 €."
+      ],
+      "answer_to_grade": "L'échéance de renouvellement du contrat ALPHA est le 31/12/2025, pour une date d'effet au 01/01/2025 (source : ALPHA_contrat_sante_2025.pdf).",
+      "expected": {
+        "faithfulness": "high",
+        "context_precision": "high",
+        "answer_relevancy": "high"
+      }
+    },
+    {
+      "id": "G03",
+      "topic": "Plafond hospitalisation ALPHA",
+      "question": "Quel est le plafond hospitalisation du contrat santé du client ALPHA ?",
+      "reference_answer": "Le plafond hospitalisation du contrat ALPHA est de 1 200 €.",
+      "retrieved_contexts": [
+        "[Document: ALPHA_fiche_synthese.pdf | SharePoint/Clients/ALPHA] Plafond hospitalisation : 1 200 €. Échéance de renouvellement : 31/12/2025.",
+        "[Document: ALPHA_contrat_sante_2025.pdf | SharePoint/Clients/ALPHA] Cotisation mensuelle : 142 € par salarié. Date d'effet : 01/01/2025."
+      ],
+      "answer_to_grade": "Le plafond hospitalisation prévu au contrat ALPHA est de 1 200 €, comme indiqué dans la fiche de synthèse ALPHA.",
+      "expected": {
+        "faithfulness": "high",
+        "context_precision": "high",
+        "answer_relevancy": "high"
+      }
+    },
+    {
+      "id": "G04",
+      "topic": "Résumé client ALPHA",
+      "question": "Fais-moi une synthèse commerciale du dossier du client ALPHA.",
+      "reference_answer": "ALPHA SAS dispose d'un contrat collectif frais de santé GRP-ALPHA-2025 : cotisation de 142 € par salarié et par mois, date d'effet au 01/01/2025, échéance de renouvellement au 31/12/2025, plafond hospitalisation de 1 200 €. Point d'attention : préparer le renouvellement avant le 31/12/2025. Sources : ALPHA_contrat_sante_2025.pdf, ALPHA_fiche_synthese.pdf.",
+      "retrieved_contexts": [
+        "[Document: ALPHA_contrat_sante_2025.pdf | SharePoint/Clients/ALPHA] Client : ALPHA SAS. Contrat collectif frais de santé n° GRP-ALPHA-2025. Cotisation mensuelle : 142 € par salarié. Date d'effet : 01/01/2025.",
+        "[Document: ALPHA_fiche_synthese.pdf | SharePoint/Clients/ALPHA] Échéance de renouvellement : 31/12/2025. Plafond hospitalisation : 1 200 €."
+      ],
+      "answer_to_grade": "Synthèse commerciale — ALPHA SAS : contrat collectif frais de santé GRP-ALPHA-2025, cotisation de 142 € par salarié et par mois, date d'effet le 01/01/2025, échéance de renouvellement le 31/12/2025, plafond hospitalisation de 1 200 €. Point d'attention : anticiper le renouvellement avant l'échéance du 31/12/2025. Sources : ALPHA_contrat_sante_2025.pdf, ALPHA_fiche_synthese.pdf.",
+      "expected": {
+        "faithfulness": "high",
+        "context_precision": "high",
+        "answer_relevancy": "high"
+      }
+    },
+    {
+      "id": "G05",
+      "topic": "Point d'attention renouvellement",
+      "question": "Quel est le principal point d'attention à signaler au commercial sur le dossier ALPHA ?",
+      "reference_answer": "Le principal point d'attention est l'échéance de renouvellement au 31/12/2025 : il faut anticiper la préparation du renouvellement du contrat GRP-ALPHA-2025.",
+      "retrieved_contexts": [
+        "[Document: ALPHA_fiche_synthese.pdf | SharePoint/Clients/ALPHA] Échéance de renouvellement : 31/12/2025. Contrat collectif frais de santé GRP-ALPHA-2025.",
+        "[Document: ALPHA_contrat_sante_2025.pdf | SharePoint/Clients/ALPHA] Date d'effet : 01/01/2025. Cotisation mensuelle : 142 € par salarié."
+      ],
+      "answer_to_grade": "Le point d'attention prioritaire est l'échéance de renouvellement du contrat GRP-ALPHA-2025 fixée au 31/12/2025 : il convient d'anticiper le renouvellement (source : ALPHA_fiche_synthese.pdf).",
+      "expected": {
+        "faithfulness": "high",
+        "context_precision": "high",
+        "answer_relevancy": "high"
+      }
+    },
+    {
+      "id": "G06",
+      "topic": "Indisponibilité honnête",
+      "question": "Quel est le numéro de téléphone du dirigeant du client ALPHA ?",
+      "reference_answer": "Cette information n'est pas disponible dans les documents accessibles du dossier ALPHA.",
+      "retrieved_contexts": [
+        "[Document: ALPHA_contrat_sante_2025.pdf | SharePoint/Clients/ALPHA] Client : ALPHA SAS. Contrat collectif frais de santé n° GRP-ALPHA-2025. Cotisation mensuelle : 142 € par salarié.",
+        "[Document: ALPHA_fiche_synthese.pdf | SharePoint/Clients/ALPHA] Échéance de renouvellement : 31/12/2025. Plafond hospitalisation : 1 200 €."
+      ],
+      "answer_to_grade": "Le numéro de téléphone du dirigeant d'ALPHA n'est pas mentionné dans les documents accessibles ; cette information n'est pas disponible dans le dossier.",
+      "expected": {
+        "faithfulness": "high",
+        "context_precision": "low",
+        "answer_relevancy": "high"
+      }
+    },
+    {
+      "id": "G07",
+      "topic": "Réponse hallucinée (cas dégradé)",
+      "question": "Quelle est la cotisation mensuelle par salarié du contrat santé du client ALPHA ?",
+      "reference_answer": "La cotisation mensuelle est de 142 € par salarié, d'après le contrat ALPHA.",
+      "retrieved_contexts": [
+        "[Document: ALPHA_contrat_sante_2025.pdf | SharePoint/Clients/ALPHA] Client : ALPHA SAS. Contrat collectif frais de santé n° GRP-ALPHA-2025. Cotisation mensuelle : 142 € par salarié. Date d'effet : 01/01/2025.",
+        "[Document: ALPHA_fiche_synthese.pdf | SharePoint/Clients/ALPHA] Échéance de renouvellement : 31/12/2025. Plafond hospitalisation : 1 200 €."
+      ],
+      "answer_to_grade": "La cotisation mensuelle d'ALPHA est de 210 € par salarié, en hausse de 12 % cette année, et inclut une garantie obsèques offerte ainsi qu'un réseau de soins partenaire de 3 000 opticiens.",
+      "expected": {
+        "faithfulness": "low",
+        "context_precision": "high",
+        "answer_relevancy": "high"
+      }
+    },
+    {
+      "id": "G08",
+      "topic": "Contexte hors-sujet (cas dégradé)",
+      "question": "Quel est le plafond hospitalisation du contrat santé du client ALPHA ?",
+      "reference_answer": "Le plafond hospitalisation du contrat ALPHA est de 1 200 €.",
+      "retrieved_contexts": [
+        "[Document: BETA_compte_rendu_rdv.pdf | SharePoint/Clients/BETA] Compte rendu du rendez-vous avec le client BETA SARL : le dirigeant souhaite renégocier ses garanties prévoyance au prochain trimestre.",
+        "[Document: procedure_interne_RH.pdf | SharePoint/Interne] Procédure de demande de congés payés pour les collaborateurs du cabinet : délai de prévenance de deux semaines.",
+        "[Document: newsletter_marche_2025.pdf | SharePoint/Veille] Tendances du marché de l'assurance santé collective en 2025 : digitalisation et téléconsultation."
+      ],
+      "answer_to_grade": "Le plafond hospitalisation du contrat ALPHA est de 1 200 €.",
+      "expected": {
+        "faithfulness": "low",
+        "context_precision": "low",
+        "answer_relevancy": "high"
+      }
+    }
+  ]
+}

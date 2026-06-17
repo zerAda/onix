@@ -98,8 +98,9 @@ destroy:
 # Recette QA/garde-fous de l'agent commercial RAG (cf. docs/QA_GUARDRAILS.md).
 #   make rag-test       recette hors-LLM (anti-régression prompt + red-team + dataset)
 #   make rag-test-live  recette live contre une vraie API Onyx (ONIX_API_URL requis)
+#   make rag-eval       éval qualité RAGAS (LLM-juge LOCAL Ollama ; gate qualité)
 #   make rag-deps       installe les dépendances de test (pytest, PyYAML, requests)
-.PHONY: rag-test rag-test-live rag-deps
+.PHONY: rag-test rag-test-live rag-eval rag-deps
 
 rag-deps:
 	@pip install -r tests/rag/requirements.txt
@@ -112,6 +113,16 @@ rag-test:
 # Pré-requis : export ONIX_RAG_LIVE=1 ONIX_API_URL=... [ONIX_API_KEY ONIX_PERSONA_ID]
 rag-test-live:
 	@ONIX_RAG_LIVE=1 python -m pytest tests/rag -q
+
+# Éval qualité RAGAS (faithfulness / context_precision / answer_relevancy) sur le
+# golden set FR, scorée par un LLM-juge sur l'Ollama LOCAL (souverain, hors-cloud).
+# Applique un gate qualité et SORT EN CODE NON NUL si le gate échoue (recette/CI).
+# Pré-requis (mêmes conventions que rag-test-live) : Ollama joignable +
+#   export ONIX_LIVE_OLLAMA=1 ONIX_LIVE_MODEL=qwen2.5:7b-instruct [ONIX_OLLAMA_URL=...]
+# Seuils surchargeables : ONIX_RAGAS_MIN_FAITHFULNESS / _CONTEXT_PRECISION / _ANSWER_RELEVANCY
+# NB : les tests OFFLINE (juge mocké, sans réseau) tournent via `make rag-test`/CI.
+rag-eval:
+	@cd tests/rag && ONIX_LIVE_OLLAMA=1 python -m ragas_eval.runner
 
 # --- WS4 ---
 # Déploiement Kubernetes HAUTE DISPONIBILITÉ & scale-out (chart Helm onix-ha).
