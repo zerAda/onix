@@ -10,3 +10,9 @@ uvicorn[standard]==0.34.0
 pydantic==2.10.4
 httpx==0.28.1
 prometheus-client==0.21.1
+# Client Redis (cache applicatif RBAC-safe, cf. app/cache.py + docs/CACHE.md).
+# Optionnel à l'exécution (le code dégrade en LRU mémoire si GATEWAY_CACHE_REDIS_URL
+# n'est pas défini), mais on l'embarque pour ne pas forcer un build distinct
+# selon la cible (HA = Redis, dev = mémoire). 5.2.1 = dernière 5.x stable, 0 CVE
+# vérifié via `pip-audit --strict` (cf. Makefile cible pip-audit).
+redis==5.2.1

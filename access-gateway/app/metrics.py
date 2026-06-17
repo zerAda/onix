@@ -81,6 +81,44 @@ try:
         ["rating"],
     )
 
+    # ── Cache applicatif (RBAC-safe, cf. app/cache.py + docs/CACHE.md) ──
+    # Le label `tier` est déjà câblé : aujourd'hui seul `exact` est émis
+    # (correspondance question normalisée + périmètre identique). Tier
+    # `semantic` est un futur cache approché (embedding + seuil de
+    # similarité) ; déclarer l'étiquette dès maintenant évite toute
+    # rupture de série temporelle quand il sera activé.
+    CACHE_HITS_TOTAL = Counter(
+        "onix_gateway_cache_hits_total",
+        "Hits du cache applicatif de réponses (par tier de correspondance)",
+        ["tier"],
+    )
+    CACHE_MISSES_TOTAL = Counter(
+        "onix_gateway_cache_misses_total",
+        "Misses du cache applicatif (entrée absente ou expirée)",
+    )
+    # `reason` ∈ no_store|write_intent|streaming|explicit_admin_bypass — cf.
+    # cache.should_bypass. Permet de séparer le cache « éteint volontairement »
+    # des miss naturels (utile pour mesurer le hit-rate VRAI).
+    CACHE_BYPASSED_TOTAL = Counter(
+        "onix_gateway_cache_bypassed_total",
+        "Requêtes pour lesquelles le cache a été contourné (par raison)",
+        ["reason"],
+    )
+    CACHE_TOKENS_SAVED_TOTAL = Counter(
+        "onix_gateway_cache_tokens_saved_total",
+        "Tokens approximatifs économisés par les hits (heuristique chars/4)",
+    )
+    CACHE_SECONDS_SAVED_TOTAL = Counter(
+        "onix_gateway_cache_seconds_saved_total",
+        "Secondes de génération économisées par les hits (heuristique constante)",
+    )
+    # `op` ∈ get|set — distingue les erreurs de lookup et de store côté backend.
+    CACHE_ERRORS_TOTAL = Counter(
+        "onix_gateway_cache_errors_total",
+        "Erreurs du backend de cache (get / set), exception-safe → miss ou no-op",
+        ["op"],
+    )
+
     _METRICS_AVAILABLE = True
 
 except Exception as _exc:  # pragma: no cover — jamais déclenché en tests normaux
@@ -165,3 +203,80 @@ def inc_feedback(rating: str) -> None:
         FEEDBACK_TOTAL.labels(rating=rating).inc()
     except Exception as exc:
         _logger.debug("metrics inc_feedback: %s", exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers cache (RBAC-safe). Tous exception-safe — un défaut Prometheus ou un
+# label inattendu NE DOIT JAMAIS faire échouer une requête utilisateur.
+# Heuristique de temps économisé : valeur par défaut 2.0 s par hit (= ordre de
+# grandeur d'une génération RAG moyenne sur un LLM 7B local). Configurable via
+# l'env GATEWAY_CACHE_SECONDS_PER_HIT pour ajuster sur la mesure réelle
+# (cf. docs/CACHE.md §observabilité).
+# ─────────────────────────────────────────────────────────────────────────────
+import os as _os  # local pour rester contenu au bloc cache.
+
+_DEFAULT_SECONDS_PER_HIT = 2.0
+
+
+def _seconds_per_hit() -> float:
+    raw = _os.environ.get("GATEWAY_CACHE_SECONDS_PER_HIT")
+    if not raw:
+        return _DEFAULT_SECONDS_PER_HIT
+    try:
+        v = float(raw)
+        # Bornage : valeurs négatives → désactive l'incrément.
+        return v if v >= 0 else 0.0
+    except (TypeError, ValueError):
+        return _DEFAULT_SECONDS_PER_HIT
+
+
+def inc_cache_hit(tier: str = "exact") -> None:
+    """Incrémente `onix_gateway_cache_hits_total{tier}` + le compteur de
+    secondes économisées (heuristique constante, cf. ``_seconds_per_hit``)."""
+    if not _METRICS_AVAILABLE:
+        return
+    try:
+        CACHE_HITS_TOTAL.labels(tier=tier).inc()
+        CACHE_SECONDS_SAVED_TOTAL.inc(_seconds_per_hit())
+    except Exception as exc:
+        _logger.debug("metrics inc_cache_hit: %s", exc)
+
+
+def inc_cache_miss() -> None:
+    """Incrémente `onix_gateway_cache_misses_total`."""
+    if not _METRICS_AVAILABLE:
+        return
+    try:
+        CACHE_MISSES_TOTAL.inc()
+    except Exception as exc:
+        _logger.debug("metrics inc_cache_miss: %s", exc)
+
+
+def inc_cache_bypassed(reason: str) -> None:
+    """Incrémente `onix_gateway_cache_bypassed_total{reason}`."""
+    if not _METRICS_AVAILABLE:
+        return
+    try:
+        CACHE_BYPASSED_TOTAL.labels(reason=reason).inc()
+    except Exception as exc:
+        _logger.debug("metrics inc_cache_bypassed: %s", exc)
+
+
+def add_cache_tokens_saved(tokens: int) -> None:
+    """Ajoute `tokens` à `onix_gateway_cache_tokens_saved_total`. Tolère 0/négatif."""
+    if not _METRICS_AVAILABLE or tokens <= 0:
+        return
+    try:
+        CACHE_TOKENS_SAVED_TOTAL.inc(int(tokens))
+    except Exception as exc:
+        _logger.debug("metrics add_cache_tokens_saved: %s", exc)
+
+
+def inc_cache_error(op: str) -> None:
+    """Incrémente `onix_gateway_cache_errors_total{op}` (op ∈ get|set)."""
+    if not _METRICS_AVAILABLE:
+        return
+    try:
+        CACHE_ERRORS_TOTAL.labels(op=op).inc()
+    except Exception as exc:
+        _logger.debug("metrics inc_cache_error: %s", exc)

@@ -124,6 +124,56 @@ rag-test-live:
 rag-eval:
 	@cd tests/rag && ONIX_LIVE_OLLAMA=1 python -m ragas_eval.runner
 
+# Mini-bench OFFLINE du cache applicatif RBAC-safe (cf. docs/CACHE.md).
+# Émet N requêtes identiques (sans réseau) contre un `Cache` en mémoire et
+# imprime hit-rate + tokens économisés. Sert à vérifier le câblage et à
+# matérialiser l'ordre de grandeur des gains attendus en charge réelle.
+#   make cache-bench           N=200 par défaut
+#   make cache-bench N=1000    pour stresser la LRU
+# Le bench est INLINE (script python passé en argument à python3 -c) — aucun
+# fichier ajouté hors du périmètre du WS ; AUCUN appel réseau (LRU mémoire).
+.PHONY: cache-bench
+define CACHE_BENCH_PY
+import os, sys
+sys.path.insert(0, "access-gateway")
+from app.cache import build_cache, make_cache_key, normalize_question, estimate_tokens
+
+class S:
+    pass
+
+s = S()
+s.cache_enabled = True
+s.cache_redis_url = ""
+s.cache_ttl_seconds = 3600
+s.cache_max_entries = 512
+s.cache_hmac_secret = os.environ["GATEWAY_CACHE_HMAC_SECRET"]
+s.cache_locale = "fr"
+
+cache = build_cache(s)
+authorized = ["clients-nord"]
+q = normalize_question("Quelles sont les echeances du client ABC ?")
+key = make_cache_key(settings=s, principal="u", normalized_question=q,
+                     authorized_doc_sets=authorized)
+body = {"message": "Voici la reponse mockee avec source [Document: contrats.pdf]." * 5}
+cache.store(key, body, ttl=3600)
+
+N = int(os.environ.get("N", "200"))
+hits, saved = 0, 0
+for _ in range(N):
+    hit = cache.lookup(key)
+    if hit is not None:
+        hits += 1
+        saved += estimate_tokens(hit)
+
+hit_rate = hits / N * 100 if N else 0.0
+print(f"cache-bench: requests={N}  hits={hits}  hit-rate={hit_rate:.1f}%  tokens_saved~={saved}")
+endef
+export CACHE_BENCH_PY
+cache-bench:
+	@N=$${N:-200} GATEWAY_CACHE_HMAC_SECRET=$${GATEWAY_CACHE_HMAC_SECRET:-bench-secret} \
+	  python3 -c "$$CACHE_BENCH_PY"
+	@echo "✓ cache-bench OK (offline). Voir docs/CACHE.md pour l'interprétation."
+
 # --- WS4 ---
 # Déploiement Kubernetes HAUTE DISPONIBILITÉ & scale-out (chart Helm onix-ha).
 # Cibles de VALIDATION (hors cluster) + déploiement. Cf. docs/HA_SCALING.md.

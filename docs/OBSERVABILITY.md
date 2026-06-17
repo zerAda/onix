@@ -154,6 +154,16 @@ La passerelle RBAC (`access-gateway/`) expose `GET /metrics` sur son port
 | `onix_gateway_request_latency_seconds` | histogram | — | Latence bout-en-bout (buckets LLM : 0.5 à 120 s) |
 | `onix_gateway_upstream_errors_total` | counter | — | Erreurs de relais Onyx (→ 502) |
 | `onix_gateway_feedback_total` | counter | `rating` (up\|down) | Retours utilisateur (endpoint `/v1/feedback`) |
+| `onix_gateway_cache_hits_total` | counter | `tier` (`exact`, futur `semantic`) | Hits du cache applicatif RBAC-safe (cf. [docs/CACHE.md](CACHE.md)) |
+| `onix_gateway_cache_misses_total` | counter | — | Misses du cache applicatif (entrée absente/expirée) |
+| `onix_gateway_cache_bypassed_total` | counter | `reason` (`no_store`\|`write_intent`\|`streaming`\|`explicit_admin_bypass`) | Requêtes pour lesquelles le cache a été volontairement contourné |
+| `onix_gateway_cache_tokens_saved_total` | counter | — | Tokens approximatifs économisés par les hits (heuristique `chars/4`) |
+| `onix_gateway_cache_seconds_saved_total` | counter | — | Secondes de génération économisées par les hits (heuristique constante `GATEWAY_CACHE_SECONDS_PER_HIT`) |
+| `onix_gateway_cache_errors_total` | counter | `op` (`get`\|`set`) | Erreurs du backend de cache (exception-safe : déjà traduites en miss/no-op) |
+
+> **Hit-rate effectif** (hors bypass volontaires), à mettre dans le dashboard :
+> `rate(onix_gateway_cache_hits_total[5m]) / (rate(onix_gateway_cache_hits_total[5m]) + rate(onix_gateway_cache_misses_total[5m]))`.
+> Voir [docs/CACHE.md](CACHE.md) §6 pour le détail de l'observabilité du cache.
 
 ### Job Prometheus
 

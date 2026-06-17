@@ -58,6 +58,26 @@ class Settings:
     # environnements sans stack de monitoring (GET /metrics → 404, aucun compteur).
     metrics_enabled: bool
 
+    # --- Cache applicatif RBAC-safe (réponses Onyx, post-filtre garde-fous) ---
+    # Cf. docs/CACHE.md. Le cache est une couche DÉTERMINISTE au-dessus du
+    # KV-cache token-level interne d'Ollama : il évite tout aller-retour LLM
+    # quand une question identique dans le MÊME périmètre Document Set
+    # autorisé est posée à nouveau. La clé HMAC inclut le périmètre trié →
+    # un utilisateur d'un autre périmètre ne peut PAS récupérer la réponse.
+    cache_enabled: bool
+    # URL Redis (ex. redis://cache:6379/0). Vide → bascule sur LRU mémoire.
+    cache_redis_url: str
+    # TTL d'une entrée (secondes). Au-delà, l'entrée est ré-évaluée par Onyx.
+    cache_ttl_seconds: int
+    # Bornage de la LRU en mémoire (entrées max).
+    cache_max_entries: int
+    # Secret HMAC (REQUIS quand cache_enabled=true). N'est JAMAIS autogénéré ;
+    # un sel éphémère casserait la stabilité des clés entre redémarrages, donc
+    # le hit-rate. Fail-loud à l'init si manquant (cf. cache.build_cache).
+    cache_hmac_secret: str
+    # Locale incluse dans la clé (différencie versions FR/EN d'une même question).
+    cache_locale: str
+
     @property
     def graph_configured(self) -> bool:
         return bool(self.graph_tenant_id and self.graph_client_id and self.graph_client_secret)
@@ -85,6 +105,13 @@ def get_settings() -> Settings:
         guardrail_enabled=_bool("GATEWAY_GUARDRAIL_ENABLED", True),
         upstream_timeout=float(os.environ.get("GATEWAY_UPSTREAM_TIMEOUT", "30")),
         metrics_enabled=_bool("GATEWAY_METRICS_ENABLED", True),
+        # Cache applicatif RBAC-safe (cf. app/cache.py + docs/CACHE.md).
+        cache_enabled=_bool("GATEWAY_CACHE_ENABLED", True),
+        cache_redis_url=os.environ.get("GATEWAY_CACHE_REDIS_URL", "").strip(),
+        cache_ttl_seconds=int(os.environ.get("GATEWAY_CACHE_TTL_SECONDS", "3600")),
+        cache_max_entries=int(os.environ.get("GATEWAY_CACHE_MAX_ENTRIES", "512")),
+        cache_hmac_secret=os.environ.get("GATEWAY_CACHE_HMAC_SECRET", "").strip(),
+        cache_locale=os.environ.get("GATEWAY_CACHE_LOCALE", "fr").strip().lower() or "fr",
     )
 
 
