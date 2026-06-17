@@ -25,4 +25,8 @@ regexes = [
   '''7f951dda-4ed3-4680-a7ca-43fe172d538d''',
   '''4633458b-17de-408a-b874-0445c86b69e6''',
   '''b0d8363b-8ddd-447d-831f-62ca05bff136''',
+  # Healthcheck OpenSearch (docker-compose.prod-local.yml) : `curl -u admin:$${OPENSEARCH_ADMIN_PASSWORD}`.
+  # Le « mot de passe » est une RÉFÉRENCE de variable (compose échappe `$$` → évaluée
+  # DANS le conteneur), jamais un secret littéral. Faux positif de la règle curl-auth-user.
+  '''admin:\$\$\{OPENSEARCH_ADMIN_PASSWORD\}''',
 ]

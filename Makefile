@@ -6,6 +6,7 @@
 #   make up        démarre tout (GPU=1 = profil GPU NVIDIA ; PERF=1 = haut débit)
 #   make models    (pré)télécharge les modèles Ollama
 #   make verify    contrôle de bout en bout (santé + câblage + génération)
+#   make preflight-local  pré-vol AVANT make up (prérequis du 1er lancement)
 #   make logs / ps / stats / down / restart / update / backup / restore / destroy
 #   make sync-doc-acl  synchronise l'ACL par-document SharePoint→doc_acl.json (Graph)
 # Pré-requis : Docker + Docker Compose v2 (`docker compose`).
@@ -22,7 +23,7 @@ endif
 PORT = $$(sed -n 's/^ONYX_HOST_PORT=//p' .env 2>/dev/null | head -n1); PORT=$${PORT:-3000}
 
 .DEFAULT_GOAL := help
-.PHONY: help detect tune secrets secrets-gateway up down restart ps stats logs models verify config update backup restore destroy
+.PHONY: help detect tune secrets secrets-gateway up down restart ps stats logs models verify preflight-local config update backup restore destroy
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   /  /'
@@ -72,6 +73,11 @@ models:
 
 verify:
 	@bash scripts/verify.sh
+
+# Pré-vol AVANT `make up` : détecte les prérequis bloquants du 1er lancement
+# (daemon Docker, vm.max_map_count, RAM, disque, ports, .env + secrets requis).
+preflight-local:
+	@bash scripts/preflight-local.sh
 
 # Valide la syntaxe du compose (résout les variables) sans rien démarrer.
 config:
@@ -330,6 +336,42 @@ logs-prod:
 preflight-prod:
 	@set -a; . ./$(ENV) 2>/dev/null || true; set +a; sh scripts/preflight-prod.sh
 
+# =============================================================================
+# --- prod-local --- PRODUCTION sur MACHINE UNIQUE (durci, SANS domaine public)
+# -----------------------------------------------------------------------------
+# Tier intermédiaire entre la base (POC, 127.0.0.1) et deploy/prod (domaine
+# public + OIDC). Empile docker-compose.prod-local.yml : healthchecks +
+# démarrage ORDONNÉ (depends_on condition=service_healthy) + restart:always.
+# Testeurs via Tailscale Serve (TLS privé) ou LAN. Runbook : docs/PROD_LOCAL.md.
+# Survie au redémarrage : unit systemd deploy/local-prod/onix.service.
+#   make config-local-prod   valide base + prod-local (syntaxe)
+#   make up-local-prod       démarre la stack durcie machine unique
+#   make down-local-prod / restart-local-prod / ps-local-prod / logs-local-prod
+# Démarrage type : make tune → make secrets → make preflight-local → make up-local-prod → make verify
+# =============================================================================
+COMPOSE_LOCAL_PROD := docker compose -f docker-compose.yml -f docker-compose.prod-local.yml
+.PHONY: config-local-prod up-local-prod down-local-prod restart-local-prod ps-local-prod logs-local-prod
+
+config-local-prod:
+	@$(COMPOSE_LOCAL_PROD) config -q && echo "✓ base + prod-local valide"
+
+up-local-prod: secrets
+	@$(COMPOSE_LOCAL_PROD) up -d
+	@echo "→ Stack prod-local démarrée (healthchecks + démarrage ordonné + restart: always)."
+	@echo "  Accès testeurs : tailscale serve 3000 (TLS privé) — cf. docs/PROD_LOCAL.md §5."
+
+down-local-prod:
+	@$(COMPOSE_LOCAL_PROD) down
+
+restart-local-prod:
+	@$(COMPOSE_LOCAL_PROD) restart
+
+ps-local-prod:
+	@$(COMPOSE_LOCAL_PROD) ps
+
+logs-local-prod:
+	@$(COMPOSE_LOCAL_PROD) logs -f --tail=200
+
 # --- WS6 ---------------------------------------------------------------------
 # Observabilité + gates qualité/sécurité/supply-chain (miroir LOCAL de la CI).
 #   make test          lance TOUTES les barrières CI en local (cf. ci.yml)
@@ -358,8 +400,10 @@ compose-validate:
 	@docker compose -f docker-compose.yml config -q
 	@docker compose -f docker-compose.yml -f docker-compose.performance.yml config -q
 	@docker compose -f docker-compose.yml -f docker-compose.gpu.yml config -q
+	@docker compose -f docker-compose.yml -f docker-compose.prod-local.yml config -q
+	@docker compose -f docker-compose.yml -f docker-compose.prod-local.yml -f docker-compose.lan.yml config -q
 	@$(MONITORING_COMPOSE) config -q
-	@echo "✓ Tous les fichiers compose (base/PERF/GPU/monitoring) sont valides."
+	@echo "✓ Tous les fichiers compose (base/PERF/GPU/prod-local/LAN/monitoring) sont valides."
 
 pytest:
 	@command -v pytest >/dev/null 2>&1 || pip install --quiet pytest

@@ -37,14 +37,15 @@ Détail : [`ARCHITECTURE.md`](ARCHITECTURE.md) (racine) + [`docs/ARCHITECTURE.md
 ## 3. Carte du dépôt
 | Chemin | Rôle |
 |---|---|
-| `docker-compose.yml` (+ `.gpu`/`.performance`) | Stack mono-poste durcie (Onyx+Ollama+actions) |
+| `docker-compose.yml` (+ `.gpu`/`.performance`/`.prod-local`/`.lan`) | Stack mono-poste durcie ; `.prod-local` = **production machine unique** (santé+ordre+`restart:always`), `.lan` = accès testeurs LAN |
 | `access-gateway/` | Proxy RBAC FastAPI : cloisonnement, **ACL par-doc**, cache, streaming, `/metrics` |
 | `actions/` | Microservice `onix-actions` : OCR/docgen/tasks/notify/usage/coût/admin + sécurité/RGPD |
 | `prompts/` | Prompt système de l'agent commercial (sourcé, anti-injection) |
 | `tests/rag/` | Garde-fous (red-team, post-filtre), éval **RAGAS** (`ragas_eval/`) |
 | `monitoring/` | Observabilité locale (Prometheus/Grafana/Loki/alertes) |
 | `deploy/k8s/onix-ha/` | **Chart Helm HA** (OpenSearch/Postgres/MinIO/Redis HA, HPA, Celery, +gateway, +GPU) |
-| `deploy/prod/` | Compose prod (Caddy TLS + OIDC oauth2-proxy + passerelle) |
+| `deploy/prod/` | Compose prod exposé (Caddy TLS + OIDC oauth2-proxy + passerelle) — domaine public |
+| `deploy/local-prod/` | **Production machine unique** : unit systemd (démarrage au boot) + README (cf. `docs/PROD_LOCAL.md`) |
 | `deploy/azure/` | **Azure/AKS** : `values-azure.yaml`, `setup-entra.sh`, **`bicep/`** (IaC validée `bicep build`) — passerelle = template natif du chart |
 | `scripts/` | `detect-hardware`(.sh/.ps1), `gen-secrets.sh`, `pull-models.sh`, `sync-doc-acl.py`, backup/restore, verify |
 | `docs/` | Toute la doc de scope (index : [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md)) |
@@ -56,6 +57,9 @@ Détail : [`ARCHITECTURE.md`](ARCHITECTURE.md) (racine) + [`docs/ARCHITECTURE.md
 make tune && make secrets && make up && make verify     # détecte HW, génère secrets, démarre, vérifie
 make models                                             # pré-tire les modèles Ollama (num_ctx gravé)
 # POC local complet (machine perso, connexion SharePoint, 1-2 testeurs) → docs/POC_LOCAL.md
+make preflight-local                                    # pré-vol des prérequis AVANT make up (daemon, max_map_count, RAM, disque, ports, secrets)
+# PRODUCTION sur MACHINE UNIQUE (durci : santé+ordre+restart:always, Tailscale/LAN) → docs/PROD_LOCAL.md
+make up-local-prod && make verify                       # stack prod-local + contrôle de bout en bout
 
 # Qualité (DOIT rester vert — voir §5)
 make test            # lint + compose-validate + pytest + bandit + pip-audit + gitleaks + trivy
@@ -89,7 +93,7 @@ Suites pytest : `actions/tests`, `access-gateway/tests`, `tests/rag` (offline) ;
 - **RBAC / cache / streaming** : [`docs/RBAC.md`](docs/RBAC.md) · [`docs/DECISION_RBAC.md`](docs/DECISION_RBAC.md) · [`docs/CACHE.md`](docs/CACHE.md) · [`docs/STREAMING.md`](docs/STREAMING.md)
 - **Fonctions applicatives** : [`docs/ACTIONS.md`](docs/ACTIONS.md) · [`docs/FINOPS.md`](docs/FINOPS.md) · [`docs/AGENT_COMMERCIAL.md`](docs/AGENT_COMMERCIAL.md)
 - **Sécurité / RGPD** : [`SECURITY.md`](SECURITY.md) · [`docs/SECURITY.md`](docs/SECURITY.md) · [`docs/SECURITY_RGPD_ACTIONS.md`](docs/SECURITY_RGPD_ACTIONS.md) · [`docs/RGPD.md`](docs/RGPD.md)
-- **Déploiement / HA / ops** : [`docs/RUNBOOK.md`](docs/RUNBOOK.md) · [`docs/HA_SCALING.md`](docs/HA_SCALING.md) · [`docs/DEPLOY_PROD.md`](docs/DEPLOY_PROD.md) · [`docs/DEPLOY_AZURE.md`](docs/DEPLOY_AZURE.md) · [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)
+- **Déploiement / HA / ops** : [`docs/POC_LOCAL.md`](docs/POC_LOCAL.md) · [`docs/PROD_LOCAL.md`](docs/PROD_LOCAL.md) · [`docs/RUNBOOK.md`](docs/RUNBOOK.md) · [`docs/HA_SCALING.md`](docs/HA_SCALING.md) · [`docs/DEPLOY_PROD.md`](docs/DEPLOY_PROD.md) · [`docs/DEPLOY_AZURE.md`](docs/DEPLOY_AZURE.md) · [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)
 - **SharePoint / connecteurs** : [`docs/connectors/SHAREPOINT.md`](docs/connectors/SHAREPOINT.md)
 - **Audit Onyx + parité** : [`docs/audit-onyx/00-VERDICT.md`](docs/audit-onyx/00-VERDICT.md) · [`docs/PARITE_ENTREPRISE.md`](docs/PARITE_ENTREPRISE.md) · [`docs/COMPARATIF_COPILOT_AC360.md`](docs/COMPARATIF_COPILOT_AC360.md)
 - **Index complet** : [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md)

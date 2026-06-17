@@ -37,6 +37,7 @@ dimensions au vert** (3 avec astérisque honnête — détails et preuves :
 - 🔬 **Audit en profondeur d'Onyx v4.1.1** (7 dimensions, code réel, preuves byte-level : prod-ready premium **mais** RBAC/audit/chiffrement = EE-payant → justifie la couche `onix`) — [`docs/audit-onyx/00-VERDICT.md`](docs/audit-onyx/00-VERDICT.md)
 - ☁️ **Déploiement Azure / AKS** (Postgres+Redis managés, Ollama CPU, RBAC gateway FOSS, France Central — runbook az+helm) — [`docs/DEPLOY_AZURE.md`](docs/DEPLOY_AZURE.md) · `deploy/azure/`
 - 🧪 **POC local** (ta machine, **connexion SharePoint**, 1-2 testeurs, souverain, 0 €) — [`docs/POC_LOCAL.md`](docs/POC_LOCAL.md)
+- 🏭 **Production machine unique** (durci : santé + démarrage ordonné + `restart:always`, systemd au boot, sauvegardes, TLS privé Tailscale) — [`docs/PROD_LOCAL.md`](docs/PROD_LOCAL.md) · `make up-local-prod`
 
 > Validation : **red-team E2E 21/21 (qwen2.5:7b, post-filtre déployé dans access-gateway) · éval RAGAS `make rag-eval` (juge LOCAL) · `/metrics` qualité passerelle · HA multi-réplica prouvée + manifests validés server-side (vrai kube-apiserver) · pip-audit 0 CVE · bandit 0 · gitleaks 0 · helm lint 0 · caddy validate OK**. Clôture des 3 réserves : [`docs/PARITE_ENTREPRISE.md`](docs/PARITE_ENTREPRISE.md).
 
