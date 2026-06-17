@@ -36,7 +36,8 @@ page est **honnête** : elle distingue ce qui est **natif**, **par configuration
 | Cas d'usage : résumé, recherche doc/clause, RDV, points d'attention, mail, docs manquants, arguments, juridique | Agent « Assistant Commercial 360 » (un prompt + Document Set) | ✅ **config** (cf. `AGENT_COMMERCIAL.md`) |
 | **Lecture seule** (pas d'écriture SharePoint) | L'agent ne fait que de la recherche | ✅ **par conception** |
 | SSO entreprise | **OIDC Entra ID** | ✅ **config** (`SECURITY.md` §6) |
-| **RBAC par utilisateur** (chacun ne voit que ses docs) | **Permission sync** du connecteur SharePoint | ⚠️ **EE / Cloud uniquement** (FOSS : index à accès uniforme / par groupe) |
+| **RBAC par utilisateur — RECHERCHE** (le LLM ne voit que les chunks autorisés) | **Permission sync** du connecteur SharePoint | ⚠️ **EE / Cloud uniquement** (FOSS : index par groupe, LLM voit tout le Document Set autorisé) |
+| **RBAC par utilisateur — RÉPONSE** (citations rendues retirées si doc non autorisé pour l'appelant ; refus substitué si zéro citation restante) | Filtre [`doc_acl.py`](../access-gateway/app/doc_acl.py) dans la **passerelle FOSS** | ✅ **FOSS** (NOUVEAU `feat/rbac-perdoc`) — granularité **par document** sur la sortie, intégré à l'audit HMAC |
 | LLM | **Ollama local** (souverain) ou tout LLM | ✅ **natif** |
 | Multi-format (PDF, Office…) | Indexation native Onyx | ✅ **natif** |
 | Souveraineté / hors-ligne / zéro transfert | Tout en local (Ollama + OpenSearch + MinIO) | ✅ **supérieur** au cloud |
@@ -49,10 +50,17 @@ page est **honnête** : elle distingue ce qui est **natif**, **par configuration
 
 ## Les 2 vraies réserves (à cadrer avec le client)
 
-1. **RBAC par document = EE/Cloud.** En FOSS, pas de trimming par utilisateur :
-   n'indexer que des périmètres à accès **homogène**, ou cloisonner (connecteurs/
-   instances par groupe), ou passer en EE/Cloud pour la parité totale. Détails :
-   [`connectors/SHAREPOINT.md`](connectors/SHAREPOINT.md) §6.
+1. **RBAC par document — RECHERCHE = EE/Cloud.** En FOSS, le filtre **par
+   document est appliqué côté RÉPONSE** par la passerelle
+   ([`access-gateway/app/doc_acl.py`](../access-gateway/app/doc_acl.py)) :
+   citations vers les fichiers non-autorisés **retirées**, refus substitué si
+   zéro citation restante. **Cela ferme la fuite VISIBLE** (citations
+   affichées). Le **trimming à la RECHERCHE** (le LLM ne voit jamais les
+   chunks non autorisés — zéro fuite indirecte par le texte généré) **reste
+   une fonction EE/Cloud** (permission sync, certificat). Mitigations FOSS
+   recommandées : périmètres conçus **homogènes**, ou instances Onyx
+   **séparées par tier d'accès**. Détails et matrice :
+   [`RBAC.md`](RBAC.md) §4.3/4.4 + [`DECISION_RBAC.md`](DECISION_RBAC.md) §4.
 2. **Fonctions « applicatives » au-delà du RAG** (audit OCR, génération de
    documents, relances, notifications, usage/FinOps, kill-switch) sont
    **implémentées** dans le microservice local **`onix-actions`** (cf.

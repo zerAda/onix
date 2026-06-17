@@ -8,13 +8,18 @@ Edition d'Onyx), ce qui exige l'**Enterprise Edition (EE) / Cloud**, et la
 le cas réel multi-commerciaux — avec ses limites assumées.
 
 > TL;DR
-> - **Trimming par DOCUMENT** natif (l'index sait qui peut voir chaque fichier) =
->   **EE / Cloud uniquement**. La doc Onyx est explicite :
+> - **Trimming par DOCUMENT À LA RECHERCHE** natif (l'index sait qui peut voir
+>   chaque fichier, le LLM ne voit que les chunks autorisés) = **EE / Cloud
+>   uniquement**. La doc Onyx est explicite :
 >   *« Different access to documents is only available in the Enterprise Edition of Onyx »*
 >   et *« Permission-syncing connectors are an Enterprise Edition feature »*.
 > - **Cloisonnement par GROUPE / Document Set** = **faisable en FOSS** via SSO OIDC
->   Entra + Document Sets + la **passerelle `access-gateway/`** d'onix. Granularité
->   au **groupe d'accès / Document Set**, **pas par document**.
+>   Entra + Document Sets + la **passerelle `access-gateway/`** d'onix.
+> - **Filtre par DOCUMENT À LA RÉPONSE** (retire les citations vers les fichiers
+>   non autorisés individuellement ; refus substitué si zéro citation restante)
+>   = **NOUVEAU en FOSS** via [`doc_acl.py`](../access-gateway/app/doc_acl.py)
+>   (§4.3). Granularité par document **côté sortie** ; ne remplace pas la
+>   permission sync EE (§4.4 — honnêteté).
 >
 > 📋 **Dossier de décision chiffré (EE/Cloud vs FOSS vs hybride)** : voir
 > [`DECISION_RBAC.md`](DECISION_RBAC.md) — matrice sécurité/coût/effort/conformité/
@@ -149,6 +154,79 @@ Fichier JSON monté en lecture seule (exemple :
 La clé est l'**objectId (GUID)** du groupe de sécurité Entra (stable ; recommandé)
 ou son `displayName`. La valeur est le **nom exact** des Document Sets Onyx.
 
+### 4.3 Filtre ACL par DOCUMENT côté RÉPONSE (`access-gateway/app/doc_acl.py`)
+
+**Nouveau dans FOSS** (workstream `feat/rbac-perdoc`). Le cloisonnement par
+Document Set (§4.1/4.2) borne la **recherche** au périmètre. Restait un trou
+**dans le rendu** : à l'intérieur d'un Document Set, Onyx pouvait renvoyer des
+citations vers des fichiers auxquels l'utilisateur n'avait pas individuellement
+accès. Le module [`doc_acl.py`](../access-gateway/app/doc_acl.py) ferme cette
+fuite **côté sortie** :
+
+```
+Onyx /chat/send-message ─▶ access-gateway
+                            1. (déjà) post-filtre garde-fous (couche 3, hors-LLM)
+                            2. **NOUVEAU** : filter_citations(body, principal, acl)
+                               • retire de top_documents / context_docs /
+                                 final_context_docs / documents /
+                                 source_documents / citations les entrées
+                                 dont le doc_id N'est PAS autorisé pour l'appelant
+                               • si TOUTES les citations sont retirées et que
+                                 strip_uncited=true → SUBSTITUE la réponse par
+                                 REFUSAL_NO_ACCESSIBLE_SOURCE (refus sourcé FR)
+                               • journalise (HMAC-chain) chaque drop + un résumé
+                          ─▶ utilisateur
+```
+
+**Mécanisme** :
+- `StaticDocACL` charge un fichier JSON `config/doc_acl.json` de forme
+  `{ "doc_id": { "groups": ["G1",…], "users": ["upn",…] } }`. Un override par
+  utilisateur (UPN/oid) **gagne** sur l'appartenance de groupe.
+- Politique par défaut **deny** (parité avec `GATEWAY_DENY_IF_NO_MATCH`) :
+  un `doc_id` non listé est INVISIBLE. Configurable
+  (`GATEWAY_DOC_ACL_DEFAULT_POLICY=allow` pour les POCs / corpus historique).
+- `CompositeDocACL` permet d'OR-merger plusieurs sources (statique + cache
+  Graph à venir).
+- **Fail-OPEN sur erreur interne** (loader cassé p.ex.) → body inchangé, log
+  `doc_acl_error` (concern disponibilité), versus **fail-CLOSED sur
+  doc_id inconnu** quand `default_policy=deny` (concern autorisation).
+
+**Configuration** (variables d'env) :
+
+| Variable | Défaut | Effet |
+|---|---|---|
+| `GATEWAY_DOC_ACL_ENABLED` | `true` | Active le filtre. |
+| `GATEWAY_DOC_ACL_PATH` | `config/doc_acl.json` | Chemin du JSON. |
+| `GATEWAY_DOC_ACL_DEFAULT_POLICY` | `deny` | `deny` ou `allow`. |
+| `GATEWAY_DOC_ACL_STRIP_UNCITED` | `true` | Substitution si zéro citation restante. |
+
+Fichier d'exemple : [`../access-gateway/config/doc_acl.example.json`](../access-gateway/config/doc_acl.example.json)
++ commentaires sibling [`.json.md`](../access-gateway/config/doc_acl.example.json.md).
+
+### 4.4 Honnêteté — ce que le filtre par-document N'EST PAS
+
+> **Filtre de SORTIE, pas de récupération.** Onyx FOSS récupère et fait
+> raisonner le LLM sur **tous les documents du Document Set autorisé** ;
+> autrement dit, le LLM peut avoir lu et formulé sa réponse à partir d'un
+> document qu'il NE faut PAS exposer à l'utilisateur. Le filtre ci-dessus
+> retire alors **la citation visible** vers ce document, et — si toutes les
+> citations sont retirées — substitue la réponse par un refus. **Mais** des
+> fragments d'information ont pu transiter par le texte d'assistant pendant
+> la génération, sans citation traçable. Aucun filtre côté réponse ne peut
+> rattraper cela à 100 % sans contexte.
+>
+> **Pour atteindre un « zéro fuite » strict**, deux options seulement :
+> 1. **Onyx EE / Cloud** (permission sync) — l'ACL est rejouée à la
+>    RÉCUPÉRATION, le LLM ne voit jamais que les chunks autorisés.
+> 2. **Instances Onyx séparées par tier d'accès** — chaque population
+>    consomme son propre index, isolé physiquement.
+>
+> Le filtre `doc_acl.py` ferme **la fuite VISIBLE à l'utilisateur** (la grande
+> majorité du risque opérationnel : un commercial qui voit citer le dossier
+> d'un client d'une autre équipe dans son agent). Il **n'élimine pas** la
+> fuite indirecte par le texte généré. Documenter cet écart au RGPD/audit si
+> le seuil de risque l'exige.
+
 ## 5. Où en est la parité — et où l'EE reste requis
 
 | Besoin | FOSS + onix (`access-gateway`) | EE / Cloud (permission sync) |
@@ -156,9 +234,10 @@ ou son `displayName`. La valeur est le **nom exact** des Document Sets Onyx.
 | Savoir qui interroge (SSO) | ✅ OIDC Entra | ✅ OIDC/SAML |
 | Cloisonner **par équipe / périmètre** | ✅ groupe Entra → Document Set | ✅ (et plus fin) |
 | Empêcher un commercial de voir le périmètre d'un autre | ✅ (deny-by-default, non-élargissement) | ✅ |
-| Trimming **strict par document** (deux personnes d'une **même** équipe avec des droits **différents sur un même dossier**) | ❌ **non** (granularité Document Set) | ✅ **oui** (ACL par document rejouée) |
-| ACL **suivant automatiquement** SharePoint (un retrait d'accès se propage) | ⚠️ **manuel** (re-mapper / re-cloisonner) | ✅ **auto** (sync périodique) |
-| Effort d'admin | Moyen (créer Document Sets + mapping) | Faible (sync) mais **licence EE** |
+| Trimming **par document à la RECHERCHE** (le LLM ne voit que les chunks autorisés) | ❌ **non** (filtrage uniquement à la sortie, cf. §4.4) | ✅ **oui** (ACL par document rejouée) |
+| Filtre **par document côté RÉPONSE** (retire les citations vers les docs non autorisés, refus substitué si plus aucune citation) | ✅ **NOUVEAU** (`doc_acl.py`, §4.3) | ✅ (intégré) |
+| ACL **suivant automatiquement** SharePoint (un retrait d'accès se propage) | ⚠️ **manuel** (mettre à jour `doc_acl.json` / re-cloisonner) | ✅ **auto** (sync périodique) |
+| Effort d'admin | Moyen (Document Sets + mapping groupes + ACL par-document) | Faible (sync) mais **licence EE** |
 
 **Verdict honnête.** En FOSS, onix atteint la parité **au niveau groupe d'accès /
 Document Set** — ce qui **couvre le cas multi-commerciaux** (chaque équipe son
@@ -204,7 +283,9 @@ certificat) est requise**. Ce n'est pas l'OBO par-document d'un AC360/Copilot.
 | Contournement via l'UI Onyx directe | UI/API Onyx **internes** ; seul `access-gateway` est exposé (cf. déploiement) | `DECISION_RBAC.md` §6 / `access-gateway/README.md` |
 | Overage de groupes OIDC (liste tronquée) | Repli Graph `transitiveMemberOf` (mode `auto`) | `test_auto_falls_back_to_graph_on_overage` |
 | Traçabilité d'un accès (audit/RGPD) | **Journal des décisions** allow/deny, **identité hachée** (HMAC) | `test_decision_record_never_leaks_plaintext_identity` |
-| Deux droits différents sur un même document | **Non couvert** → EE requis (assumé, §5 ; quantifié `DECISION_RBAC.md` §4) | — |
+| Citation rendue vers un document non-autorisé pour l'appelant (même Document Set) | **Couvert côté sortie** : `filter_citations` retire la citation, refus substitué si zéro citation restante | `test_rbac_isolation_two_users_same_body_different_filtered`, `test_strip_uncited_substitutes_safe_refusal` |
+| Le LLM **a vu** le contenu d'un document non-autorisé pendant la génération (fuite indirecte par le texte) | **Non couvert** côté FOSS : nécessite Onyx EE (permission sync) OU instances séparées par tier d'accès (§4.4) | — |
+| Deux droits différents sur un même document **à la RECHERCHE** (zéro-leak strict) | **Non couvert** → EE requis (assumé, §5 ; quantifié `DECISION_RBAC.md` §4) | — |
 
 ## 7. Décision à acter avec le client
 - **Cas multi-commerciaux / multi-équipes, accès homogène par périmètre** →

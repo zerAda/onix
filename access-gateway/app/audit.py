@@ -93,6 +93,51 @@ def log_access_decision(
     return record
 
 
+def log_doc_acl_decision(
+    *,
+    actor: Optional[str],
+    doc_id: Optional[str],
+    decision: str,
+    reason: str,
+    endpoint: Optional[str] = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Émet (et renvoie, pour les tests) un enregistrement d'audit du FILTRE
+    ACL **par-document** appliqué sur la réponse Onyx.
+
+    On journalise la décision (``drop``/``summary``/``error``), le document
+    concerné (id en CLAIR — c'est un identifiant *technique*, pas une PII) et
+    la raison. L'acteur est TOUJOURS pseudonymisé (HMAC-SHA256), exactement
+    comme dans ``log_access_decision`` et ``log_guardrail_decision`` —
+    cohérence d'audit (chaîne logique homogène).
+
+    Convention :
+      * ``decision="drop"``     — un doc précis retiré (1 log par drop).
+      * ``decision="summary"``  — un résumé agrégé (un seul par requête).
+      * ``decision="error"``    — bug interne du filtre (fail-OPEN), à corréler.
+
+    Aucune donnée métier (texte de la réponse, message utilisateur) n'est
+    journalisée — minimisation.
+    """
+    record: dict[str, Any] = {
+        "event": "doc_acl_decision",
+        "decision": decision,
+        "reason": reason,
+        "actor_hash": pseudonymize(actor),
+        "doc_id": doc_id,
+        "endpoint": endpoint,
+    }
+    record.update(extra)
+    record = {k: v for k, v in record.items() if v is not None}
+    line = json.dumps(record, ensure_ascii=False, sort_keys=True)
+    # `drop`/`error` = signal de sécurité (warning), `summary` = info.
+    if decision in ("drop", "error"):
+        _audit_logger.warning("%s", line)
+    else:
+        _audit_logger.info("%s", line)
+    return record
+
+
 def log_guardrail_decision(
     *,
     actor: Optional[str],
