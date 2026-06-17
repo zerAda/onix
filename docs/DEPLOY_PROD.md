@@ -17,20 +17,42 @@ démarrer une instance exposée sans TLS + OIDC + vérification d'e-mail.
                          Internet / LAN
                               │  443 (TLS), 80 (ACME + redirection)
                               ▼
-                ┌─────────────────────────────┐
-                │  caddy  (reverse-proxy TLS)  │  ← SEUL service exposé (BIND_IP)
-                │  HTTPS auto, HSTS, en-têtes  │
-                └──────────────┬──────────────┘
-                               │  http  (réseau interne onix-net)
-                               ▼
-                ┌─────────────────────────────┐
-                │  nginx  (routage applicatif) │  ← repassé en INTERNE (127.0.0.1)
-                │  /api → api_server, / → web  │
-                └──────────────┬──────────────┘
-                               ▼
-        api_server · web_server · background · opensearch · postgres
-        · minio · redis · ollama · actions      (tous internes, onix-net)
+                ┌─────────────────────────────────────────────┐
+                │  caddy  (reverse-proxy TLS)                  │ ← SEUL service exposé (BIND_IP)
+                │  HTTPS auto, HSTS, en-têtes                  │
+                │  • supprime tout X-OIDC-Claims ENTRANT (anti-usurpation)
+                │  • /oauth2/*           → oauth2-proxy        │
+                │  • /api/chat/send-message → forward_auth(oauth2-proxy), puis nginx
+                │  • reste du site       → nginx               │
+                └───────┬──────────────────────────────┬──────┘
+                        │ http (onix-net)               │ /oauth2/auth (forward_auth)
+                        ▼                                ▼
+        ┌─────────────────────────────┐        ┌─────────────────────────┐
+        │  nginx  (routage applicatif)│        │  oauth2-proxy (OIDC)    │
+        │  • /api/chat/send-message → │        │  vérifie le jeton Entra,│
+        │    access-gateway:8200/v1/… │        │  --set-xauthrequest :   │
+        │    + pose X-OIDC-Claims      │◀──────│  X-Auth-Request-User=oid │
+        │      depuis l'identité       │ copy   │  (recopié par Caddy)    │
+        │      VÉRIFIÉE (sinon vide)   │ headers└─────────────────────────┘
+        │  • /api/*, / → Onyx (natif) │
+        └───────┬──────────────────┬──┘
+                │ chat (RBAC)       │ reste
+                ▼                   ▼
+   ┌────────────────────────┐   api_server · web_server · background
+   │  access-gateway:8200    │   · opensearch · postgres · minio
+   │  RBAC : Document Set     │   · ollama · actions   (internes, onix-net)
+   │  forcé + cache RBAC-safe │        ▲
+   │  (Redis base 1) + ACL    │        │  http://api_server:8080/chat/send-message
+   │  par-doc + garde-fous    │────────┘   (GATEWAY_ONYX_BASE_URL)
+   │  + streaming + /metrics  │
+   └────────────────────────┘
 ```
+
+> **Nouveau (cette surcouche) :** la passerelle RBAC `access-gateway` — jusqu'ici
+> orpheline (présente dans `access-gateway/` mais **déployée nulle part**) — est
+> désormais **dans le chemin de requête du chat**. Toute requête
+> `/api/chat/send-message` la traverse (RBAC appliqué), derrière oauth2-proxy
+> (identité vérifiée) et Caddy (TLS + anti-usurpation). Détails : **§5bis**.
 
 - **Caddy** termine TLS sur `:443`, obtient/renouvelle les certificats Let's
   Encrypt **automatiquement**, redirige `80 → 443`, pose **HSTS** + en-têtes de
@@ -45,9 +67,9 @@ démarrer une instance exposée sans TLS + OIDC + vérification d'e-mail.
 
 | Fichier | Rôle |
 |---|---|
-| `deploy/prod/docker-compose.prod.yml` | Surcouche prod : Caddy TLS, OIDC forcé, nginx interne, garde-fou, image `actions` épinglée. |
-| `deploy/prod/Caddyfile` | Reverse-proxy TLS (HTTPS auto, HSTS, en-têtes, proxy → `nginx:80`). |
-| `deploy/prod/nginx.prod.conf` | Variante nginx prod : honore `X-Forwarded-Proto=https` de Caddy (callbacks OIDC / cookies sécurisés corrects). Routage identique à la base. |
+| `deploy/prod/docker-compose.prod.yml` | Surcouche prod : Caddy TLS, OIDC forcé, nginx interne, garde-fou, image `actions` épinglée, **+ `access-gateway` (RBAC) et `oauth2-proxy` (vérificateur OIDC), internes** (cf. §5bis). |
+| `deploy/prod/Caddyfile` | Reverse-proxy TLS (HTTPS auto, HSTS, en-têtes). **Route `/oauth2/*` → oauth2-proxy, protège `/api/chat/send-message` par `forward_auth`, supprime tout `X-OIDC-Claims` entrant (anti-usurpation).** |
+| `deploy/prod/nginx.prod.conf` | Variante nginx prod : honore `X-Forwarded-Proto=https` de Caddy. **Route `/api/chat/send-message` → `access-gateway:8200/v1/chat/send-message` en posant `X-OIDC-Claims` depuis l'identité vérifiée ; efface `X-OIDC-Claims` sur les autres routes.** |
 | `deploy/prod/env.prod.template` | Gabarit d'environnement prod/test (à copier en `.env.prod` / `.env.test`). |
 | `scripts/preflight-prod.sh` | Garde-fou « défaut-sûr » : refuse une exposition sans TLS+OIDC+e-mail. |
 | `Makefile` (bloc `--- WS3 ---`) | Cibles `config-prod`, `up-prod`, `down-prod`, `secrets-prod`, `preflight-prod`, … |
@@ -189,6 +211,157 @@ Caddy (au lieu d'écraser avec `$scheme`). Routage par ailleurs **identique**.
 docker run --rm -v "$PWD/deploy/prod/nginx.prod.conf":/etc/nginx/conf.d/default.conf:ro \
   nginx:1.27-alpine nginx -t
 ```
+
+---
+
+## 5bis. Passerelle RBAC (`access-gateway`) dans le chemin du chat
+
+> **Pourquoi cette section existe.** Toute la couche de sécurité d'entreprise —
+> RBAC par groupe/Document Set, cache RBAC-safe, streaming SSE, filtre ACL
+> par-document, `/metrics` — vit dans `access-gateway/` mais n'était **déployée
+> nulle part** : un service **orphelin**, hors du chemin de requête. Cette
+> surcouche le rend **réel** : chaque requête de chat le traverse, RBAC appliqué.
+
+### a) Topologie du chemin de requête
+
+```
+Navigateur
+  │ POST https://<ONYX_DOMAIN>/api/chat/send-message   (fetch/XHR, streaming)
+  ▼
+caddy  ── supprime tout X-OIDC-Claims & X-Auth-Request-* ENTRANT (anti-usurpation)
+  │     ── forward_auth → oauth2-proxy:/oauth2/auth
+  │           • 2xx (session valide) → copy_headers X-Auth-Request-User (=oid), …
+  │           • 401 → remonté tel quel (XHR ; cf. limite « double session » plus bas)
+  ▼
+nginx  ── location = /api/chat/send-message
+  │     ── pose X-OIDC-Claims = {"oid":…,"sub":…,"upn":…}  (UNIQUEMENT depuis
+  │        l'identité vérifiée recopiée par Caddy ; vide si absente → 401 passerelle)
+  │     ── rewrite → /v1/chat/send-message ; proxy_buffering off (streaming)
+  ▼
+access-gateway:8200  ── RBAC : force retrieval_options.filters.document_set au
+  │                      périmètre autorisé (deny-by-default, non élargissable),
+  │                      cache RBAC-safe (Redis base 1), garde-fous, ACL par-doc,
+  │                      streaming SSE, /metrics
+  ▼
+api_server:8080/chat/send-message   (Onyx, interne onix-net)
+```
+
+Le **reste** du site (UI Onyx, autres `/api/*`, `/openapi.json`, WebSocket,
+uploads) continue d'aller **directement à Onyx** via nginx, avec l'**OIDC natif
+d'Onyx** (inchangé). On ne route par la passerelle **que** le chemin chat : c'est
+là que se joue le cloisonnement RBAC, et cela évite d'imposer un second flux OIDC
+à toute l'UI.
+
+### b) Contrat OIDC → `X-OIDC-Claims` (identité vérifiée)
+
+La passerelle **fait confiance** à l'en-tête `X-OIDC-Claims` (JSON de claims
+**déjà vérifiés**). Rien dans la base ne produisait cet en-tête : l'OIDC natif
+d'Onyx authentifie l'UI mais n'**expose pas** les claims à un proxy tiers. D'où
+l'ajout d'**oauth2-proxy** comme **vérificateur OIDC** :
+
+1. `oauth2-proxy` porte la poignée de main OIDC Entra (app registration **dédiée**,
+   Redirect URI `https://<ONYX_DOMAIN>/oauth2/callback`), valide le jeton, tient un
+   cookie de session, et — avec `--set-xauthrequest` — **renvoie** l'identité
+   vérifiée en en-têtes de **réponse** sur `/oauth2/auth` :
+   - `--user-id-claim=oid`  → `X-Auth-Request-User` = **oid** (objectId Entra,
+     identité **stable** utilisée aussi par Microsoft Graph) ;
+   - `--oidc-email-claim=upn` / `X-Auth-Request-Preferred-Username` = **upn**.
+2. **Caddy** (`forward_auth` → `/oauth2/auth`) **recopie** ces en-têtes (`copy_headers`)
+   sur la requête transmise à nginx **si** la session est valide.
+3. **nginx** assemble alors `X-OIDC-Claims = {"oid":"…","sub":"…","upn":"…"}` à
+   partir de ces valeurs **vérifiées** (directive `set`, qui interpole les
+   variables — un `map` n'interpole pas dans une chaîne, cf. commentaires du
+   fichier) et le transmet à la passerelle.
+
+La passerelle lit `oid`/`upn` (cf. `access-gateway/app/identity.py`) puis, en mode
+`GATEWAY_GROUP_SOURCE=graph` (**défaut prod**), résout l'appartenance aux groupes
+via **Microsoft Graph** `transitiveMemberOf` (permission **application** de moindre
+privilège `GroupMember.Read.All`). Elle traduit groupe → Document Set (mapping
+JSON, deny-by-default) et force le périmètre.
+
+### c) Règle anti-usurpation (le point critique)
+
+`X-OIDC-Claims` est **digne de confiance UNIQUEMENT** parce qu'un client ne peut
+pas le poser. Garanti à **deux** niveaux (défense en profondeur) :
+
+- **Au bord (Caddy)** : `request_header -X-OIDC-Claims` (et `-X-Auth-Request-*`)
+  **supprime** tout en-tête entrant homonyme **avant** tout routage. Un client qui
+  envoie `X-OIDC-Claims: {"oid":"admin",…}` se le fait **retirer** immédiatement.
+- **Au hop interne (nginx)** : sur **chaque** `location`, `proxy_set_header
+  X-OIDC-Claims …` **écrase** la valeur — vide partout **sauf** sur le chemin chat,
+  où elle est (re)construite **exclusivement** depuis l'identité vérifiée par
+  oauth2-proxy. Aucune valeur cliente ne survit.
+
+**Fail-closed** : si oauth2-proxy n'a pas fourni d'oid (session absente),
+`X-OIDC-Claims` est **vide** → la passerelle répond **401** (jamais un passage
+« ouvert »). Groupes irrésolvables (overage + Graph en erreur) → **502** ; aucun
+Document Set autorisé → **403** (`GATEWAY_DENY_IF_NO_MATCH=true`).
+
+### d) Activer / régler les capacités en prod (variables d'env)
+
+Toutes dans `deploy/prod/.env.prod` (cf. `env.prod.template`, section « PASSERELLE
+RBAC »). Valeurs par défaut **sûres** ; voici les leviers :
+
+| Capacité | Variable(s) clés | Notes |
+|---|---|---|
+| **Cache RBAC-safe** | `GATEWAY_CACHE_ENABLED=true`, `GATEWAY_CACHE_HMAC_SECRET` (**requis**), TTL/locale | Réutilise le **Redis `cache`** existant en **base 1** (Onyx = base 0) : la passerelle compose `redis://:${REDIS_PASSWORD}@cache:6379/1`. Clé HMAC = périmètre Document Set **trié** → **aucune** fuite inter-utilisateur. Sans secret HMAC stable, le cache se **désactive** au démarrage (log CRITICAL). Cf. `docs/CACHE.md`. |
+| **ACL par-document** | `GATEWAY_DOC_ACL_ENABLED=true`, fichier monté sur `/config/doc_acl.json` | **ACTIF seulement** si le fichier ACL existe (sinon **INACTIF** + avertissement — un deny-all serait une panne). Générable via `make sync-doc-acl`. Filtre de **sortie** (retire les citations non autorisées). Cf. `docs/RBAC.md`. |
+| **ACL SharePoint via Graph** | `GATEWAY_DOC_ACL_GRAPH_ENABLED=true`, mapping `/config/doc_acl_mapping.json` | **Opt-in** : nécessite Graph configuré. OR-merge avec l'ACL statique. Re-sync selon `GATEWAY_DOC_ACL_REFRESH_SECONDS`. |
+| **Streaming SSE** | `GATEWAY_STREAM_ENABLED=true`, `GATEWAY_STREAM_IDLE_TIMEOUT` | Relais token-par-token (latence perçue ÷10 sur CPU). nginx **désactive le buffering** sur le chemin chat. Cf. `docs/STREAMING.md`. |
+| **Garde-fous** | `GATEWAY_GUARDRAIL_ENABLED=true` | Post-filtre déterministe (couche 3) sur la réponse. Laisser actif. |
+| **/metrics** | `GATEWAY_METRICS_ENABLED=true` | Prometheus, réseau interne (pas de port hôte). À scraper depuis `monitoring/`. |
+| **Source des groupes** | `GATEWAY_GROUP_SOURCE=graph` + `GATEWAY_GRAPH_*` | `graph` recommandé (cf. §5bis-b). `auto`/`claims` : voir limite ci-dessous. |
+
+**Secrets** : `GATEWAY_CACHE_HMAC_SECRET` et `GATEWAY_AUDIT_SALT` sont générés par
+`make secrets-gateway` (écrit dans `access-gateway/.env`) — **recopiez-les** dans
+`deploy/prod/.env.prod`, ou injectez-les depuis le **coffre** (Key Vault). Le
+secret client Graph va dans `GATEWAY_GRAPH_CLIENT_SECRET`, le secret oauth2-proxy
+dans `OAUTH2_PROXY_CLIENT_SECRET`, et `OAUTH2_PROXY_COOKIE_SECRET` se génère via
+`openssl rand -base64 32`. *(Note : `scripts/gen-secrets.sh` ne génère
+automatiquement les `GATEWAY_*` que pour le fichier de la passerelle, pas pour
+`.env.prod` — d'où la recopie/coffre.)*
+
+### e) Mapping & app registration Entra (à préparer)
+
+- **Mapping groupe → Document Set** : montez votre fichier réel sur
+  `/config/group_map.json` (le compose monte par défaut l'**exemple** versionné
+  `access-gateway/config/group_map.example.json` — **à adapter**, deny-by-default).
+- **Entra** : déclarez (au choix) **une app dédiée oauth2-proxy** (Redirect URI
+  `…/oauth2/callback`) **et** une app/permission **Graph** `GroupMember.Read.All`
+  (consentement admin) pour la résolution des groupes. L'oid émis par oauth2-proxy
+  et l'oid interrogé par Graph **coïncident** (même tenant).
+
+### f) Limites HONNÊTES (ce qui exige un tenant Entra réel / a un compromis)
+
+1. **Validable hors ligne (fait ici)** : `compose config -q` (base + prod) ✓,
+   `caddy validate` ✓ (*Valid configuration*), parse nginx ✓, topologie
+   interne-only (seul Caddy publie 80/443) ✓, règle anti-usurpation **présente**
+   dans Caddy **et** nginx ✓.
+2. **Exige un tenant Entra + domaine réels (NON validé ici, pas d'IdP en CI)** :
+   le **flux OIDC bout-en-bout** d'oauth2-proxy (sign-in, callback, cookie), la
+   présence effective de `X-Auth-Request-User=oid` après `/oauth2/auth`, et la
+   résolution **Graph** des groupes. À vérifier en `test` (cf. §9) avant prod.
+3. **Double session OIDC** (compromis assumé) : l'UI Onyx utilise l'OIDC **natif**
+   d'Onyx ; le chemin chat utilise la session **oauth2-proxy**. Au **premier**
+   appel chat, oauth2-proxy n'a pas de session → **401** (non redirigé, car XHR).
+   L'utilisateur établit la session oauth2-proxy par **une** navigation de premier
+   niveau vers `https://<ONYX_DOMAIN>/oauth2/sign_in` (SSO Entra **silencieux** s'il
+   est déjà connecté), après quoi les XHR portent le cookie. *Mieux à terme :*
+   placer oauth2-proxy **devant tout** le site (session unique) — non fait ici pour
+   ne pas casser l'UI Onyx (Onyx FOSS ne délègue pas proprement l'auth à un en-tête
+   amont) ; c'est le compromis du périmètre « 5 fichiers, sans toucher au code ».
+4. **Groupes en mode `claims`/`auto`** : `oauth2-proxy` émet les groupes en **CSV**
+   (`X-Auth-Request-Groups`), or la passerelle attend un **tableau JSON** dans
+   `groups`. nginx **pur** (sans `njs`) ne reconstruit pas un tableau JSON fiable
+   depuis une chaîne CSV → on **n'injecte pas** `groups` dans `X-OIDC-Claims`. On
+   privilégie donc `GATEWAY_GROUP_SOURCE=graph` (robuste, gère l'overage > ~200
+   groupes). Pour `auto`/`claims`, il faudrait soit `njs`, soit qu'oauth2-proxy
+   émette un en-tête JSON ad hoc (alpha `injectResponseHeaders`) — **hors du
+   périmètre** de cette livraison.
+5. **`compose config -q` autonome** (`-f deploy/prod/docker-compose.prod.yml` seul)
+   **échoue volontairement** : la surcouche **référence** des services de la base
+   (`cache`, `api_server`, `nginx`). Valider **empilé** :
+   `make config-prod ENV=deploy/prod/.env.prod` (cf. §12).
 
 ---
 
@@ -342,7 +515,13 @@ make restore DIR=backups/<horodatage>        # cf. RUNBOOK §5
 - [ ] `make preflight-prod` : en exposition, **refuse** sans TLS+OIDC+e-mail ;
       **passe** avec la configuration complète.
 - [ ] `docker compose … ps` : **seul `caddy` publie 80/443** (sur `BIND_IP`) ;
-      `nginx` n'expose **aucun** port public.
+      `nginx`, `access-gateway`, `oauth2-proxy` n'exposent **aucun** port public.
+- [ ] **Passerelle RBAC** (§5bis) : `access-gateway` et `oauth2-proxy` **healthy** ;
+      `OAUTH2_PROXY_*`, `GATEWAY_GRAPH_*`, `GATEWAY_CACHE_HMAC_SECRET`,
+      `GATEWAY_AUDIT_SALT` renseignés (coffre) ; mapping `group_map.json` **adapté**
+      (pas l'exemple) ; chemin chat **vérifié** end-to-end en `test` (un appel
+      `/api/chat/send-message` **sans** session oauth2-proxy → **401** ; **avec** →
+      Document Set forcé, cf. logs `onix.gateway.audit`).
 - [ ] `https://<ONYX_DOMAIN>` répond en **TLS valide**, `http://` **redirige** vers `https://`.
 - [ ] En-tête **HSTS** présent ; connexion **via Entra ID** uniquement.
 - [ ] `deploy/prod/.env.prod` : `chmod 600`, **non** versionné, secrets non vides
@@ -357,13 +536,19 @@ make restore DIR=backups/<horodatage>        # cf. RUNBOOK §5
 
 Validable **hors ligne / sans domaine** (fait par WS3) : syntaxe Caddyfile
 (`caddy validate` → *Valid configuration*), composition `config -q` (base + prod),
-logique du garde-fou (refus/passe), `gitleaks 0`, gitignore des `.env`.
+logique du garde-fou (refus/passe), `gitleaks 0`, gitignore des `.env`, **et — pour
+la passerelle RBAC (§5bis) — la présence de la règle anti-usurpation (Caddy + nginx)
+et le câblage du chemin chat → `access-gateway:8200/v1/chat/send-message`**.
 
 Exige un **vrai domaine public + DNS + ports 80/443 ouverts + tenant Entra ID** :
 - émission/renouvellement **réels** du certificat Let's Encrypt (ACME) ;
 - bout-en-bout **OIDC** (redirection vers Entra ID, callback, vérification d'e-mail,
   filtrage `VALID_EMAIL_DOMAINS`) ;
-- HSTS observé dans un navigateur, redirection `80→443` en conditions réelles.
+- HSTS observé dans un navigateur, redirection `80→443` en conditions réelles ;
+- **passerelle RBAC bout-en-bout** (§5bis-f) : flux OIDC d'**oauth2-proxy**,
+  présence de `X-Auth-Request-User=oid` après `/oauth2/auth`, résolution **Graph**
+  des groupes, forçage du Document Set sur un vrai `/api/chat/send-message`. **Non
+  validable sans IdP** : à exercer en `test` avant la bascule prod.
 
 > Pour la **haute disponibilité, le scale-out et le sans-interruption strict**,
 > se référer à **WS4**. La présente surcouche cible un **mono-nœud durci, exposé,

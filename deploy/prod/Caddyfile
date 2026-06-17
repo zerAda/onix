@@ -60,17 +60,84 @@
 		-X-Powered-By
 	}
 
-	# --- Proxy vers le nginx INTERNE -----------------------------------------
-	# nginx (réseau onix-net) garde le routage applicatif : /api -> api_server
-	# (réécriture du préfixe), / -> web_server, support WebSocket (streaming),
-	# upload jusqu'à 5 Go. Caddy transmet l'identité TLS via X-Forwarded-*.
-	reverse_proxy nginx:80 {
-		header_up X-Forwarded-Proto https
-		# Délais larges : requêtes LLM / indexation longues (aligné sur nginx).
-		transport http {
-			dial_timeout 10s
-			read_timeout 300s
-			write_timeout 300s
+	# =========================================================================
+	# ANTI-USURPATION (RÈGLE D'ARÊTE) — appliquée à TOUTES les requêtes entrantes.
+	# -------------------------------------------------------------------------
+	# La passerelle RBAC FAIT CONFIANCE à `X-OIDC-Claims`. Un client ne doit donc
+	# JAMAIS pouvoir le poser. On SUPPRIME tout en-tête entrant homonyme AU BORD,
+	# avant tout routage. Seul nginx (hop interne) le (re)pose, et UNIQUEMENT à
+	# partir de l'identité VÉRIFIÉE par oauth2-proxy (cf. nginx.prod.conf). On
+	# neutralise aussi les en-têtes `X-Auth-Request-*` entrants (idem : ne doivent
+	# provenir que d'oauth2-proxy, jamais du client).
+	request_header -X-OIDC-Claims
+	request_header -X-Auth-Request-User
+	request_header -X-Auth-Request-Email
+	request_header -X-Auth-Request-Groups
+	request_header -X-Auth-Request-Preferred-Username
+	request_header -X-Auth-Request-Access-Token
+
+	# =========================================================================
+	# 1) Endpoints d'oauth2-proxy (/oauth2/*) — SANS authentification préalable
+	# (sinon boucle de redirection). C'est ici que se déroule la poignée de main
+	# OIDC Entra (sign_in, callback, sign_out) et l'introspection /oauth2/auth.
+	# =========================================================================
+	handle /oauth2/* {
+		reverse_proxy oauth2-proxy:4180 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Uri {uri}
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	# =========================================================================
+	# 2) CHEMIN CHAT (le cœur RBAC) — protégé par oauth2-proxy via forward_auth,
+	# puis routé vers nginx qui le dirige vers la PASSERELLE. C'est le seul
+	# chemin qui exige l'identité VÉRIFIÉE en en-tête (X-OIDC-Claims posé par
+	# nginx). Onyx publie la réponse du chat sur /api/chat/send-message.
+	# -------------------------------------------------------------------------
+	# forward_auth interroge oauth2-proxy:/oauth2/auth. Si 2xx (session valide),
+	# Caddy RECOPIE les en-têtes d'identité VÉRIFIÉS sur la requête amont
+	# (copy_headers) ; si 401, on redirige vers la page de connexion OIDC.
+	# =========================================================================
+	handle /api/chat/send-message* {
+		forward_auth oauth2-proxy:4180 {
+			uri /oauth2/auth
+			header_up X-Real-IP {remote_host}
+			# En-têtes d'identité VÉRIFIÉS recopiés sur la requête vers nginx.
+			# (oauth2-proxy --set-xauthrequest les renvoie en réponse de /oauth2/auth.)
+			copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Preferred-Username X-Auth-Request-Groups X-Auth-Request-Access-Token
+		}
+		# IMPORTANT (chemin API/XHR) : on NE redirige PAS un 401 vers une page de
+		# connexion — le chat est appelé en `fetch()` (XHR), qui ne suivrait pas une
+		# page HTML de login. forward_auth LAISSE donc remonter le 401 d'oauth2-proxy
+		# tel quel ; la SPA / l'opérateur établit la session oauth2-proxy par une
+		# navigation de premier niveau UNE fois (visite de https://<domaine>/oauth2/sign_in,
+		# SSO Entra silencieux si déjà connecté). Cf. docs/DEPLOY_PROD.md §5bis (limite).
+		reverse_proxy nginx:80 {
+			header_up X-Forwarded-Proto https
+			transport http {
+				dial_timeout 10s
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+
+	# =========================================================================
+	# 3) RESTE DU SITE (UI Onyx, autres /api, /openapi.json, WebSocket, uploads)
+	# -> nginx INTERNE puis Onyx. Conserve l'OIDC NATIF d'Onyx (inchangé) : on
+	# n'impose PAS oauth2-proxy ici pour ne pas créer de double flux OIDC qui
+	# casserait l'UI. Seul le chemin chat ci-dessus traverse la passerelle RBAC.
+	# =========================================================================
+	handle {
+		reverse_proxy nginx:80 {
+			header_up X-Forwarded-Proto https
+			# Délais larges : requêtes LLM / indexation longues (aligné sur nginx).
+			transport http {
+				dial_timeout 10s
+				read_timeout 300s
+				write_timeout 300s
+			}
 		}
 	}
 
