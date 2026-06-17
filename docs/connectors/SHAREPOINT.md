@@ -209,6 +209,150 @@ Sans permission sync, l'index est partagé. **Deux niveaux** de réponse :
 
 > Documentez le choix retenu : c'est la **réserve n°1** d'un audit de sécurité.
 
+### 6.1 ACL par-document **auto-dérivée** de SharePoint (Microsoft Graph)
+
+Le filtre par-document FOSS ([`../RBAC.md`](../RBAC.md) §4.3,
+[`../../access-gateway/app/doc_acl.py`](../../access-gateway/app/doc_acl.py))
+s'appuyait jusqu'ici sur un fichier ACL **maintenu à la main** (`doc_acl.json`).
+La passerelle sait désormais **dériver cette ACL automatiquement** des
+**permissions par item** réelles de SharePoint, via Microsoft Graph
+([`../../access-gateway/app/graph_acl.py`](../../access-gateway/app/graph_acl.py)).
+Cela **ferme la dernière réserve « RBAC par document = EE » autant que le FOSS le
+permet** — mais **reste un filtre de SORTIE** (lire §6.2 ci-dessous : honnêteté).
+
+#### Endpoint Graph + permission applicative
+
+Pour chaque item, on lit ses permissions :
+```http
+GET https://graph.microsoft.com/v1.0/sites/{site-id}/drives/{drive-id}/items/{item-id}/permissions
+Authorization: Bearer <app-token>
+Accept: application/json
+```
+- **Permission APPLICATION (app-only) requise : `Sites.Read.All`** (ou
+  **`Sites.Selected`** + octroi par site, cf. §3 Mode A — moindre privilège),
+  avec **`Grant admin consent`**. `Files.Read.All` fonctionne aussi mais est plus
+  large. **Pas besoin** des droits étendus du Mode B (permission sync EE).
+
+> ℹ️ **Vérification des endpoints.** La confirmation via le **Microsoft Learn MCP**
+> prévue par le périmètre **n'a pas pu être exécutée** (outil refusé par la
+> politique de permissions de l'environnement — même situation que la recherche
+> Context7 notée dans [`../DECISION_RBAC.md`](../DECISION_RBAC.md) §3). L'endpoint
+> `…/items/{item-id}/permissions`, la ressource `permission` et l'`identitySet`
+> `grantedToV2` (user/group/siteGroup) reposent donc sur l'API Graph **v1.0**
+> stable et documentée. **Re-vérifier sur learn.microsoft.com** (« List
+> permissions / driveItem ») avant un déploiement sensible.
+- Jeton obtenu en **client credentials** (mêmes creds que la passerelle :
+  `GATEWAY_GRAPH_TENANT_ID` / `_CLIENT_ID` / `_CLIENT_SECRET`). **Secrets en env
+  uniquement** ; jamais journalisés.
+
+#### Modèle de permission parsé (`grantedToV2`)
+
+Pour chaque `permission` de l'item, on retient celles qui confèrent **au moins la
+lecture** (`roles` ⊇ `read`/`write`/`owner`…) — directes **ou héritées**
+(`inheritedFrom` présent : un héritage de lecture donne bien l'accès) — et on
+agrège les identités :
+
+| Champ Graph | → mappé vers | Sens |
+|---|---|---|
+| `grantedToV2.user.id` | `users` | objectId **utilisateur** Entra |
+| `grantedToV2.group.id` | `groups` | objectId **groupe** Entra (de sécurité / M365) |
+| `grantedToV2.siteGroup.id` | `groups` | id de **groupe SharePoint** (membres SP du site) |
+| `grantedToIdentitiesV2[]` | idem | variante **liste** (partages multiples) |
+
+Les liens **anonymes / organisation** (sans identité) sont **ignorés** (ils
+n'identifient personne à recouper avec le `Principal` de l'appelant). Les
+identités sont comparées **casse-insensible** (cohérent avec `StaticDocACL`).
+
+> ⚠️ **`siteGroup` (groupe SharePoint) ≠ groupe Entra.** Si une ACL repose sur un
+> *groupe SharePoint* (et non un groupe Entra), son `id` est un identifiant **SP**
+> qui n'apparaît PAS dans les `group_ids` Entra du `Principal` (claims OIDC /
+> `transitiveMemberOf`). Pour que le recoupement fonctionne, privilégiez des
+> **permissions par groupe Entra** côté SharePoint, ou alimentez les `group_ids`
+> en conséquence. Documenté comme limite ci-dessous.
+
+#### Le maillon dur : mapping `doc_id ↔ item SharePoint`
+
+Un `doc_id` Onyx doit être relié à `(site_id, drive_id, item_id)` pour qu'on
+puisse lire ses permissions. **Onyx stocke l'URL source / l'id de drive-item dans
+les MÉTADONNÉES** du document (connecteur SharePoint :
+`backend/onyx/connectors/sharepoint/connector.py`). On **ne devine pas** ce lien :
+on fournit un **mapping explicite** (JSON) :
+
+```json
+{
+  "_version": 1,
+  "<onyx_doc_id_1>": { "site_id": "<site-id>", "drive_id": "<drive-id>", "item_id": "<item-id>" },
+  "<onyx_doc_id_2>": { "site_id": "<site-id>", "drive_id": "<drive-id>", "item_id": "<item-id>" }
+}
+```
+
+**Comment l'obtenir** (selon votre accès à Onyx) :
+1. **Métadonnées des documents Onyx.** L'API/admin Onyx expose, par document, le
+   `document_id` et sa **source URL** (webUrl SharePoint). Exportez la liste, puis
+   résolvez chaque webUrl en `(site_id, drive_id, item_id)` via Graph
+   (`GET /sites/{hostname}:/sites/{path}`, puis `…/drives`, puis
+   `…/drive/root:/{rel-path}`), ou directement
+   `GET /shares/{shareIdOrEncodedUrl}/driveItem` qui renvoie `id` (item),
+   `parentReference.driveId` et `parentReference.siteId`.
+2. **Connecteur.** Le connecteur SharePoint d'Onyx manipule déjà
+   `(drive_id, item_id)` lors de l'indexation : un export ad hoc depuis la base
+   Onyx (table des documents + métadonnées de connecteur) fournit le mapping sans
+   re-résolution.
+
+> Le mapping est la **frontière de responsabilité honnête** : la qualité de l'ACL
+> dérivée dépend de l'exactitude du lien `doc_id ↔ item`. Versionnez-le.
+
+#### Deux modes d'usage
+
+- **Matérialisé (recommandé pour démarrer).** Le CLI
+  [`../../scripts/sync-doc-acl.py`](../../scripts/sync-doc-acl.py) lit le mapping +
+  les creds Graph (env) et **écrit `doc_acl.json`** — donc le chemin
+  `StaticDocACL` existant fonctionne **sans changement de code**, et le résultat
+  est **auditable / diffable** :
+  ```bash
+  make sync-doc-acl            # chemins par défaut (voir variables MAPPING / OUT)
+  # ou explicitement :
+  GATEWAY_GRAPH_TENANT_ID=… GATEWAY_GRAPH_CLIENT_ID=… GATEWAY_GRAPH_CLIENT_SECRET=… \
+    python scripts/sync-doc-acl.py \
+      --mapping access-gateway/config/doc_acl_mapping.json \
+      --out     access-gateway/config/doc_acl.json
+  ```
+  À planifier en **cron / CI** pour propager les changements d'accès (un retrait
+  d'accès SharePoint disparaît du `doc_acl.json` au sync suivant). **Cadence**
+  conseillée : alignée sur la *Refresh Frequency* du connecteur (§4.3, défaut 30
+  min) ou plus lâche selon la sensibilité (la propagation reste **différée**,
+  jamais instantanée — comme en EE, où la sync est aussi périodique).
+
+- **En vif (ACL vivante en mémoire).** La passerelle peut tenir l'ACL Graph
+  **en mémoire** et l'OR-merger avec le statique (`CompositeDocACL`), rafraîchie
+  selon un **TTL**. Réglages (env, additifs ; défaut **désactivé**) :
+
+  | Variable | Défaut | Effet |
+  |---|---|---|
+  | `GATEWAY_DOC_ACL_GRAPH_ENABLED` | `false` | Active la source d'ACL Graph (opt-in). |
+  | `GATEWAY_DOC_ACL_MAPPING_PATH` | `config/doc_acl_mapping.json` | Mapping `doc_id → {site_id, drive_id, item_id}`. |
+  | `GATEWAY_DOC_ACL_REFRESH_SECONDS` | `900` | TTL (s) avant re-synchronisation. `0` = figée après 1er build. |
+
+  Requiert `GATEWAY_GRAPH_*` configuré. L'OR-merge garantit qu'un document
+  autorisé par **l'une** des sources (statique **ou** Graph) reste visible.
+
+#### 6.2 Honnêteté — ce que cette dérivation N'EST PAS
+
+> **Toujours un filtre de SORTIE.** On synchronise **qui peut VOIR** un document
+> (donc sa **citation**), pas **ce que le LLM a récupéré** à la génération. Onyx
+> FOSS fait toujours raisonner le LLM sur tout le Document Set autorisé ; le LLM a
+> donc pu lire un fichier non autorisé et en glisser un fragment dans le texte
+> **sans citation traçable**. La dérivation Graph rend le filtre **automatique**
+> (plus de JSON manuel) ; elle **ne change pas sa nature**. Le **« zéro-fuite » à
+> la RECHERCHE** reste **Onyx EE/Cloud** (permission sync, certificat) ou des
+> **instances séparées par tier d'accès**. Détail : [`../RBAC.md`](../RBAC.md)
+> §4.4 et [`../DECISION_RBAC.md`](../DECISION_RBAC.md) §4.
+>
+> Limites secondaires : (a) un `siteGroup` SharePoint ne se recoupe pas avec les
+> groupes **Entra** du `Principal` (préférez les ACL par groupe Entra) ; (b) la
+> qualité dépend du **mapping `doc_id ↔ item`** ; (c) la propagation est
+> **différée** (cadence du sync), pas instantanée.
+
 ## 7. Validation
 - L'indexation se termine (Admin → Connectors → statut « succeeded »).
 - Une question sur un document **connu** renvoie une **réponse sourcée** (citation).

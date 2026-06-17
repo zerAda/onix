@@ -106,6 +106,20 @@ class Settings:
     # par l'orchestrateur). Un LLM CPU peut être lent : valeur généreuse.
     stream_idle_timeout: float
 
+    # ── ACL par DOCUMENT auto-dérivée de SharePoint via Graph (cf. graph_acl.py) ──
+    # Active la source d'ACL VIVANTE : la passerelle lit les permissions par item
+    # SharePoint (Microsoft Graph) et OR-merge cette ACL avec le `doc_acl.json`
+    # statique (CompositeDocACL). Reste un filtre de SORTIE (cf. docs/RBAC.md §4.4).
+    # Désactivé par défaut (opt-in : nécessite Graph configuré + un mapping).
+    doc_acl_graph_enabled: bool
+    # Chemin du mapping JSON { doc_id: {site_id, drive_id, item_id} } reliant un
+    # doc Onyx à son item SharePoint (cf. docs/connectors/SHAREPOINT.md). Requis
+    # si doc_acl_graph_enabled=true.
+    doc_acl_mapping_path: str
+    # TTL (s) de l'ACL Graph en mémoire : au-delà, elle est re-synchronisée
+    # (rafraîchi périodique). 0 ⇒ figée après le 1er build (pas de re-sync auto).
+    doc_acl_refresh_seconds: int
+
     @property
     def graph_configured(self) -> bool:
         return bool(self.graph_tenant_id and self.graph_client_id and self.graph_client_secret)
@@ -150,6 +164,12 @@ def get_settings() -> Settings:
         # Streaming SSE (cf. app/streaming.py + docs/STREAMING.md).
         stream_enabled=_bool("GATEWAY_STREAM_ENABLED", True),
         stream_idle_timeout=float(os.environ.get("GATEWAY_STREAM_IDLE_TIMEOUT", "60")),
+        # ACL par document auto-dérivée de SharePoint via Graph (cf. app/graph_acl.py).
+        doc_acl_graph_enabled=_bool("GATEWAY_DOC_ACL_GRAPH_ENABLED", False),
+        doc_acl_mapping_path=os.environ.get(
+            "GATEWAY_DOC_ACL_MAPPING_PATH", "config/doc_acl_mapping.json"
+        ).strip(),
+        doc_acl_refresh_seconds=int(os.environ.get("GATEWAY_DOC_ACL_REFRESH_SECONDS", "900")),
     )
 
 
