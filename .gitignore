@@ -24,3 +24,7 @@ access-gateway/config/group_map.json
 
 **/__pycache__/
 *.pyc
+
+# Bicep — ARM compilé généré par `bicep build` (regénérable depuis *.bicep ;
+# `az deployment` compile à la volée). Ne pas committer l'artefact.
+deploy/azure/bicep/main.json
