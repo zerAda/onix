@@ -35,9 +35,10 @@ Comme le CSS est chargé **en dernier**, il gagne en cascade : il surcharge les
 |---|---|
 | [`../nginx/branding/gerep-theme.css`](../nginx/branding/gerep-theme.css) | Thème GEREP (tokens + surcharge OPAL + fallbacks) |
 | [`../nginx/branding/favicon.svg`](../nginx/branding/favicon.svg) | Favicon dérivé du « mark » du logo |
-| [`../nginx/branding/gerep-logo.svg`](../nginx/branding/gerep-logo.svg) | Logo officiel (pour l'upload admin, cf. §4) |
-| [`../nginx/onyx.conf`](../nginx/onyx.conf) | Câblage (sub_filter + `location /onix-branding/`) |
-| [`../docker-compose.yml`](../docker-compose.yml) | Montage du volume `./nginx/branding` dans nginx |
+| [`../nginx/branding/gerep-logo.svg`](../nginx/branding/gerep-logo.svg) | Logo officiel (substitué dans l'UI par CSS, cf. §4) |
+| [`../nginx/onyx.conf`](../nginx/onyx.conf) | Câblage **dev** (sub_filter + `location /onix-branding/`) |
+| [`../deploy/prod/nginx.prod.conf`](../deploy/prod/nginx.prod.conf) | Câblage **prod** (même surcouche, derrière Caddy) |
+| [`../docker-compose.yml`](../docker-compose.yml) · [`../deploy/prod/docker-compose.prod.yml`](../deploy/prod/docker-compose.prod.yml) | Montage du volume `./nginx/branding` dans nginx (dev + prod) |
 
 ## 2. Palette officielle et rôles
 
@@ -69,21 +70,37 @@ Ratio de contraste texte visé **≥ 4.5:1** :
 - Les **gris/neutres** OPAL sont conservés pour la lisibilité du contenu
   (réponses, documents) : on ne re-teinte que les accents de marque.
 
-## 4. Whitelabel admin Onyx (à faire en complément)
+## 4. Nom d'application et logo — **FOSS vs EE** (point d'honnêteté)
 
-La surcouche CSS gère les **couleurs**. Le **nom d'application** et le **logo**
-affichés dans l'UI se règlent via l'**admin Onyx** (whitelabel FOSS) :
+> ⚠️ **Le whitelabel ADMIN d'Onyx (nom d'app + upload de logo dans
+> *Admin → Settings*) est une fonctionnalité Enterprise Edition (EE), PAS
+> FOSS.** Preuve (audit byte-level) :
+> `ee/onyx/server/enterprise_settings/models.py:application_name, use_custom_logo`
+> — colonne **CE = « No »** dans
+> [`docs/audit-onyx/70-oss-health-licensing.md`](audit-onyx/70-oss-health-licensing.md)
+> (§ *Enterprise Settings & Whitelabeling*). L'écriture
+> `/admin/enterprise-settings` exige le tier **Business** ; masquer
+> « Powered by Onyx » est aussi EE.
 
-1. Se connecter avec un compte **admin**.
-2. Aller dans **Admin Panel → Settings → Whitelabeling** (ou
-   *Workspace Settings* selon la version).
-3. **Application Name** : saisir `GEREP`.
-4. **Logo** : téléverser [`nginx/branding/gerep-logo.svg`](../nginx/branding/gerep-logo.svg)
-   (et un logo « collapsed »/icône si le champ existe — réutiliser le favicon).
-5. Enregistrer, puis recharger l'UI (Ctrl+F5).
+onix tourne sur les images **Community Edition** (`onyxdotapp/onyx-backend`,
+`onyxdotapp/onyx-web-server` — cf. `docker-compose.yml`, sans
+`ENABLE_PAID_ENTERPRISE_EDITION_FEATURES`). **Ce panneau admin n'existe donc
+pas** dans notre déploiement. On obtient le **même résultat en FOSS** via la
+surcouche nginx que l'on maîtrise — aucun coût de licence :
 
-> Ces réglages sont stockés en base (persistés) : à refaire une seule fois par
-> environnement.
+- **Logo** : `gerep-theme.css` (§ *4) LOGO GEREP*) substitue le logo Onyx par
+  [`gerep-logo.svg`](../nginx/branding/gerep-logo.svg) via CSS (`content:` sur
+  les `<img>` de logo + lien de marque vers l'accueil). Un bloc **prêt à
+  activer** couvre le cas d'un logo en **SVG inline** (masquage + fond).
+- **Nom d'app (onglet navigateur)** : `nginx.*conf` réécrit
+  `<title>Onyx</title>` → `GEREP — Assistant Client 360` via `sub_filter`.
+
+> **Caveat best-effort** (cf. §6) : substitution de logo et réécriture de titre
+> dépendent du markup réel d'Onyx. Le titre peut être **re-fixé côté client**
+> par Next.js après hydratation (titre de conversation) ; les sélecteurs de logo
+> sont à **confirmer en live** via l'inspecteur. Sans EE, c'est la meilleure
+> approche ; avec un abonnement Onyx Business+, le whitelabel admin reste l'option
+> « officielle » (et permet de retirer la mention « Powered by Onyx »).
 
 ## 5. Ajuster le thème
 
@@ -108,10 +125,24 @@ passent à une teinte plus claire et lisible.
 > effectivement utilisés, et affiner les règles. Le CSS est commenté et entièrement
 > pilotable depuis les variables pour rendre ce réglage rapide.
 
-## 7. TODO — suivi production
+## 7. Production — surcouche reportée ✅
 
-Le déploiement de prod utilise une autre conf nginx :
-**`deploy/prod/nginx.prod.conf`**. La même surcouche (sub_filter +
-`location /onix-branding/` + montage du volume branding) **reste à reporter**
-sur le chemin prod (et sur la conf Caddy/`deploy/prod/Caddyfile` si le branding
-y transite). À traiter dans un lot dédié au scope `deploy/prod`.
+La même surcouche est désormais appliquée au chemin de **production** :
+
+- **`deploy/prod/nginx.prod.conf`** : `location /onix-branding/` + injection
+  `sub_filter` (thème, favicon, titre) dans `location /`, à l'identique du dev.
+- **`deploy/prod/docker-compose.prod.yml`** : la conf prod fait `!reset []` sur
+  les volumes nginx ; le volume `./nginx/branding:/etc/nginx/branding:ro` est
+  donc **re-monté explicitement** après le reset.
+- **`deploy/prod/Caddyfile`** : **aucun changement requis**. Caddy relaie tout
+  vers le nginx interne (y compris `/onix-branding/*` via le `handle` catch-all) ;
+  l'injection a lieu au niveau de nginx. Caddy peut recompresser la réponse
+  finale (sans effet, l'injection est déjà faite). Le CSS est servi en **même
+  origine** → compatible avec une CSP stricte (`style-src 'self'`).
+
+### Reste (hors périmètre docker-compose)
+
+- **Kubernetes** (`deploy/k8s/onix-ha`) : le web est servi directement par le
+  pod `web_server` (pas de hop nginx avec `sub_filter`). Y reporter le branding
+  demanderait un sidecar nginx ou une `ConfigMap` montée — **lot dédié** si un
+  déploiement K8s public est visé.

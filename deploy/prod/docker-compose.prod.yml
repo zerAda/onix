@@ -134,6 +134,10 @@ services:
       # (sinon Onyx verrait le hop interne en http → callbacks OIDC / cookies KO).
       - !reset []
       - ./deploy/prod/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      # Surcouche de branding GEREP : le !reset ci-dessus efface les volumes de la
+      # base (dont ./nginx/branding), on le RE-monte donc explicitement en RO.
+      # Servi via location /onix-branding/ (cf. nginx.prod.conf, docs/BRANDING_GEREP.md).
+      - ./nginx/branding:/etc/nginx/branding:ro
 
   # ---------------------------------------------------------------------------
   # api_server — OIDC Entra ID FORCÉ + durcissement. Ne démarre qu'après le
