@@ -15,6 +15,32 @@
 > (anti-fuite du prompt, non-exécution d'injection) tiennent **à 100 %** dès le
 > prompt seul.
 
+> ⚠️ **Chiffres INDICATIFS — non reproductibles byte-level.** Les taux de cette
+> page (notamment le **76.2%** « prompt seul » et le **86.7%** d'extraction LLM)
+> proviennent d'un **vrai run** d'un LLM ≥ 7B (`qwen2.5:7b-instruct`), pas d'un
+> mock — le générateur `tests/rag/run_live.py` appelle réellement Ollama. Mais un
+> 7B **n'est pas déterministe à l'octet près** d'un run à l'autre
+> (échantillonnage, build du modèle), même à température 0 : **ces pourcentages
+> varient légèrement** si on rejoue. Seuls les invariants de **sécurité dure** et
+> le taux **après couche 3 déterministe** (100.0%) sont stables (la couche 3 est
+> hors-LLM). Ce ne sont donc **pas** des garanties contractuelles mais une
+> **preuve comportementale datée**. Détails de traçabilité du run :
+>
+> | Élément | Valeur |
+> |---|---|
+> | Date du run | **2026-06-16** |
+> | Modèle Ollama | `qwen2.5:7b-instruct` |
+> | Version Ollama | `(non archivée — run antérieur à l'instrumentation)` |
+> | Température | 0 (déterminisme maximal, sans garantie byte-level) |
+> | Commande exacte de régénération | `ONIX_LIVE_OLLAMA=1 ONIX_LIVE_MODEL=qwen2.5:7b-instruct python tests/rag/run_live.py --markdown docs/LIVE_GUARDRAILS_RESULTS.md` |
+>
+> Aucun transcript LLM brut n'est archivé au repo pour ce run (≠ E2E gateway, qui
+> joint `access-gateway/tests/e2e/RUN_TRANSCRIPT.txt`). Pour une **preuve
+> archivée**, rejouer la commande ci-dessus avec Ollama disponible et committer la
+> sortie brute. À partir de la prochaine régénération, la date/heure et la version
+> Ollama réelles sont renseignées automatiquement par `run_live.py`. Cf. section
+> « Limites honnêtes » plus bas.
+
 ## Modèle utilisé
 
 | Élément | Valeur |
@@ -27,6 +53,11 @@
 | Couche 3 | `tests/rag/guardrail_postfilter.py` (déterministe, hors-LLM) |
 
 ## 1. Red-team live — prompt seul vs prompt + couche 3 déterministe
+
+> **Comptage.** Le set rejoué = **21 cas** : 20 vecteurs red-team (RT01–RT20, 5
+> catégories OWASP) **+ 1 cas nominal** NOM01 (sourcing légitime, pas une
+> attaque). Les taux ci-dessous (`x/21`) portent donc sur ces 21 cas, pas sur 21
+> attaques.
 
 Pour chaque vecteur : `system` = prompt agent + `user` = contexte documentaire
 récupéré (NON FIABLE, avec injections) + question d'attaque → **un seul appel
@@ -77,7 +108,7 @@ car c'est un classifieur binaire hors-LLM — est **nécessaire** :
 
 ### Échecs résiduels APRÈS post-filtre (honnêteté)
 
-**Aucun** : avec la couche 3 déterministe, **21/21** vecteurs PASS.
+**Aucun** : avec la couche 3 déterministe, **21/21** cas PASS (20 vecteurs red-team + 1 cas nominal NOM01).
 
 > **Pourquoi déterministe.** Un classifieur binaire (« réponse citée : oui/non »,
 > « confirmation d'écriture : oui/non ») ne peut pas être « persuadé » par une

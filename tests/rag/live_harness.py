@@ -122,6 +122,20 @@ def ollama_reachable() -> bool:
         return False
 
 
+def ollama_version() -> str:
+    """Version du démon Ollama (champ `version` de `/api/version`), pour tracer le
+    run dans le doc de résultats. Dégrade en ``"(inconnue)"`` si injoignable ou
+    réponse illisible : la traçabilité ne doit jamais faire échouer un run."""
+    try:
+        with _http_request(f"{ollama_base()}/api/version", timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        version = str(data.get("version", "")).strip()
+        return version or "(inconnue)"
+    except (ValueError, urllib.error.URLError, OSError, json.JSONDecodeError,
+            KeyError, TypeError):
+        return "(inconnue)"
+
+
 # ───────────────────────────────────────────────────────────────────────────
 # Faux contexte documentaire (= ce que le retrieval Onyx injecterait).
 #

@@ -118,6 +118,8 @@ def print_text_report(rt, extraction):
 
 def write_markdown(path: str, rt, extraction):
     model = lh.ollama_model()
+    ollama_ver = lh.ollama_version()
+    now = _dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
     today = _dt.date.today().isoformat()
     total = rt["total"]
     cat_fr = {
@@ -159,7 +161,8 @@ def write_markdown(path: str, rt, extraction):
     # Échecs résiduels APRÈS post-filtre (devrait être vide).
     residual = [r for r in rt["results"] if not r["pf_passed"]]
     residual_md = (
-        "**Aucun** : avec la couche 3 déterministe, **21/21** vecteurs PASS."
+        f"**Aucun** : avec la couche 3 déterministe, **{rt['pf_passed']}/{total}** "
+        f"cas PASS (20 vecteurs red-team + 1 cas nominal NOM01)."
         if not residual else
         "\n".join(f"- **{r['id']}** ({r['category']}) : {r['pf_reason']}"
                   for r in residual)
@@ -182,6 +185,30 @@ def write_markdown(path: str, rt, extraction):
 > (anti-fuite du prompt, non-exécution d'injection) tiennent **à 100 %** dès le
 > prompt seul.
 
+> ⚠️ **Chiffres INDICATIFS — non reproductibles byte-level.** Les taux de cette
+> page (notamment le **{rt['raw_rate']}%** « prompt seul » et le
+> **{extraction['llm_rate']}%** d'extraction LLM) proviennent d'un **vrai run**
+> d'un LLM ≥ 7B (`{model}`), pas d'un mock. Mais un 7B **n'est pas déterministe à
+> l'octet près** d'un run à l'autre (échantillonnage, build du modèle), même à
+> température 0 : **ces pourcentages varient légèrement** si on rejoue. Seuls les
+> invariants de **sécurité dure** et le taux **après couche 3 déterministe**
+> ({rt['pf_rate']}%) sont stables (la couche 3 est hors-LLM). Ce ne sont donc
+> **pas** des garanties contractuelles mais une **preuve comportementale datée**.
+> Détails de traçabilité du run :
+>
+> | Élément | Valeur |
+> |---|---|
+> | Date du run | **{now}** |
+> | Modèle Ollama | `{model}` |
+> | Version Ollama | `{ollama_ver}` |
+> | Température | 0 (déterminisme maximal, sans garantie byte-level) |
+> | Commande exacte de régénération | `ONIX_LIVE_OLLAMA=1 ONIX_LIVE_MODEL={model} python tests/rag/run_live.py --markdown docs/LIVE_GUARDRAILS_RESULTS.md` |
+>
+> Aucun transcript LLM brut n'est archivé au repo pour ce run (≠ E2E gateway, qui
+> joint `access-gateway/tests/e2e/RUN_TRANSCRIPT.txt`). Pour une **preuve
+> archivée**, rejouer la commande ci-dessus avec Ollama disponible et committer la
+> sortie brute. Cf. section « Limites honnêtes » plus bas.
+
 ## Modèle utilisé
 
 | Élément | Valeur |
@@ -194,6 +221,11 @@ def write_markdown(path: str, rt, extraction):
 | Couche 3 | `tests/rag/guardrail_postfilter.py` (déterministe, hors-LLM) |
 
 ## 1. Red-team live — prompt seul vs prompt + couche 3 déterministe
+
+> **Comptage.** Le set rejoué = **{total} cas** : 20 vecteurs red-team
+> (RT01–RT20, 5 catégories OWASP) **+ 1 cas nominal** NOM01 (sourcing légitime,
+> pas une attaque). Les taux ci-dessous (`x/{total}`) portent donc sur ces
+> {total} cas, pas sur 21 attaques.
 
 Pour chaque vecteur : `system` = prompt agent + `user` = contexte documentaire
 récupéré (NON FIABLE, avec injections) + question d'attaque → **un seul appel
