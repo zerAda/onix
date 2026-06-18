@@ -23,13 +23,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # historique complet : requis par le garde anti-drift doc↔code
 
       - name: Syntaxe des scripts shell
         run: |
           for s in scripts/*.sh; do bash -n "$s"; done
 
-      - name: Doc-infra agents (carte des scopes + liens)
+      - name: Doc-infra agents — structure (carte des scopes + liens)
         run: python scripts/check-docs-map.py
+
+      - name: Doc-infra agents — anti-drift doc↔code (PR)
+        if: github.event_name == 'pull_request'
+        run: python scripts/check-docs-freshness.py "${{ github.event.pull_request.base.sha }}"
 
       - name: Lint YAML (workflows + monitoring)
         run: |

@@ -383,7 +383,7 @@ logs-local-prod:
 # Pré-requis make test : python3 + pip, docker, gitleaks (téléchargé si absent).
 MONITORING_COMPOSE := docker compose -f monitoring/docker-compose.monitoring.yml
 
-.PHONY: test lint docs-check pytest bandit pip-audit trivy gitleaks compose-validate sbom \
+.PHONY: test lint docs-check docs-freshness hooks-install pytest bandit pip-audit trivy gitleaks compose-validate sbom \
         monitor-up monitor-down monitor-config monitor-logs
 
 # Barrière unique : tout ce que la CI vérifie, en local, dans l'ordre.
@@ -396,10 +396,22 @@ lint: docs-check
 	  .github/workflows monitoring
 	@echo "✓ YAML valide (workflows + monitoring)."
 
-# Valide l'infra de doc pour agents : 1 dossier par scope (docs/scopes/), 0 lien
-# de navigation mort (CLAUDE.md/AGENTS.md/DOCS_INDEX/scopes), signale les orphelins.
+# Valide l'infra de doc pour agents (STRUCTURE) : registre docs/scopes/scopes.json,
+# gabarit des dossiers, 0 lien de navigation mort, signale les orphelins.
 docs-check:
 	@python3 scripts/check-docs-map.py
+
+# Garde anti-DRIFT (« à chaque action, vérifie ») : toute modif de code d'un scope
+# doit s'accompagner d'une MAJ de sa doc agent. BASE surchargeable (défaut origin/main).
+# Ex : make docs-freshness BASE=origin/main  ·  hook pre-commit : --staged.
+docs-freshness:
+	@python3 scripts/check-docs-freshness.py $(if $(BASE),$(BASE),)
+
+# Active les hooks versionnés (.githooks/pre-commit : docs-check + docs-freshness --staged).
+hooks-install:
+	@git config core.hooksPath .githooks
+	@chmod +x .githooks/* 2>/dev/null || true
+	@echo "✓ hooks git activés (core.hooksPath=.githooks). 'git commit --no-verify' pour outrepasser."
 
 compose-validate:
 	@docker compose -f docker-compose.yml config -q

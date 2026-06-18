@@ -67,12 +67,17 @@ regarder, et pour la validation automatique) :
 9. **Sous-agent** — discipline, skills, MCP, cibles de preuve (cf. `ORCHESTRATION.md §2`).
 10. **Maintenir cette fiche** — quand et comment la mettre à jour.
 
-## Tenir l'infra à jour
+## Tenir l'infra à jour (« à chaque action »)
+
+Source de vérité : le registre [`scopes.json`](scopes.json) (scope → code/dossier/audit/state).
 
 ```bash
-make docs-check      # valide : 1 dossier par scope, 0 lien mort, signale les orphelins
+make docs-check        # STRUCTURE : registre + gabarit des dossiers + 0 lien mort (CI + make test)
+make docs-freshness    # ANTI-DRIFT : code de scope modifié ⇒ sa doc DOIT l'être (gate CI sur PR)
+make hooks-install     # pose les deux gardes en pre-commit (à chaque commit)
 ```
-Règle : **tu touches un scope → tu mets à jour son dossier ici**, son
+Règle : **tu touches le code d'un scope → tu mets à jour son dossier ici**, son
 `docs/audit-reality/<scope>.md` (preuve `fichier:ligne`) et son
-`ralph/state/<scope>.md` (journal). Voir [`../../CLAUDE.md`](../../CLAUDE.md)
-§ « Tenir cette doc-infra à jour ».
+`ralph/state/<scope>.md` (journal). Dérogation justifiée : `[docs-skip:<scope>]` dans
+le commit. Détail : [`../../CLAUDE.md`](../../CLAUDE.md) § « Tenir cette doc-infra à jour ».
+Carte agent racine : [`../../llms.txt`](../../llms.txt).

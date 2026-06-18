@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Hook pre-commit onix — garde la doc-infra agents saine ET non-divergente.
+# Activation : `make hooks-install` (pose core.hooksPath=.githooks).
+# Rapide (stdlib pure, aucun réseau). Pour outrepasser ponctuellement : `git commit --no-verify`.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+
+# 1. Structure : registre + gabarit des dossiers + liens de navigation.
+python3 "$ROOT/scripts/check-docs-map.py"
+
+# 2. Anti-drift : code de scope modifié (staged) ⇒ sa doc agent doit l'être aussi.
+python3 "$ROOT/scripts/check-docs-freshness.py" --staged
