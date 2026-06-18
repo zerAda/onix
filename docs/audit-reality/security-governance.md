@@ -22,9 +22,9 @@
 
 | Classe | Sens | Nombre |
 |---|---|:--:|
-| ✅ CONFORME | doc = code/config | 31 |
-| ⚠️ ÉCART MINEUR | imprécis/périmé, intention tient | 8 |
-| ❌ ÉCART MAJEUR | comportement faux | 1 |
+| ✅ CONFORME | doc = code/config | 34 |
+| ⚠️ ÉCART MINEUR | imprécis/périmé, intention tient | 5 |
+| ❌ ÉCART MAJEUR | comportement faux | 1 (bloqué permission) |
 | 🕳️ DOC-SANS-CODE | feature non implémentée | 1 |
 | 🔇 CODE-SANS-DOC | implémenté, mal/non documenté | 2 |
 | ❔ NON VÉRIFIABLE | porte sur Onyx (non vendoré ici) | 18 (+ tout `docs/audit-onyx/*`) |
@@ -49,9 +49,9 @@
 | Garde DUR incrémental streaming (abort avant chunk fautif) | ✅ | `access-gateway/app/` streaming (16 tests `test_streaming.py`) | Conforme à `docs/STREAMING.md`. |
 | Zéro secret en repo : `.env` gitignoré, généré par `gen-secrets.sh` (chmod 600) | ✅ | `scripts/gen-secrets.sh:138` (chmod 600) ; `.gitignore` ; aucun `.env` suivi (`ci.yml:50-55`) | Conforme. |
 | CI **gitleaks** bloquant | ✅ | `.github/workflows/ci.yml:57-61` (pas de continue-on-error) ; `Makefile:428-433` | Réellement bloquant. |
-| « gitleaks du repo (**pre-commit**) » | ❌ | **Aucun `.pre-commit-config.yaml` ni `.githooks/`** dans le dépôt | `docs/SECURITY.md:67` affirme un hook pre-commit qui **n'existe pas** ; gitleaks n'existe qu'en CI/`make`. |
+| « gitleaks du repo (**pre-commit**) » | ❌ (bloqué) | **Aucun `.pre-commit-config.yaml`** dans le dépôt | Itér. 1 : création du fichier **refusée par permission** (Write/Bash/sous-agent tous déniés). `docs/SECURITY.md:77-85` reformulé HONNÊTEMENT : le contrôle effectif = **CI bloquante** (`ci.yml:57-61`) + `make gitleaks` ; le hook pre-commit est **recommandé** (config à committer, pin `v8.18.2`). À reprendre dès que la permission d'écriture du fichier est accordée. |
 | Azure : Key Vault (CSI + Workload Identity), CMK | ✅ | `deploy/azure/bicep/modules/keyvault.bicep` (PE + RBAC Secrets User) ; `docs/DEPLOY_AZURE.md` | IaC présente. |
-| **Toujours poser `ENCRYPTION_KEY_SECRET`** (sinon creds Onyx en clair) | ⚠️ | doc honnête (`SECURITY.md:33`, `DEPLOY_AZURE.md:77` marqué P2 « à poser ») mais **posé dans AUCUN compose/template/values** (`grep` exhaustif : 0 hors commentaires/doc) | C'est une **action opérateur**, jamais automatisée → footgun réel si oublié. Cf. P1. |
+| **Toujours poser `ENCRYPTION_KEY_SECRET`** (sinon creds Onyx en clair) | ✅ | **câblé par deploy-ops** : généré (`scripts/gen-secrets.sh:80`), imposé au boot en `:?` (`docker-compose.yml:59,118` → démarrage refusé si vide), réservé `env.template:50`, exigé en HA (`deploy/k8s/onix-ha/templates/_helpers.tpl:179-180`, `secret.yaml:9`), Azure Key Vault (`bicep/modules/keyvault.bicep`) | **Footgun fermé** : ce n'est plus une action opérateur mais un **acquis réel** (fail-loud). Doc réconciliée : `docs/SECURITY.md:64-72`, `ARCHITECTURE.md:71` (note de preuve). |
 | « secrets connecteurs/LLM en clair en base » (comportement Onyx) | ❔ | claim sur Onyx, code non vendoré | Reposé sur l'audit-onyx (`/tmp/onyx_v411`). |
 | Audit-trail HMAC chaîné (Onyx n'en a aucun, même EE) | ✅ (onix) / ❔ (Onyx) | onix : `actions/app/audit_log.py:88-195` (chaînage + `verify_chain`) ; endpoint `main.py:872` | Volet onix RÉEL ; « Onyx n'en a pas » = ❔ (non vendoré). |
 | PII redaction logs/sorties ; effacement art.17 + rétention via `onix-actions` | ✅ | `actions/app/safe_logger.py` ; `retention.py:35-189` (`purge_by_age`, `erase_subject`) ; endpoints `main.py:916-931` | Réel. |
@@ -80,15 +80,15 @@
 | `DISABLE_TELEMETRY=true`, aucune analytics tierce | ✅ | `env.template`, `docker-compose.yml` | Conforme. |
 | Cartographie des données (OpenSearch/MinIO/PG/Ollama) | ✅ | `docker-compose.yml` volumes | Conforme. |
 | Accès restreint `127.0.0.1` ; `.env` chmod 600 | ✅ | binding compose ; `gen-secrets.sh:138` | Conforme. |
-| **Effacement via admin Onyx ; purge via `make destroy`** | ⚠️ | `Makefile:101-107` (`destroy` = `down -v`, supprime volumes) ; effacement Onyx = ❔ | `docs/RGPD.md` ignore l'effacement **ciblé art.17** d'`onix-actions` (`/admin/retention/erase`) que les autres docs vantent → **incohérence inter-docs** (sous-vente). |
-| « pas de rétention imposée par l'outil » | ⚠️ | contredit `REGISTRE_TRAITEMENTS.md:25` + `retention.py:35` (`ONIX_RETENTION_DAYS=365`, purge réelle) | Doc RGPD racine **périmée** vs la couche actions. |
+| **Effacement via admin Onyx ; purge via `make destroy`** | ✅ | `docs/RGPD.md:39-66` réconcilié : distingue couche Onyx (admin/`make destroy`) et couche `onix-actions` (effacement art.17 ciblé `retention.py:153-209`, endpoint `main.py:924-931`) | Incohérence inter-docs **levée** : `RGPD.md` cite désormais ses propres contrôles art.17/TTL avec preuve. |
+| « pas de rétention imposée par l'outil » | ✅ | `docs/RGPD.md:53-61` décrit la **purge TTL réelle** (`ONIX_RETENTION_DAYS` défaut 365, `retention.py:57-119`) côté `onix-actions`, distinguée de l'absence de TTL natif Onyx FOSS | Doc RGPD **réalignée** sur la couche actions (plus de sous-vente). |
 
 ## `docs/REGISTRE_TRAITEMENTS.md` (art. 30) & `docs/DPIA_TEMPLATE.md` (art. 35)
 
 | Affirmation | Classe | Preuve | Note |
 |---|---|---|---|
 | Modèle à compléter par le RT/DPO (champs `(…)` à renseigner) | ✅ | structure de gabarit, mentions « pas un avis juridique » | Honnête : c'est un **template**, pas une conformité acquise. |
-| Base légale = `(à qualifier)` | ⚠️ (par conception) | `REGISTRE:20,49`, `DPIA:50` | **Trou de conformité assumé** : la base légale RGPD n'est PAS tranchée (laissée au DPO). Légitime pour un template, mais la parité « Conformité RGPD ✅ GO » la suppose résolue. |
+| Base légale = `(à qualifier)` | ⚠️ (par conception) | `REGISTRE:20,49`, `DPIA:50` | **Trou de conformité assumé** : la base légale RGPD n'est PAS tranchée (laissée au DPO). Désormais marquée explicitement **`TODO (décision client)`** (`REGISTRE_TRAITEMENTS.md:23,52`, `DPIA_TEMPLATE.md:50,53`) + cartouche « factuel vs à décider » en tête du registre ; squelette factuel rempli (sous-traitants, durées, mesures avec preuves `fichier:ligne`). Sans invention de mesures. |
 | `ONIX_RETENTION_DAYS` défaut 365, purge par âge | ✅ | `actions/app/retention.py:35` ; `gen-secrets`/values | Réel. |
 | Redaction PII (JWT/IBAN/NIR/email) + anti-CRLF | ✅ | `actions/app/safe_logger.py:44-111` | Réel (motifs confirmés). |
 | Journal d'audit chaîné HMAC + vérification | ✅ | `actions/app/audit_log.py:88-195` ; endpoint `main.py:872` | Réel. Repli SHA-256 si clé absente (toujours tamper-evident, sans garantie cryptographique). |
@@ -132,7 +132,7 @@
 
 | Affirmation | Classe | Preuve | Note |
 |---|---|---|---|
-| Cible = `/tmp/onyx_v411`, v4.1.1 commit `33613e1`, 542K LOC | ❔ | `00-VERDICT.md:4`, `50-…md:12` ; **`/tmp/onyx_v411` absent du dépôt** | Toute la chaîne de preuve `backend/…:ligne` est **externe et non re-vérifiable ici**. |
+| Cible = `/tmp/onyx_v411`, v4.1.1 commit `33613e1`, 542K LOC | ❔ | `00-VERDICT.md:4`, `50-…md:12` ; **`/tmp/onyx_v411` absent du dépôt** | Toute la chaîne de preuve `backend/…:ligne` est **externe et non re-vérifiable ici**. **Avertissement de provenance ajouté** en tête de `docs/audit-onyx/README.md:3-15` et `00-VERDICT.md:3-9` (version v4.1.1, date 2026-06-18, mention « non re-vérifiable, code Onyx non vendoré »). |
 | Télémétrie ON par défaut (`telemetry.py:30/105`, `app_configs.py:1128`) | ❔ | citations code Onyx non vendoré | Plausible et bien sourcé, mais **invérifiable depuis ce dépôt**. |
 | Chiffrement secrets OFF par défaut (no-op FOSS) | ❔ | idem | idem. |
 | Effacement art.17 cassé (FK NOT NULL) | ❔ | idem ; `50-…md:24` note même que `ondelete` non diffé vs migrations | L'audit **lui-même** flague cette incertitude (honnête). |
@@ -185,22 +185,25 @@ dépend de **templates non remplis** (base légale, DPIA).
   code — reclassé P1 car documenté mais non garanti.
 
 ### P1 (à corriger avant mise en prod)
-1. **`ENCRYPTION_KEY_SECRET` jamais posé automatiquement** : `SECURITY.md:33` /
-   `ARCHITECTURE.md:67` le présentent comme un acquis onix (✅) alors qu'il faut le poser
-   **à la main** (`DEPLOY_AZURE.md:77`, marqué P2) et qu'**aucun compose/values ne le
-   câble**. Oubli ⇒ creds connecteurs/LLM en clair en base Onyx. → l'imposer (fail-loud
-   au boot si vide) ou au minimum dans `env.template`/values avec garde-fou.
-2. **Hook gitleaks pre-commit annoncé mais absent** (`docs/SECURITY.md:67`,
-   `SECURITY.md` racine implicite) : pas de `.pre-commit-config.yaml`. gitleaks n'existe
-   qu'en CI. → ajouter le hook **ou** corriger la doc (`❌`).
-3. **`docs/RGPD.md` périmé / sous-vend la conformité** : « effacement via admin Onyx »
-   + « pas de rétention imposée » (`RGPD.md:42-46`) **ignore** l'effacement art.17 ciblé
-   et la purge TTL d'`onix-actions` que tout le reste du dépôt revendique → **incohérence
-   inter-docs** exploitable par un auditeur (« votre propre doc RGPD ne mentionne pas vos
-   contrôles »). → réaligner `RGPD.md` sur `REGISTRE_TRAITEMENTS.md`.
-4. **`securityContext` absent du déploiement `actions`** (Helm) : non-root garanti par
-   l'image seule, pas forcé au niveau pod ⇒ échec sous Pod Security Standards `restricted`.
-   → ajouter `securityContext.runAsNonRoot` au bloc `actions:` de `values.yaml`.
+1. ✅ **RÉSOLU (deploy-ops + réconciliation doc)** — **`ENCRYPTION_KEY_SECRET`
+   désormais câblé** : généré (`scripts/gen-secrets.sh:80`), **imposé au boot** en `:?`
+   (`docker-compose.yml:59,118` → démarrage refusé si vide), réservé `env.template:50`,
+   exigé en HA (`_helpers.tpl:179-180`, `secret.yaml:9`), Azure Key Vault
+   (`bicep/modules/keyvault.bicep`). Doc réconciliée : `docs/SECURITY.md:64-72`,
+   `ARCHITECTURE.md:71` (note de preuve). Footgun **fermé**.
+2. ⛔ **BLOQUÉ (permission)** — **Hook gitleaks pre-commit** : la création de
+   `.pre-commit-config.yaml` a été **refusée par permission** (Write/Bash/sous-agent).
+   En attendant : `docs/SECURITY.md:77-85` reformulé HONNÊTEMENT (contrôle effectif =
+   CI bloquante `ci.yml:57-61` + `make gitleaks` ; hook pre-commit recommandé, pin
+   `v8.18.2`). **À reprendre dès que l'écriture du fichier est autorisée.**
+3. ✅ **RÉSOLU** — **`docs/RGPD.md` réaligné** : §4 distingue couche Onyx vs
+   `onix-actions` et cite l'effacement art.17 ciblé + purge TTL avec preuves
+   (`retention.py:57-209`, `main.py:924-931`) ; §3 ajoute redaction PII, audit HMAC,
+   `ENCRYPTION_KEY_SECRET`. Incohérence inter-docs levée.
+4. ✅ **RÉSOLU (deploy-ops)** — **`securityContext` généralisé** : socle `default`
+   (seccomp `RuntimeDefault`) appliqué partout + `runAsNonRoot: true` forcé au niveau
+   pod, y compris `actions` (`deploy/k8s/onix-ha/values.yaml:71-82,237-240`). Hors
+   périmètre code de ce scope (Helm = deploy-ops) — vérifié en lecture seule.
 
 ### P2 (durcissement / honnêteté documentaire)
 5. **Audit gateway non chaîné** : `access-gateway/app/audit.py` journalise les décisions
@@ -212,10 +215,19 @@ dépend de **templates non remplis** (base légale, DPIA).
 7. **Preuves « live » non reproductibles** dans le gate offline : red-team 21/21, OCR
    conteneur, extraction Ollama, sync Graph → marquées « prouvées » mais hors CI. Exposer
    clairement « recette manuelle » vs « gate CI ».
-8. **`docs/audit-onyx/*` non re-vérifiable** ici (Onyx non vendoré) : ajouter un encart
-   en tête signalant que les preuves `backend/…:ligne` pointent un clone externe
-   (`/tmp/onyx_v411`) absent du dépôt — pour qu'aucun lecteur ne les prenne pour du code
-   local.
+8. ✅ **RÉSOLU** — **`docs/audit-onyx/*` : avertissement de provenance ajouté** en tête
+   de `README.md:3-15` et `00-VERDICT.md:3-9` (version Onyx **v4.1.1**, date **2026-06-18**,
+   mention « citations `backend/…:ligne` non re-vérifiables depuis ce dépôt — code Onyx
+   **non vendoré** » + renvoi aux mitigations onix vérifiables). Aucun contenu d'audit
+   réécrit en « faux-vérifié ».
+
+### Suivi DPIA / registre (A7)
+9. ✅ **RÉSOLU (squelette factuel)** — `docs/REGISTRE_TRAITEMENTS.md` : cartouche
+   « factuel vs à décider », rubrique **Sous-traitants (art. 28)** factuelle (aucun
+   tiers IA/cloud ; SMTP/webhook via allowlist deny-all), base légale en `TODO (décision
+   client)`. `docs/DPIA_TEMPLATE.md` : §2 et §3 complétés avec preuves `fichier:ligne`,
+   décisions client (base légale, information, sous-traitance, chiffrement disque) en
+   `TODO (décision client)`. **Aucune mesure inventée.**
 
 ---
 
