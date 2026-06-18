@@ -27,7 +27,24 @@ data:
   ONIX_OLLAMA_URL: {{ .Values.actions.config.ollamaUrl | quote }}
   ONIX_BUDGET_WARN_PCT: {{ .Values.actions.config.budgetWarnPct | quote }}
   # Persistance déportée (HA) : SQLite local remplacé par Postgres partagé.
-  ONIX_DB_BACKEND: "postgres"
+  # Backend pilotable par l'intégrateur (sqlite en mono-poste) ; défaut postgres.
+  ONIX_DB_BACKEND: {{ .Values.actions.config.dbBackend | default "postgres" | quote }}
+  # Base partagée Onyx/onix_actions (le code dérive le DSN depuis POSTGRES_* si
+  # ONIX_DB_URL est vide). POSTGRES_HOST/USER déjà posés plus haut ; le mot de
+  # passe vient du Secret côté Deployment.
+  POSTGRES_DB: {{ .Values.actions.config.dbName | default "onyx" | quote }}
+{{- if .Values.actions.config.dbUrl }}
+  ONIX_DB_URL: {{ .Values.actions.config.dbUrl | quote }}
+{{- end }}
+{{- if .Values.actions.config.dbSchema }}
+  ONIX_DB_SCHEMA: {{ .Values.actions.config.dbSchema | quote }}
+{{- end }}
+  # Stockage objet partagé pour les .docx générés (sinon GET /download casse en
+  # multi-réplica : une réplique sans le fichier local répond 404). Les creds S3
+  # (S3_AWS_ACCESS_KEY_ID/SECRET) viennent du Secret ; S3_ENDPOINT_URL est posé
+  # plus haut. Cf. docs/STATELESS_ACTIONS.md §3/§7 et actions/app/objstore.py.
+  ONIX_OBJECT_STORE: {{ .Values.actions.config.objectStore | default "local" | quote }}
+  ONIX_S3_BUCKET: {{ .Values.actions.config.s3Bucket | default "onyx-file-store-bucket" | quote }}
 {{- if .Values.actionsQueue.enabled }}
   # File asynchrone : backend de résultats (Postgres) ; le broker (mot de passe)
   # est injecté côté Deployment via le Secret.
