@@ -1,0 +1,108 @@
+# =============================================================================
+# onix — SLO / SLI + recording rules (passerelle RBAC + actions).
+# -----------------------------------------------------------------------------
+# Capté par `rule_files: /etc/prometheus/rules/*.yml` (cf. prometheus.yml:20-21).
+#
+# Objectif : formaliser des indicateurs de service (SLI) PRÉ-CALCULÉS via des
+# recording rules, et alerter quand l'objectif (SLO) n'est plus tenu. Les
+# recording rules évitent de recalculer les `histogram_quantile`/ratios à chaque
+# évaluation et donnent des séries stables, réutilisables par les dashboards.
+#
+# Convention de nommage (Prometheus) : `level:metric:operation`
+#   - `job:onix_gateway_error_ratio:5m`         → ratio d'erreurs amont (5 min)
+#   - `job:onix_gateway_request_latency:p95_5m` → latence p95 bout-en-bout (5 min)
+#   - `job:onix_gateway_availability:ratio_5m`  → disponibilité applicative (5 min)
+#
+# Cibles SLO (PRUDENTES, à ajuster par déploiement après mesure réelle) :
+#   - Disponibilité passerelle (requêtes non-erreur amont) : >= 99 %   (budget 1 %)
+#   - Latence p95 bout-en-bout                              : <= 30 s
+# Le transport streaming de la passerelle est NDJSON (application/x-ndjson,
+# access-gateway/app/main.py:391), pas SSE.
+# =============================================================================
+groups:
+  # ---------------------------------------------------------------------------
+  # 1. Recording rules — SLI passerelle RBAC (onix-access-gateway).
+  # ---------------------------------------------------------------------------
+  - name: onix-slo-gateway-recording
+    rules:
+      # Ratio d'erreurs amont (502 vues par la passerelle) sur le total des
+      # requêtes, fenêtre 5 min. clamp_min évite la division par zéro (pas de
+      # trafic → ratio 0). C'est le complément de la disponibilité.
+      - record: job:onix_gateway_error_ratio:5m
+        expr: >-
+          sum(rate(onix_gateway_upstream_errors_total[5m]))
+          /
+          clamp_min(sum(rate(onix_gateway_requests_total[5m])), 1)
+
+      # Disponibilité applicative = 1 - ratio d'erreurs (part des requêtes
+      # servies sans erreur de relais amont).
+      - record: job:onix_gateway_availability:ratio_5m
+        expr: 1 - job:onix_gateway_error_ratio:5m
+
+      # Latence bout-en-bout au 95e percentile (5 min), pré-agrégée par `le`.
+      - record: job:onix_gateway_request_latency:p95_5m
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(onix_gateway_request_latency_seconds_bucket[5m]))
+          )
+
+      # Part des flux NDJSON avortés (garde DUR / fail-closed) parmi les flux
+      # ouverts, fenêtre 5 min. Utile pour le suivi du contrat de streaming.
+      - record: job:onix_gateway_stream_abort_ratio:5m
+        expr: >-
+          sum(rate(onix_gateway_stream_aborted_total[5m]))
+          /
+          clamp_min(sum(rate(onix_gateway_stream_requests_total[5m])), 1)
+
+  # ---------------------------------------------------------------------------
+  # 2. Recording rules — SLI applicatif onix-actions (réutilise onix_http_*).
+  # ---------------------------------------------------------------------------
+  - name: onix-slo-actions-recording
+    rules:
+      - record: job:onix_actions_error_ratio:5m
+        expr: >-
+          sum(rate(onix_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(onix_http_requests_total[5m])), 1)
+
+      - record: job:onix_actions_availability:ratio_5m
+        expr: 1 - job:onix_actions_error_ratio:5m
+
+  # ---------------------------------------------------------------------------
+  # 3. Alertes basées SLO — déclenchent quand l'objectif n'est plus tenu.
+  #    Fondées sur les recording rules ci-dessus (séries stables, lisibles).
+  # ---------------------------------------------------------------------------
+  - name: onix-slo-alerts
+    rules:
+      - alert: GatewaySLOAvailabilityBreached
+        # SLO disponibilité passerelle = 99 % : on alerte si la dispo 5 min
+        # tombe sous 0.99 de façon SOUTENUE (10 min) — distingue un pic
+        # transitoire d'une dégradation réelle qui ronge le budget d'erreur.
+        expr: job:onix_gateway_availability:ratio_5m < 0.99
+        for: 10m
+        labels:
+          severity: warning
+          component: onix-access-gateway
+          slo: availability
+        annotations:
+          summary: "SLO disponibilité passerelle non tenu (< 99 %)"
+          description: >-
+            La disponibilité applicative de la passerelle (1 - erreurs amont)
+            est sous l'objectif de 99 % depuis 10 min
+            ({{ $value | humanizePercentage }}). Budget d'erreur en consommation.
+
+      - alert: GatewaySLOLatencyBreached
+        # SLO latence p95 <= 30 s (génération LLM local incluse). Au-delà de
+        # façon soutenue, l'expérience utilisateur n'est plus dans l'objectif.
+        expr: job:onix_gateway_request_latency:p95_5m > 30
+        for: 10m
+        labels:
+          severity: warning
+          component: onix-access-gateway
+          slo: latency
+        annotations:
+          summary: "SLO latence p95 passerelle non tenu (> 30 s)"
+          description: >-
+            La latence p95 bout-en-bout de la passerelle dépasse l'objectif de
+            30 s depuis 10 min ({{ $value | printf "%.1f" }} s).
