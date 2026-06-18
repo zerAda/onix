@@ -111,9 +111,17 @@ services:
       - prometheus
       - loki
     environment:
-      # Mot de passe admin via .env (généré). À défaut : 'admin' (à changer).
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Identifiants admin via .env (généré par `make secrets` → gen-secrets.sh).
+      # GARDE-FOU : on NE retombe PLUS sur le défaut trivial 'admin/admin'. Le
+      # vrai garde-fou bloquant est dans le bloc `monitor-up` du Makefile, qui
+      # REFUSE de démarrer si GRAFANA_ADMIN_PASSWORD est absent ou faible (le
+      # `:?` n'est pas utilisé ici car il casserait `docker compose config`,
+      # .env étant facultatif). La valeur de repli ci-dessous est délibérément
+      # NON triviale et NON secrète : elle empêche seulement un défaut connu
+      # ('admin') si quelqu'un lance le compose à la main sans .env ; elle ne
+      # remplace pas le mot de passe fort, qui DOIT venir de .env.
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-onix-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-CHANGEME-set-GRAFANA_ADMIN_PASSWORD-in-.env}
       # Souveraineté : pas d'appels sortants (analytics, gravatar, news, MAJ).
       - GF_ANALYTICS_REPORTING_ENABLED=false
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
