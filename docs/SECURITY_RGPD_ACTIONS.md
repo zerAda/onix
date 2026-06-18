@@ -109,10 +109,27 @@ donc pas un unique seau). Dépassement → **429** + `Retry-After`. Mettre à
 - **L'administration (`/admin/*`) N'EST PAS soumise au quota** : une action de
   sécurité (kill-switch, déblocage) ne doit jamais être bloquée en 429 par un pic
   d'abus. Elle reste protégée par la double clé (service + admin).
-- **Multi-instance** : la fenêtre est par-process. Pour un compteur partagé,
-  brancher un store **Redis** (via **slowapi**, dépendance déjà présente). En
-  l'état, le quota effectif est `N × instances` — à prendre en compte si
-  plusieurs réplicas du microservice tournent.
+
+> ### ⚠️ Limite connue (HA) : quota PAR-PROCESS — effectif `N × réplicas`
+>
+> L'enforcement réel est la **fenêtre glissante EN MÉMOIRE** d'`enforce_rate_limit`
+> ([`security.py:254-282`](../actions/app/security.py)), **locale à chaque process**.
+> **`slowapi` est déclaré en dépendance mais N'EST PAS utilisé pour l'enforcement** :
+> on l'importe seulement pour le diagnostic et le format de quota (`security.py:34-40`).
+> Il n'existe **aucun store partagé** (Redis) à ce stade.
+>
+> **Conséquence en HA / multi-réplica** : chaque réplica compte indépendamment, donc
+> le quota global observé par un appelant unique est **`ONIX_ACTIONS_RATE_LIMIT × nombre de réplicas`**.
+> Exemple : `60/minute` avec **4** réplicas derrière le Service K8s ⇒ jusqu'à
+> **240 req/min** réellement acceptées (si l'équilibrage répartit l'appelant). Le
+> rate-limit reste un garde-fou anti-abus correct **par-instance**, mais **ne
+> garantit PAS un plafond global strict** quand le microservice est répliqué.
+>
+> **Périmètre** : c'est une limite **assumée et honnête**, pas un bug — le défaut
+> mono-poste applique exactement `ONIX_ACTIONS_RATE_LIMIT`. **Aucune infra Redis
+> n'est livrée ce tour-ci.** *Correctif futur* (backlog) : compteur partagé Redis
+> (via `slowapi` + `RedisStorage`, ou un seau atomique `INCR`/`EXPIRE` maison) pour
+> obtenir un plafond global réellement strict en HA.
 
 ---
 
