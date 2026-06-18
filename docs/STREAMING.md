@@ -1,4 +1,4 @@
-# Streaming SSE RBAC-safe (`access-gateway`)
+# Streaming NDJSON RBAC-safe (`access-gateway`)
 
 Ce document décrit le **moteur de streaming token-par-token** ajouté à la
 passerelle `access-gateway/` devant Onyx. Objectif : diviser la **latence
@@ -15,6 +15,13 @@ déterministes déjà prouvées sur le chemin non-streaming :
 > [`app/streaming.py`](../access-gateway/app/streaming.py). Code FastAPI
 > minimal (l'orchestrateur câble `main.py` ; le moteur n'importe PAS FastAPI).
 
+> **Transport = NDJSON, PAS Server-Sent Events.** Le flux est émis en **NDJSON**
+> (un objet JSON par ligne) avec le media-type `application/x-ndjson` — ce n'est
+> **pas** du SSE (`text/event-stream`, format `data: …\n\n`). Preuve :
+> `access-gateway/app/main.py:391` (`StreamingResponse(..., media_type="application/x-ndjson")`).
+> Le terme « SSE » a pu apparaître par abus de langage ; le contrat réel est NDJSON
+> (cf. §4 et §6).
+
 ---
 
 ## 1. Pourquoi streamer (et pourquoi c'est délicat)
@@ -28,7 +35,7 @@ relayer au fil de l'eau supprime l'attente perçue. **Mais** : un relais brut
 perdrait les garde-fous (on aurait déjà envoyé le texte avant de pouvoir le
 filtrer). Le cache, lui, est déjà correctement neutralisé pour les flux —
 `cache.should_bypass` renvoie `"streaming"` pour `stream=True` (on ne met jamais
-un SSE en cache : sémantique incompatible avec un body JSON intégral).
+un flux NDJSON en cache : sémantique incompatible avec un body JSON intégral).
 
 Ce moteur réconcilie latence et sécurité en distinguant **deux familles
 d'invariants** selon le moment où on peut les trancher honnêtement.
