@@ -22,17 +22,17 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 
 | Classe | Nb | Commentaire |
 |---|---:|---|
-| ✅ CONFORME | 42 | Cœur applicatif + câblage Helm corrigé (secrets WS2, object store, erase S3) |
-| ⚠️ ÉCART MINEUR | 6 | Chiffres de tests périmés (P2), openapi.json incomplet (P1), vars non listées en compose (P2) |
-| ❌ ÉCART MAJEUR | 0 | **Les 3 P0 HA corrigés** (itération Ralph 2026-06-18) — cf. §"Écarts priorisés" |
+| ✅ CONFORME | 46 | Cœur applicatif + Helm (P0) + openapi.json régénéré, rate-limit HA documenté, compteurs de tests réconciliés (P1/P2, itération Ralph 2 2026-06-18) |
+| ⚠️ ÉCART MINEUR | 2 | Vars WS2 non listées dans le bloc `environment:` du compose (P2, fonctionnelles via `env_file`) |
+| ❌ ÉCART MAJEUR | 0 | **Les 3 P0 HA corrigés** (itération Ralph 1) — cf. §"Écarts priorisés" |
 | 🕳️ DOC-SANS-CODE | 0 | Aucune garantie *purement* fantôme trouvée dans le code |
-| 🔇 CODE-SANS-DOC | 1 | `/metrics` Prometheus non décrit dans ACTIONS.md (P2) |
+| 🔇 CODE-SANS-DOC | 1 | `/metrics` Prometheus non décrit dans ACTIONS.md (P2) — désormais présent dans `openapi.json` régénéré |
 | ❔ NON VÉRIFIABLE | 2 | Recette cluster réel HA (HPA/bascule), comportement Ollama live |
 
-> **Nuance importante** : les 4 ❌ sont des écarts **doc ↔ déploiement** (la doc
-> affirme un câblage Helm qui n'existe pas), pas des bugs du code applicatif. Le risque
-> « mock présenté comme réel » se matérialise donc **à l'exécution en HA**, où des
-> protections RGPD documentées dégradent sans alerte visible côté ops.
+> **Nuance importante** : il ne reste **0 ❌**. Les écarts majeurs historiques étaient
+> des écarts **doc ↔ déploiement** (la doc affirmait un câblage Helm absent), pas des
+> bugs du code applicatif ; ils sont **corrigés** (3 P0 HA, itération Ralph 1). Le risque
+> « mock présenté comme réel » à l'exécution en HA est donc levé côté chart.
 
 ---
 
@@ -58,8 +58,8 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 | `/health` non authentifié, expose capacités OCR | ✅ | `main.py:348-356`, `ocr.ocr_capabilities` | |
 | Service sur `onix-net`, **aucun port hôte**, appelé via `http://actions:8100` | ✅ | `docker-compose.yml:317-373` (aucun `ports:`) | |
 | Variables d'env table §3 (rate card, budget, Ollama, SMTP, OCR, upload…) | ✅ | présentes et lues par les modules concernés | |
-| openapi.json = « spec complète et faisant foi » | ⚠️/❌ | `actions/openapi.json` (13 paths) | **Périmé** : manquent `/access/log`, `/admin/audit/verify`, `/admin/retention/*`, `/metrics`, `/audit/file/async`, `/jobs/{id}` |
-| openapi : Auth `X-API-Key` ; pour `/admin/*` ajouter `X-Admin-Key` | ⚠️ | `openapi.json` securitySchemes=`ApiKeyAuth` seul ; `/admin/control` `security:null` | **Aucun scheme `X-Admin-Key`** dans la spec → contrat admin non décrit |
+| openapi.json = « spec complète et faisant foi » | ✅ | `actions/openapi.json` (**20 paths**) | **Régénéré depuis `app.openapi()`** (P1 fermé) : `/access/log`, `/admin/audit/verify`, `/admin/retention/purge`, `/admin/retention/erase`, `/metrics`, `/audit/file/async`, `/jobs/{task_id}` désormais présents |
+| openapi : Auth `X-API-Key` ; admin via `X-Admin-Key` | ✅ | `openapi.json` : **aucun `securityScheme`** ; auth = paramètres d'en-tête typés par opération | L'app ne déclare PAS de scheme nommé → l'ancien `ApiKeyAuth` était ajouté à la main. Le réel : `X-API-Key` sur toutes les routes, **`X-Admin-Key` sur les seules routes `/admin/*`** (paramètre d'en-tête). Contrat admin **décrit** (sans scheme), zéro divergence code↔doc |
 | `actions/reference/clients.example.json` fourni | ✅ | fichier présent | |
 | Tests : `test_audit_engine.py` + `test_api.py` couvrent santé/auth/audit/docx/403/blocage/tasks/usage/coût | ✅ | `actions/tests/test_api.py` (13 tests), `test_audit_engine.py` (9) | |
 
@@ -100,7 +100,7 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 | Fail-closed `ONIX_ACTIONS_REQUIRE_CALLER_IDENTITY=true` → 401 | ✅ | `security.py:127-132`, `caller_identity.py:80-88` | testé (`test_require_caller_fail_closed`) |
 | **Clé admin distincte OBLIGATOIRE** (fail-closed) : sans clé → 403 | ✅ | `security.py:177-209` | opt-out `ADMIN_KEY_OPTIONAL` documenté |
 | Rate-limiting par appelant (fenêtre glissante mémoire), 429 + Retry-After | ✅ | `security.py:137-282` | clé = identité vérifiée sinon IP ; admin exclu (`:190-193`) |
-| Multi-instance : quota par-process = `N × instances` (slowapi/Redis à brancher) | ✅/🔇 | `security.py:254-262` (commentaire) ; slowapi importé mais **non utilisé** comme enforcement | honnête : doc le dit ; mais aucun store partagé livré |
+| Multi-instance : quota par-process = `N × réplicas` (slowapi/Redis à brancher) | ✅ | `security.py:254-282` (fenêtre mémoire) ; slowapi importé mais **non utilisé** comme enforcement (`security.py:34-40`) | **P1 documenté** : encadré ⚠️ dédié dans SECURITY_RGPD §3.5 (effectif `RATE_LIMIT × réplicas`, ex. 60/min × 4 = 240/min). Limite assumée ; aucun store Redis livré ce tour ; correctif futur en backlog |
 | **Audit admin chaîné HMAC** : `seq`, `prev_hash`, `entry_hash=HMAC(secret, prev_hash‖canonical)` | ✅ | `audit_log.py:82-162` | canonique déterministe (`_SIGNED_FIELDS`, sort_keys) |
 | Toute modif/suppression/réordonnancement détectable ; `GET /admin/audit/verify` | ✅ | `audit_log.py:165-195`, `main.py:872-876` | testé altération → `broken_at` |
 | Secret absent → repli **SHA-256** (avertissement), à définir en prod | ✅ | `audit_log.py:88-103,139-145`, marqueur `algo` par ligne | chaîne mixte sha256↔hmac gérée sans faux positif |
@@ -116,7 +116,7 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 | `gen-secrets.sh` génère ADMIN_KEY/CALLER_HMAC/AUDIT_HMAC (48 car., idempotent) | ✅ | `scripts/gen-secrets.sh:95-107` | `.env` gitignoré |
 | `/access/log` + helpers (UPN/doc hashés, requête RAG jamais en clair) | ✅ | `audit_log.py:201-237`, `main.py:882-910` | `rag_search` ne stocke que la longueur |
 | `/access/log` ne répond pas « journalisé » si persistance échoue → 500 | ✅ | `main.py:904-909`, `usage_tracker.py:134-164` (`_persisted`) | bon réflexe traçabilité |
-| « **58 tests verts** (dont test_security_rgpd.py) » | ⚠️ | suite réelle = **86** `def test` (dont `test_security_rgpd.py`=28) | chiffre périmé (sous-évalué) |
+| « 58 tests verts (dont test_security_rgpd.py) » | ✅ | suite réelle = **90 collectés** (85 passed, 5 skipped) ; `test_security_rgpd.py`=**32** | **P2 corrigé** : SECURITY_RGPD §11 affiche désormais « 90 collectés : 85 passed, 5 skipped (dont test_security_rgpd.py = 32) » |
 
 ---
 
@@ -134,7 +134,7 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 | File Celery opt-in : objet `app.celery_app.celery`, `audit_file_async`, EAGER | ✅ | `celery_app.py:77-169` | commande chart exacte respectée |
 | `POST /audit/file/async`→202+task_id ; `GET /jobs/{id}` ; 503 si non activé | ✅ | `main.py:561-638` | mêmes garde-fous (auth/kill-switch/validation) |
 | Défaut mono-poste **strictement inchangé** (SQLite/local/synchrone) | ✅ | défauts `db.backend()`/`objstore.backend()`/`queue_enabled()` | imports paresseux PG/S3/Celery |
-| « **71 passed, 4 skipped** » suite par défaut | ⚠️ | suite réelle = **86** tests `def test` | chiffre périmé |
+| « 71 passed, 4 skipped » suite par défaut | ✅ | suite réelle = **90 collectés** (85 passed, 5 skipped) | **P2 corrigé** : STATELESS §6.1 affiche désormais « 90 collectés : 85 passed, 5 skipped » |
 | Le chart **câble déjà** `ONIX_DB_BACKEND=postgres`, `ONIX_QUEUE_ENABLED`, broker, `POSTGRES_*`/`S3_*` | ✅ | `configmap.yaml:30-49`, `actions.yaml:45-46`, helpers `dataTierSecretEnv`/`actionsSecretEnv` | **Corrigé (P0#2)** : `ONIX_OBJECT_STORE`+`ONIX_S3_BUCKET`+`POSTGRES_DB` ajoutés au ConfigMap (`configmap.yaml:45-49`) → S3 activé en HA |
 | values.yaml documente `actions.config.objectStore`, `dbUrl`, `s3Bucket`, etc. | ✅ | `values.yaml:236-237` rendus par `configmap.yaml:36-49` | clés désormais **rendues** dans les templates (preuve : `helm template … | grep ONIX_OBJECT_STORE` → `"s3"`) |
 | Rétention RGPD en mode S3 efface aussi les objets S3 | ✅ | `retention.py:97-102` (`delete_jobs_older_than`), `retention.py:185-194` (`delete_subject_docx`) ; `objstore.py:173-247` | **Corrigé (P0#3)** : `erase_subject`/`purge_by_age` branchent la suppression S3 (fail-safe si local) ; testé `test_security_rgpd.py` (4 tests, mock client S3) |
@@ -167,15 +167,26 @@ chart HA, où elles tombent silencieusement en mode dégradé.
    **Preuve** : 4 tests `test_security_rgpd.py` (client S3 mocké) prouvant la suppression
    des bons objets, la préservation des autres sujets, et le no-op en mode local.
 
-### P1 — fiabilité / contrat
-4. **⚠️ `openapi.json` périmé.** Spec présentée comme « faisant foi » mais sans les
-   endpoints WS2/stateless ni le scheme `X-Admin-Key`. Un client Onyx important la spec
-   n'aura pas accès aux contrats admin/audit/retention. *Fix* : régénérer depuis le service.
-5. **⚠️ Rate-limit par-process en HA.** `slowapi` est en dépendance mais **non utilisé**
-   pour l'enforcement (fenêtre mémoire locale, `security.py:249-282`). Quota effectif =
-   `N × réplicas` (doc honnête, mais aucun store Redis livré). *Fix* : store partagé Redis.
-6. **⚠️ Compteurs de tests dans la doc faux** (58/71 annoncés ; **86** réels) → entame
-   la crédibilité des sections « Validation ».
+### P1 — fiabilité / contrat ✅ CORRIGÉS (itération Ralph 2 2026-06-18)
+4. **✅ `openapi.json` régénéré depuis l'app réelle.** `app.openapi()` → **20 paths**
+   (vs 13) ; endpoints WS2/stateless désormais présents (`/access/log`,
+   `/admin/audit/verify`, `/admin/retention/purge|erase`, `/metrics`,
+   `/audit/file/async`, `/jobs/{task_id}`). **Constat honnête sur l'auth** : l'app ne
+   déclare **aucun `securityScheme`** ; l'auth est exprimée comme **paramètres d'en-tête
+   typés** par opération (`X-API-Key` partout ; **`X-Admin-Key` sur les seules routes
+   `/admin/*`**). L'ancien scheme `ApiKeyAuth` était ajouté à la main → supprimé. Contrat
+   admin **décrit** (sans scheme), zéro divergence code↔doc. *Limite documentée* : pas de
+   `securityScheme` nommé (FastAPI ne le génère pas pour ces dépendances d'en-tête).
+   **Preuve** : `python -c "json.load(open('actions/openapi.json'))"` OK.
+5. **✅ Rate-limit par-process en HA — documenté (limite assumée).** `slowapi` est en
+   dépendance mais **non utilisé** pour l'enforcement (fenêtre mémoire locale,
+   `security.py:254-282` ; import diag `security.py:34-40`). Quota effectif = `RATE_LIMIT
+   × réplicas`. Encadré ⚠️ dédié dans SECURITY_RGPD §3.5 (ex. 60/min × 4 = 240/min).
+   **Aucun store Redis ajouté ce tour-ci** (décision explicite) ; correctif futur (store
+   Redis partagé) noté en backlog.
+6. **✅ Compteurs de tests réconciliés.** Comptage réel `--collect-only` = **90** ;
+   exécution offline = **85 passed, 5 skipped**. Corrigés dans SECURITY_RGPD §11
+   (58→90/85/5) et STATELESS §6.1 (71/4→90/85/5). FINOPS/ACTIONS sans compteur chiffré.
 
 ### P2 — cosmétique / dette
 7. **⚠️ Variables WS2 non listées dans le bloc `environment:` du compose** (chargées via
@@ -194,10 +205,15 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 Le **code applicatif `onix-actions` est solide et honnête** : audit HMAC chaîné réellement
 vérifiable et tamper-evident, redaction PII effective, DLP egress fail-closed + anti-SSRF,
 rétention/effacement implémentés, identité HMAC/JWT fail-closed, FinOps tokens mesurés vs
-estimés sans tricherie — le tout couvert par 90 tests offline. **Aucune garantie de sécurité
-n'est purement fantôme dans le code (0 🕳️).** Les **3 P0 du branchement HA (Helm) sont corrigés**
-(itération Ralph 2026-06-18) : secrets WS2 injectés via `onix.actionsSecretEnv` (actions+worker),
-`ONIX_OBJECT_STORE=s3`/`ONIX_S3_BUCKET` câblés dans le ConfigMap, et effacement RGPD S3 branché
-(`erase_subject`/`purge_by_age` suppriment les objets du bucket). **Mono-poste ET HA =
-production-ready côté code/chart** ; restent des P1/P2 (openapi.json à régénérer, rate-limit Redis,
-compteurs de tests) et la recette cluster réel (HPA/bascule) hors périmètre code.
+estimés sans tricherie — le tout couvert par **90 tests collectés** (85 passed, 5 skipped en
+offline minimal). **Aucune garantie de sécurité n'est purement fantôme dans le code (0 🕳️).**
+Les **3 P0 du branchement HA (Helm) sont corrigés** (itération Ralph 1, 2026-06-18) : secrets
+WS2 injectés via `onix.actionsSecretEnv` (actions+worker), `ONIX_OBJECT_STORE=s3`/`ONIX_S3_BUCKET`
+câblés dans le ConfigMap, et effacement RGPD S3 branché (`erase_subject`/`purge_by_age` suppriment
+les objets du bucket). **Les P1/P2 d'exactitude doc↔code sont fermés** (itération Ralph 2,
+2026-06-18) : `openapi.json` régénéré depuis `app.openapi()` (20 paths, X-Admin-Key décrit sur
+`/admin/*` ; pas de `securityScheme` nommé = limite documentée), rate-limit par-process en HA
+documenté (quota `N × réplicas`, aucun Redis livré ce tour), compteurs de tests réconciliés.
+**Mono-poste ET HA = production-ready côté code/chart** ; restent uniquement des P2 cosmétiques
+(vars WS2 non listées au bloc `environment:` du compose ; `/metrics` non décrit dans ACTIONS.md)
+et la recette cluster réel (HPA/bascule) hors périmètre code.
