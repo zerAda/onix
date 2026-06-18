@@ -1,5 +1,12 @@
 # VERDICT — Onyx v4.1.1 : prod-ready premium ou POC ?
 
+> ⚠️ **PROVENANCE** — Onyx auditée en **v4.1.1** (commit `33613e1`), audit du
+> **2026-06-18**, depuis un clone **externe** (`/tmp/onyx_v411`) **non vendoré**
+> dans `onix`. Les citations `backend/…:ligne` / `ee/…:ligne` **ne sont PAS
+> re-vérifiables depuis ce dépôt** (source secondaire sourcée, pas preuve directe).
+> Détail : [`README.md`](README.md). Les mitigations `onix` citées, elles, sont
+> vérifiables ici (cf. `docs/audit-reality/security-governance.md`).
+
 > Synthèse de l'audit en profondeur (7 dimensions, code réel `/tmp/onyx_v411`,
 > git **v4.1.1** commit `33613e1`, ~542K LOC Py + 1783 TS). Chaque section est
 > citée `fichier:ligne` ; FOSS vs EE vs Cloud distingués ; **aucune donnée mockée**.
