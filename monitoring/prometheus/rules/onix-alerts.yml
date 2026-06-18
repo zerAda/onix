@@ -108,6 +108,75 @@ groups:
             Vérifiez que la coupure est intentionnelle.
 
   # ---------------------------------------------------------------------------
+  # 2b. Passerelle RBAC onix-access-gateway : erreurs amont, latence, flux NDJSON.
+  #     Basé sur les métriques onix_gateway_* (cf. docs/OBSERVABILITY.md §5b).
+  #     Le transport streaming de la passerelle est NDJSON (application/x-ndjson,
+  #     access-gateway/app/main.py:391), pas SSE. Seuils prudents : à ajuster par
+  #     déploiement selon le trafic réel observé sur le dashboard onix-gateway.
+  # ---------------------------------------------------------------------------
+  - name: onix-gateway-app
+    rules:
+      - alert: GatewayHighUpstreamErrorRate
+        # Erreurs de relais amont Onyx (→ 502) > 5 % des requêtes sur 5 min.
+        # Signale un amont Onyx injoignable/instable vu depuis la passerelle.
+        expr: >-
+          (
+            sum(rate(onix_gateway_upstream_errors_total[5m]))
+            /
+            clamp_min(sum(rate(onix_gateway_requests_total[5m])), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: onix-access-gateway
+        annotations:
+          summary: "Taux d'erreurs amont élevé sur la passerelle RBAC"
+          description: >-
+            Plus de 5 % des requêtes de la passerelle échouent au relais vers
+            Onyx (502) sur les 5 dernières minutes
+            ({{ $value | humanizePercentage }}). Vérifiez l'état d'Onyx amont.
+
+      - alert: GatewayHighLatencyP95
+        # p95 de latence bout-en-bout > 30 s sur 5 min. Seuil large car la
+        # latence inclut la génération d'un LLM local (buckets 0.5→120 s) :
+        # 30 s = signal d'un amont anormalement lent, pas d'une génération normale.
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(onix_gateway_request_latency_seconds_bucket[5m]))
+          ) > 30
+        for: 10m
+        labels:
+          severity: warning
+          component: onix-access-gateway
+        annotations:
+          summary: "Latence p95 élevée sur la passerelle RBAC"
+          description: >-
+            La latence bout-en-bout au 95e percentile dépasse 30 s depuis 10 min
+            ({{ $value | printf "%.1f" }} s). Amont LLM/Onyx probablement saturé.
+
+      - alert: GatewayAbnormalStreamAbortRate
+        # Flux NDJSON avortés (garde DUR incrémental ou erreur fail-closed) >
+        # 10 % des flux ouverts sur 5 min. Un avortement ponctuel est NORMAL
+        # (garde-fou anti-exfiltration) ; un taux élevé soutenu est anormal.
+        expr: >-
+          (
+            sum(rate(onix_gateway_stream_aborted_total[5m]))
+            /
+            clamp_min(sum(rate(onix_gateway_stream_requests_total[5m])), 1)
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: onix-access-gateway
+        annotations:
+          summary: "Taux d'avortement des flux NDJSON anormal"
+          description: >-
+            Plus de 10 % des flux NDJSON sont avortés (garde DUR ou erreur
+            fail-closed) depuis 10 min ({{ $value | humanizePercentage }}).
+            Vérifiez les raisons par `reason` sur le dashboard onix-gateway.
+
+  # ---------------------------------------------------------------------------
   # 3. FinOps : budget dépassé / proche du seuil (basé sur /metrics).
   # ---------------------------------------------------------------------------
   - name: onix-finops
