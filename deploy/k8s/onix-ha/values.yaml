@@ -67,6 +67,21 @@ podAntiAffinity:
   type: soft                # soft (preferred) | hard (required)
   topologyKey: kubernetes.io/hostname
 
+# -----------------------------------------------------------------------------
+# Durcissement securityContext (niveau POD), généralisé à tous les Deployments.
+# `default` = socle appliqué PARTOUT : seccompProfile RuntimeDefault (restreint les
+# syscalls au profil du runtime ; n'exige PAS le non-root => sûr même sur les images
+# Onyx/Ollama qui tournent en ROOT par défaut). Les composants dont l'IMAGE supporte
+# le non-root (onix-actions/worker : UID 10001 ; gateway : UID 10002) ajoutent
+# runAsNonRoot/runAsUser via leur propre bloc `securityContext` (fusionné par-dessus).
+# readOnlyRootFilesystem : VOLONTAIREMENT absent (Ollama écrit les modèles ; actions
+# écrit des fichiers temporaires OCR/.docx). Cf. docs/HA_SCALING.md §durcissement.
+# -----------------------------------------------------------------------------
+podSecurityContext:
+  default:
+    seccompProfile:
+      type: RuntimeDefault
+
 # =============================================================================
 # 1) SERVICES STATELESS ONYX — replicas>=2 + HPA + PDB
 #    (noms alignés sur le chart officiel : api, webserver, background,
@@ -218,6 +233,12 @@ actions:
   pdb:
     enabled: true
     minAvailable: 1
+  # Durcissement : l'image onix-actions tourne en non-root (UID 10001, cf.
+  # actions/Dockerfile) => on FORCE runAsNonRoot au niveau pod (exigé par un PSS
+  # `restricted`). Fusionné avec podSecurityContext.default (seccomp RuntimeDefault).
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
   # Feature flags / kill-switch (gatent réellement les endpoints) — alignés
   # docker-compose. Surchargeables par l'intégrateur.
   config:
@@ -261,6 +282,10 @@ actionsQueue:
   resultBackend: ""            # -> ONIX_RESULT_BACKEND
   worker:
     replicaCount: 2
+    # Durcissement : worker = image onix-actions (UID 10001) => non-root forcé.
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
     # Commande Celery (le module `app.celery_app` est le hook à ajouter côté code).
     command:
       - celery

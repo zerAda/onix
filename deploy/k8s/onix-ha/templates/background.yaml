@@ -21,6 +21,7 @@ spec:
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
       {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "background") | nindent 6 }}
+      {{- include "onix.podSecurityContext" (dict "ctx" . "cfg" .Values.background.securityContext) | nindent 6 }}
       containers:
         - name: background
           image: {{ include "onix.image" (dict "image" .Values.background.image "root" .) | quote }}

@@ -130,6 +130,29 @@ affinity:
 {{- end -}}
 
 {{/*
+securityContext au niveau POD — durcissement généralisé (A5 fiabilité).
+Stratégie PRUDENTE (cf. audit-onyx/30-security : images Onyx & Ollama tournent en
+ROOT par défaut ; images onix actions/gateway en non-root UID 10001/10002) :
+  * seccompProfile RuntimeDefault : appliqué PARTOUT (n'exige PAS le non-root,
+    restreint juste les syscalls au profil par défaut du runtime). Aucun risque.
+  * runAsNonRoot/runAsUser : appliqué UNIQUEMENT là où l'IMAGE le supporte
+    (actions/worker). Le forcer sur Onyx/Ollama (root) ferait ÉCHOUER le pod →
+    régression : on l'omet et on documente le rebuild USER comme suite (HA_SCALING).
+On part du défaut global (.Values.podSecurityContext.default = seccomp seul) puis on
+fusionne l'override de composant si fourni (.cfg). readOnlyRootFilesystem JAMAIS posé
+ici (Ollama écrit les modèles, actions écrit des temps OCR/docx) — cf. doc.
+Usage: {{ include "onix.podSecurityContext" (dict "ctx" . "cfg" .Values.actions.securityContext) | nindent 6 }}
+*/}}
+{{- define "onix.podSecurityContext" -}}
+{{- $base := .ctx.Values.podSecurityContext.default | default dict -}}
+{{- $merged := mergeOverwrite (deepCopy $base) (.cfg | default dict) -}}
+{{- if $merged }}
+securityContext:
+  {{- toYaml $merged | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Variables d'environnement SECRÈTES data-tier, injectées depuis le Secret K8s.
 Noms de clés FIXES (cf. values.secrets). Réutilisé par api/background/actions/...
 Inclut ENCRYPTION_KEY_SECRET : SANS clé NON VIDE, Onyx écrit les secrets connecteurs/

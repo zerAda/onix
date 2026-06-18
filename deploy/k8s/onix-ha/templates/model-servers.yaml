@@ -24,6 +24,7 @@ spec:
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
       {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "inference-model-server") | nindent 6 }}
+      {{- include "onix.podSecurityContext" (dict "ctx" . "cfg" .Values.inferenceModelServer.securityContext) | nindent 6 }}
       containers:
         - name: model-server
           image: {{ include "onix.image" (dict "image" .Values.inferenceModelServer.image "root" .) | quote }}
@@ -96,6 +97,7 @@ spec:
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
       {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "index-model-server") | nindent 6 }}
+      {{- include "onix.podSecurityContext" (dict "ctx" . "cfg" .Values.indexModelServer.securityContext) | nindent 6 }}
       containers:
         - name: model-server
           image: {{ include "onix.image" (dict "image" .Values.indexModelServer.image "root" .) | quote }}

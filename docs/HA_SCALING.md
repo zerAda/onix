@@ -157,6 +157,39 @@ départ raisonnable pour une PME ; à ajuster selon la charge réelle.
 
 ---
 
+## 5bis. Durcissement des pods (securityContext)
+
+Le chart applique un `securityContext` au niveau **pod**, généralisé à TOUS les
+Deployments/StatefulSets via le helper `onix.podSecurityContext` (valeur par défaut
+`podSecurityContext.default`). Stratégie **prudente** (pour ne PAS introduire de
+régression — cf. `docs/audit-onyx/30-security.md` : les images **Onyx** et **Ollama**
+tournent en **root** par défaut) :
+
+| Composant | `seccompProfile: RuntimeDefault` | `runAsNonRoot` / `runAsUser` | Raison |
+|---|:---:|:---:|---|
+| onix-actions, actions-worker | ✅ | ✅ (UID 10001) | image non-root (`actions/Dockerfile:43`) |
+| access-gateway | ✅ | ✅ (UID 10002) | image non-root (`access-gateway/Dockerfile:26`) |
+| Onyx api/web/background/model-servers | ✅ | ❌ | image amont **root** : forcer non-root ferait échouer le pod |
+| Ollama, RabbitMQ broker | ✅ | ❌ | Ollama root + écrit les modèles sur PVC |
+
+- **`seccompProfile: RuntimeDefault` est appliqué partout** : il restreint les appels
+  système au profil par défaut du runtime **sans exiger le non-root** → sûr même sur
+  les images root. C'est le durcissement « gratuit » généralisable immédiatement.
+- **`runAsNonRoot` n'est posé que là où l'IMAGE le supporte** (actions/worker/gateway).
+  Le surcharger par composant : bloc `securityContext` dans les `values`.
+- **`readOnlyRootFilesystem` n'est VOLONTAIREMENT pas posé** : Ollama écrit les modèles
+  sur le PVC, et `onix-actions` écrit des fichiers temporaires (OCR, `.docx`) sur le
+  système de fichiers du conteneur. L'activer ici casserait ces écritures.
+
+### Suite (hors de cette vague — nécessite un changement d'image ou de runtime)
+- **Non-root pour Onyx/Ollama** : exige de rebuild les images amont avec un
+  `USER onyx`/`USER ollama` (et des permissions PVC adaptées). Tant que les images
+  publiées tournent en root, le manifeste ne peut pas l'imposer sans casser le boot.
+- **NetworkPolicy** : aucune `NetworkPolicy` n'est livrée dans le chart (cloisonnement
+  réseau est-ouest à câbler selon le CNI du cluster). À ajouter en recette.
+
+---
+
 ## 6. Continuité d'activité — sauvegardes À CHAUD (sans interruption)
 
 Toutes les sauvegardes s'exécutent **cluster en ligne**, sans couper le service.
