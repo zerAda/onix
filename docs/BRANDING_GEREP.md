@@ -16,7 +16,7 @@ Mécanisme (`ngx_http_sub_module`, inclus dans l'image nginx officielle) :
 1. `location /` désactive la compression amont (`proxy_set_header Accept-Encoding "";`)
    pour que le filtre puisse lire le HTML.
 2. `sub_filter` (restreint à `text/html`, `sub_filter_once off`) remplace
-   `</head>` par l'injection de deux balises **avant** la fermeture du `<head>** :
+   `</head>` par l'injection de deux balises **avant** la fermeture du `<head>` :
    ```html
    <link rel="stylesheet" href="/onix-branding/gerep-theme.css">
    <link rel="icon" type="image/svg+xml" href="/onix-branding/favicon.svg">
