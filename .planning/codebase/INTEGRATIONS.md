@@ -1,0 +1,284 @@
+# External Integrations
+
+**Analysis Date:** 2026-06-18
+
+## APIs & External Services
+
+**Microsoft Graph (SharePoint / Entra ID):**
+- Onyx SharePoint connector - Indexes documents from SharePoint Online
+  - SDK/Client: httpx (native HTTP, no SDK package)
+  - Auth: Entra ID App Registration (client secret OR certificate)
+    - Mode A (simple): `Sites.Selected` (application), `User.Read` (delegated)
+    - Mode B (enterprise): Certificate + permission-sync (Onyx EE only)
+  - Graph endpoints: /sites, /drives, /items (document listing & metadata)
+  - Docs: `docs/connectors/SHAREPOINT.md`
+
+**Entra ID (SSO / OIDC):**
+- Identity provider for user authentication
+  - SDK/Client: PyJWT (0.2.13.0) for asymmetric JWT verification (RS256/ES256)
+  - Auth flow: oauth2-proxy (frontend) or native OIDC (fastapi-auth)
+  - Env vars: `GATEWAY_GRAPH_CLIENT_ID`, `GATEWAY_GRAPH_CLIENT_SECRET` (Graph API calls), `GATEWAY_GRAPH_TENANT_ID`
+  - Token cache: Redis (azure cache in prod, compose redis in mono-poste)
+
+**Ollama (LLM Inference):**
+- Local LLM runtime (containerized, internal network only)
+  - SDK/Client: httpx (OpenAI-compatible endpoint)
+  - URL: `http://ollama:11434` (internal Docker network, NOT localhost)
+  - Env vars: `ONIX_OLLAMA_URL`, `ONIX_LLM_MODEL` (default `llama3.2:3b`)
+  - Models: Pulled via `make models` / `scripts/pull-models.sh`
+  - No external API key; models downloaded to `ollama_data` volume
+  - Docs: `docs/RAG_OPTIMIZATION.md`, `docs/PERFORMANCE.md`
+
+## Data Storage
+
+**Databases:**
+- PostgreSQL 15.2-alpine
+  - Connection: `postgres://user:pass@relational_db:5432/onyx` (Docker) or `host=<PG_FQDN>.postgres.database.azure.com sslmode=require` (Azure managed)
+  - Client: psycopg 3.3.4 (async, binary included)
+  - Purpose: Onyx schema (users, connectors, documents, embeddings metadata), onix-actions state (audit log, tasks, usage)
+  - Env vars: `POSTGRES_HOST`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (default "onyx"), `DB_READONLY_USER`, `DB_READONLY_PASSWORD`
+  - Migrations: Alembic (run at api_server startup, `alembic upgrade head`)
+  - HA (prod): Azure DB for PostgreSQL Flexible (zone-redundant)
+
+**Cache & Session Storage:**
+- Redis 7.4-alpine
+  - Connection: `redis://:password@cache:6379` (compose) or `rediss://:key@<REDIS_FQDN>.redis.cache.windows.net:6380` (Azure TLS)
+  - Client: redis 5.2.1 (gateway) / redis 8.0.0 (actions)
+  - Databases: Base 0 (Onyx internal state), Base 1 (gateway RBAC cache)
+  - Purpose: Session cache, embedding cache (semantic), RBAC doc-ACL cache (key = HMAC of user+perimiter for deterministic safety)
+  - Env vars: `REDIS_HOST`, `REDIS_PASSWORD`, `REDIS_PORT` (default 6379), `REDIS_SSL` (6380 on Azure)
+  - Persistence: tmpfs (ephemeral, no disk backup). HA prod: Azure Cache for Redis Premium with persistence
+
+**File Storage:**
+- MinIO (S3-compatible, local or Azure)
+  - Connection: `http://minio:9000` (compose) or `https://minio.<namespace>.svc.cluster.local` (K8s)
+  - Client: boto3 1.43.30 (path-style addressing)
+  - Purpose: Onyx document file-system, onix-actions output (.docx audit files)
+  - Env vars: `S3_ENDPOINT_URL`, `S3_AWS_ACCESS_KEY_ID`, `S3_AWS_SECRET_ACCESS_KEY`, `S3_FILE_STORE_BUCKET_NAME` (default "onyx-file-store-bucket")
+  - HA prod: 4-node distributed MinIO (erasure-coded) in K8s, or Azure Blob Storage
+
+**Search & Vector Index:**
+- OpenSearch 3.6.0 (fork of Elasticsearch 7.x)
+  - Connection: `https://admin:password@opensearch:9200` (internal, self-signed cert)
+  - Client: Onyx native OpenSearch client (Python)
+  - Purpose: Lexical + vector (embedding) search for RAG retrieval
+  - Env vars: `OPENSEARCH_HOST`, `OPENSEARCH_ADMIN_PASSWORD`, `OPENSEARCH_PORT` (default 9200)
+  - Heap tuning: `OPENSEARCH_JAVA_OPTS` (default "-Xms1g -Xmx1g"), `OPENSEARCH_HEAP` env var
+  - Persistence: `opensearch-data` volume (20+ GB recommended)
+  - HA prod: 3-node cluster (K8s), Premium SSD v2 storage, zone-redundant
+
+**Embeddings & Reranking Models:**
+- Inference Model Server (Onyx)
+  - Connection: `http://inference_model_server:9000`
+  - Purpose: Embedding generation (document indexing + query), reranking
+  - Client: Onyx internal
+  - Models: HuggingFace-hosted (downloaded to `model_cache_huggingface` volume)
+
+## Authentication & Identity
+
+**Auth Provider:**
+- **Entra ID (Azure AD)** - Primary SSO
+  - Implementation: OIDC via oauth2-proxy (prod) or native FastAPI integration (mono-poste)
+  - Token validation: PyJWT (asymmetric, JWKS endpoint)
+  - Group resolution: Graph API `memberOf` query (gateway resolves groups → Document Sets)
+  - Fallback: Local accounts (username/password, stored in Postgres)
+
+- **Onyx Native Auth:**
+  - Type: BASIC (default) or OIDC/SAML (config at startup)
+  - Env var: `AUTH_TYPE`
+  - Session storage: Redis
+  - First user = admin (auto-promotion)
+
+- **onix-actions API Authentication:**
+  - Type: HMAC-SHA256 (caller identity + nonce + timestamp)
+  - Key: `ONIX_ACTIONS_API_KEY` (generated by gen-secrets.sh, 32-byte)
+  - Rate limiting: slowapi (per-caller quota, cf. `docs/FINOPS.md`)
+
+- **Gateway (access-gateway) Cache:**
+  - RBAC safety key: `GATEWAY_CACHE_HMAC_SECRET` (per-user+perimiter HMAC to prevent leakage across user contexts)
+
+## Monitoring & Observability
+
+**Error Tracking:**
+- Not detected (no Sentry/DataDog/NewRelic configured)
+- Health endpoints: `/health` per service (HTTP 200 = ready)
+
+**Logs:**
+- Docker json-file driver: max-size 50m, max-file 6 (rotation)
+- Volume mounts: `api_server_logs:/var/log/onyx`, `background_logs:/var/log/onyx`, `inference_model_server_logs:/var/log/onyx`
+- Optional (monitored stack): Loki + Grafana aggregation
+
+**Metrics:**
+- Prometheus `/metrics` endpoint (prometheus-client library)
+  - Exposed by: onix-actions (port 8100), access-gateway (port 8200)
+  - Metrics: HTTP request count/latency, cache hit/miss, OCR tasks, audit trail HMAC chains
+  - Optional scrape: Prometheus instance
+
+**Alerting:**
+- Healthchecks (Docker compose HEALTHCHECK, Kubernetes livenessProbe)
+- Manual via logs or metrics dashboards
+
+## CI/CD & Deployment
+
+**Hosting Platforms:**
+- **Development:** Docker Compose (localhost 127.0.0.1:3000)
+- **Production (single-machine):** Docker Compose with systemd (cf. `deploy/local-prod/`, `docs/PROD_LOCAL.md`)
+- **Production (HA):** Kubernetes on Azure AKS (France Central)
+
+**CI Pipeline:**
+- GitHub Actions (`.github/workflows/`)
+  - `ci.yml` - Main quality gate:
+    - `pytest` (actions/tests, access-gateway/tests, tests/rag contract mode)
+    - `pip-audit --strict` (0 CVE on deps)
+    - `gitleaks` (0 secrets)
+    - `bandit` (0 medium+ SAST findings)
+    - `docker compose config` (syntax validation)
+    - `helm lint` (Kubernetes chart validation)
+  - `ragas-nightly.yml` - Optional RAG eval (live Ollama red-team)
+    - ONIX_LIVE_OLLAMA=1 (gate anti-regression)
+
+**Deployment:**
+- **Compose:** `make up` (orchestrates docker compose + model pull)
+- **Helm:** `helm install onix deploy/k8s/onix-ha -f deploy/azure/values-azure.yaml`
+- **Azure IaC:** Bicep templates (`deploy/azure/bicep/setup-*.bicep`) for provisioning AKS, managed DB, Key Vault
+
+## Environment Configuration
+
+**Required env vars (all in .env, generated by scripts/gen-secrets.sh):**
+```
+# Secrets (cryptographically strong, 32-byte base64)
+SECRET                           # Onyx session signing key
+USER_AUTH_SECRET                 # Onyx user JWT signing key
+POSTGRES_PASSWORD                # DB admin password
+OPENSEARCH_ADMIN_PASSWORD        # OpenSearch admin password
+REDIS_PASSWORD                   # Redis requirepass
+S3_AWS_ACCESS_KEY_ID             # MinIO/S3 access key
+S3_AWS_SECRET_ACCESS_KEY         # MinIO/S3 secret key
+ONIX_ACTIONS_API_KEY             # onix-actions HMAC key
+GATEWAY_CACHE_HMAC_SECRET        # Cache safety key (actions/access-gateway)
+GATEWAY_AUDIT_SALT               # Audit log salt (access-gateway)
+
+# Database
+POSTGRES_HOST                    # default: relational_db (Docker) or <FQDN> (Azure)
+POSTGRES_USER                    # default: postgres
+POSTGRES_PASSWORD                # see above
+POSTGRES_DB                      # default: onyx
+DB_READONLY_USER                 # default: db_readonly_user
+DB_READONLY_PASSWORD             # see Secrets
+
+# Cache
+REDIS_HOST                       # default: cache (Docker) or <FQDN>.redis.cache.windows.net (Azure)
+REDIS_PASSWORD                   # see Secrets
+REDIS_PORT                       # default: 6379, 6380 (Azure TLS)
+REDIS_SSL                        # true/false (Azure)
+
+# Object Storage
+S3_ENDPOINT_URL                  # default: http://minio:9000
+S3_AWS_ACCESS_KEY_ID             # see Secrets
+S3_AWS_SECRET_ACCESS_KEY         # see Secrets
+S3_FILE_STORE_BUCKET_NAME        # default: onyx-file-store-bucket
+
+# OpenSearch
+OPENSEARCH_HOST                  # default: opensearch
+OPENSEARCH_ADMIN_PASSWORD        # see Secrets
+
+# Ollama
+OLLAMA_KEEP_ALIVE                # default: 5m (unload model after idle time)
+OLLAMA_CONTEXT_LENGTH            # default: 8192 (tuned by make tune)
+OLLAMA_MAX_LOADED_MODELS         # default: 1
+OLLAMA_NUM_PARALLEL              # default: 1
+OLLAMA_FLASH_ATTENTION           # default: 1 (enable quantized KV cache)
+OLLAMA_KV_CACHE_TYPE             # default: q8_0 (quantization)
+
+# onix-actions
+ONIX_ACTIONS_API_KEY             # see Secrets
+ONIX_OLLAMA_URL                  # default: http://ollama:11434
+ONIX_LLM_MODEL                   # default: llama3.2:3b
+ONIX_OCR_LANG                    # default: fra+eng (French + English)
+ONIX_GLOBAL_ENABLED              # default: true (feature flag)
+ONIX_AUDIT_ENABLED               # default: true
+ONIX_GENERATE_ENABLED            # default: true
+ONIX_TASKS_ENABLED               # default: true
+ONIX_NOTIFY_ENABLED              # default: true
+ONIX_NOTIFY_WEBHOOK              # optional: Slack/Teams webhook for alerts
+ONIX_OCR_ENABLED                 # default: true
+ONIX_LLM_ENABLED                 # default: true
+ONIX_RATE_CARD                   # optional: JSON FinOps rate card
+ONIX_BUDGET_EUR                  # optional: monthly budget limit
+ONIX_BUDGET_WARN_PCT             # default: 80 (% threshold for warning)
+
+# Onyx
+AUTH_TYPE                        # default: basic (or oidc, saml)
+DISABLE_TELEMETRY                # default: true (Onyx OFF by default ON)
+WEB_DOMAIN                       # default: http://localhost:3000
+VALID_EMAIL_DOMAINS              # optional: comma-separated (enforce domain for local auth)
+USER_DIRECTORY_ADMIN_ONLY        # default: true (only admins see user list)
+REQUIRE_EMAIL_VERIFICATION       # default: false (enable for public instances)
+SESSION_EXPIRE_TIME_SECONDS      # default: 86400 (1 day)
+
+# Images
+IMAGE_TAG                        # default: 4.1.1 (Onyx version)
+OLLAMA_IMAGE_TAG                 # default: 0.30.8
+
+# Resource limits (tune via make tune / make detect)
+API_SERVER_CPU_LIMIT             # default: 2 cores
+API_SERVER_MEM_LIMIT             # default: 3g
+BACKGROUND_CPU_LIMIT             # default: 4 cores
+BACKGROUND_MEM_LIMIT             # default: 5g
+POSTGRES_CPU_LIMIT               # default: 2 cores
+POSTGRES_MEM_LIMIT               # default: 1g
+OPENSEARCH_HEAP                  # default: 1g
+OPENSEARCH_MEM_LIMIT             # default: 2g
+INFERENCE_MEM_LIMIT              # default: 4g
+OLLAMA_CPU_LIMIT                 # default: 4 cores
+OLLAMA_MEM_LIMIT                 # default: 6g
+ACTIONS_CPU_LIMIT                # default: 1 core
+ACTIONS_MEM_LIMIT                # default: 512m
+NGINX_CPU_LIMIT                  # default: 1 core
+NGINX_MEM_LIMIT                  # default: 256m
+```
+
+**Secrets location:**
+- Development: `.env` file (gitignored, generated by `scripts/gen-secrets.sh`)
+- Production (compose): `.env` file (mounted volume, restricted permissions 600)
+- Production (AKS): Kubernetes Secret `onix-secrets` (managed via Azure Key Vault CSI driver, Workload Identity)
+- **CI secret scanning:** gitleaks (gate prevents secrets in Git)
+
+## Webhooks & Callbacks
+
+**Incoming:**
+- Onyx connectors: SharePoint scheduled sync (pull-based, no incoming webhook)
+- Entra ID Graph: No incoming webhooks (queries are pull-based)
+
+**Outgoing:**
+- onix-actions `/notify` endpoint: Optional Slack/Teams/Mattermost webhook (if `ONIX_NOTIFY_WEBHOOK` set)
+  - Triggers: Budget threshold, OCR completion, task completion
+  - Auth: None (webhook URL is the secret; no signature validation)
+
+**Integration Patterns:**
+- **Onyx ↔ onix-actions:** Custom Tools/Actions (HTTP POST to `actions:8100/audit`, `/generate`, `/tasks`, etc.)
+  - Auth: `ONIX_ACTIONS_API_KEY` in `Authorization: Bearer` header
+  - Protocol: JSON request/response
+- **Onyx ↔ Ollama:** OpenAI-compatible HTTP (`/v1/embeddings`, `/v1/completions`)
+- **Onyx ↔ access-gateway (optional):** Reverse proxy pattern (gateway intercepts responses, applies ACL filter)
+  - Auth: Entra ID via X-OIDC-Claims header (stripped/validated by gateway)
+- **Onyx ↔ Postgres/OpenSearch/Redis:** Native protocol (psycopg async, httpx, redis-py)
+
+## GDPR & Data Residency
+
+**Data Location:**
+- Development: Local filesystem (Docker volumes)
+- Production: France Central (Azure region, all services co-located)
+- Backup: MinIO (S3 snapshots, persisted to same region)
+- **Ollama models:** Downloaded once to `ollama_data` volume (no upstream re-fetch per inference)
+
+**Compliance Features:**
+- Audit trail: HMAC-chained log (`onix-actions` audit endpoint)
+- PII redaction: Available in logs/export (cf. `docs/SECURITY_RGPD_ACTIONS.md`)
+- Erasure (Art. 17): `/actions/erasure` endpoint (marks user data for deletion, async cleanup)
+- Retention (Art. 5): Configurable via `ONIX_RETENTION_DAYS` (default: indefinite, cf. roadmap)
+- Telemetry: OFF by default (`DISABLE_TELEMETRY=true`)
+
+---
+
+*Integration audit: 2026-06-18*
