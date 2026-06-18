@@ -11,6 +11,10 @@ backups/
 # Override de test sandbox (proxy TLS) — purement local, jamais livré
 docker-compose.sandbox.yml
 
+# Claude Code — worktrees isolés transitoires des sous-agents (pattern
+# « surfaces disjointes » d'AGENTS.md §5) ; jamais committés.
+.claude/
+
 # onix-actions — artefacts locaux (venv, données runtime, caches Python)
 actions/.venv/
 actions/data/
