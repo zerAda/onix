@@ -48,4 +48,7 @@ Rappels rapides pour Claude Code :
   - `make hooks-install` — exécute ces deux gardes en **pre-commit** (à chaque commit).
 - **Source de vérité / nouveau scope** : édite [`docs/scopes/scopes.json`](docs/scopes/scopes.json)
   (registre) + crée son `docs/scopes/<scope>.md` (gabarit : [`docs/scopes/README.md`](docs/scopes/README.md)).
-- **Carte agent racine** (standard llms.txt) : [`llms.txt`](llms.txt).
+- **Assistant guidé** : skill `/update-scope-docs` (met à jour dossier+audit+state, régénère
+  `llms-full.txt`, fait passer les gardes au vert).
+- **Cartes agent racine** : [`llms.txt`](llms.txt) (compacte) · `llms-full.txt` (contenu
+  embarqué, **généré** : `make llms-full`).

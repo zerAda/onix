@@ -6,6 +6,8 @@
 > anti-injection).
 > **Sous-agent** : ML/RAG + prompt-engineering. **État** :
 > [`../../ralph/state/rag-prompts.md`](../../ralph/state/rag-prompts.md).
+>
+> 👤 **Owner** : ML/RAG + prompt-engineering · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 

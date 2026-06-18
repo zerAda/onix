@@ -7,6 +7,8 @@
 > **rétention/effacement**.
 > **Sous-agent** : backend + RGPD. **État** :
 > [`../../ralph/state/actions.md`](../../ralph/state/actions.md).
+>
+> 👤 **Owner** : Backend + RGPD · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 

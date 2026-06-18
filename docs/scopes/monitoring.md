@@ -6,6 +6,8 @@
 > activable indépendamment.
 > **Sous-agent** : observabilité / SRE. **État** :
 > [`../../ralph/state/monitoring.md`](../../ralph/state/monitoring.md).
+>
+> 👤 **Owner** : Observabilité / SRE · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 

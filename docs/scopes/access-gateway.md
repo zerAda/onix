@@ -6,6 +6,8 @@
 > le **streaming** et l'exposition `/metrics`.
 > **Sous-agent** : sécurité plateforme (FastAPI/Redis). **État** :
 > [`../../ralph/state/access-gateway.md`](../../ralph/state/access-gateway.md).
+>
+> 👤 **Owner** : Sécurité plateforme (FastAPI/Redis) · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 

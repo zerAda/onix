@@ -13,7 +13,9 @@ docker-compose.sandbox.yml
 
 # Claude Code — worktrees isolés transitoires des sous-agents (pattern
 # « surfaces disjointes » d'AGENTS.md §5) ; jamais committés.
-.claude/
+# EXCEPTION : .claude/skills/ est VERSIONNÉ (skills d'équipe partagés, ex. /update-scope-docs).
+.claude/*
+!.claude/skills/
 
 # onix-actions — artefacts locaux (venv, données runtime, caches Python)
 actions/.venv/

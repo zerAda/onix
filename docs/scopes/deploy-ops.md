@@ -6,6 +6,8 @@
 > **Azure/AKS** (bicep IaC) — plus les **scripts** d'ops (secrets, hardware, backup…).
 > **Sous-agent** : SRE / DevOps / IaC. **État** :
 > [`../../ralph/state/deploy-ops.md`](../../ralph/state/deploy-ops.md).
+>
+> 👤 **Owner** : SRE / DevOps / IaC · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 

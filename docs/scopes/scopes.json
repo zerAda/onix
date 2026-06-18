@@ -1,9 +1,11 @@
 {
-  "_comment": "Registre des scopes — SOURCE DE VÉRITÉ UNIQUE de la doc-infra agents. Consommé par scripts/check-docs-map.py (structure/liens) et scripts/check-docs-freshness.py (anti-drift doc↔code). Ajouter un scope = ajouter une entrée ici + créer son docs/scopes/<scope>.md (gabarit: docs/scopes/README.md). 'code' = préfixes de chemins déclenchant l'exigence de mise à jour doc (anti-drift) ; [] = scope transverse (pas de déclencheur de code exclusif).",
+  "_comment": "Registre des scopes — SOURCE DE VÉRITÉ UNIQUE de la doc-infra agents. Consommé par scripts/check-docs-map.py (structure/liens/owner/revue), scripts/check-docs-freshness.py (anti-drift doc↔code) et scripts/gen-llms-full.py (carte embarquée). Ajouter un scope = ajouter une entrée ici + créer son docs/scopes/<scope>.md (gabarit: docs/scopes/README.md). 'code' = préfixes de chemins déclenchant l'exigence de MAJ doc (anti-drift) ; [] = scope transverse. 'owner' DOIT apparaître dans le dossier (ligne Owner). 'last_reviewed' (AAAA-MM-JJ) + 'review_days' (global) pilotent le rappel de revue périodique.",
   "required_sections": 10,
+  "review_days": 120,
   "scopes": {
     "access-gateway": {
       "owner": "Sécurité plateforme (FastAPI/Redis)",
+      "last_reviewed": "2026-06-18",
       "code": ["access-gateway/"],
       "dossier": "docs/scopes/access-gateway.md",
       "audit": "docs/audit-reality/access-gateway.md",
@@ -11,6 +13,7 @@
     },
     "actions": {
       "owner": "Backend + RGPD",
+      "last_reviewed": "2026-06-18",
       "code": ["actions/"],
       "dossier": "docs/scopes/actions.md",
       "audit": "docs/audit-reality/actions.md",
@@ -18,6 +21,7 @@
     },
     "rag-prompts": {
       "owner": "ML/RAG + prompt-engineering",
+      "last_reviewed": "2026-06-18",
       "code": ["tests/rag/", "prompts/"],
       "dossier": "docs/scopes/rag-prompts.md",
       "audit": "docs/audit-reality/rag-prompts.md",
@@ -25,6 +29,7 @@
     },
     "monitoring": {
       "owner": "Observabilité / SRE",
+      "last_reviewed": "2026-06-18",
       "code": ["monitoring/"],
       "dossier": "docs/scopes/monitoring.md",
       "audit": "docs/audit-reality/monitoring.md",
@@ -32,6 +37,7 @@
     },
     "deploy-ops": {
       "owner": "SRE / DevOps / IaC",
+      "last_reviewed": "2026-06-18",
       "code": ["deploy/", "nginx/"],
       "dossier": "docs/scopes/deploy-ops.md",
       "audit": "docs/audit-reality/deploy-ops.md",
@@ -39,6 +45,7 @@
     },
     "security-governance": {
       "owner": "Sécurité / conformité / architecture",
+      "last_reviewed": "2026-06-18",
       "code": [],
       "dossier": "docs/scopes/security-governance.md",
       "audit": "docs/audit-reality/security-governance.md",

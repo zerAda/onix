@@ -383,7 +383,7 @@ logs-local-prod:
 # Pré-requis make test : python3 + pip, docker, gitleaks (téléchargé si absent).
 MONITORING_COMPOSE := docker compose -f monitoring/docker-compose.monitoring.yml
 
-.PHONY: test lint docs-check docs-freshness hooks-install pytest bandit pip-audit trivy gitleaks compose-validate sbom \
+.PHONY: test lint docs-check docs-freshness hooks-install llms-full pytest bandit pip-audit trivy gitleaks compose-validate sbom \
         monitor-up monitor-down monitor-config monitor-logs
 
 # Barrière unique : tout ce que la CI vérifie, en local, dans l'ordre.
@@ -406,6 +406,11 @@ docs-check:
 # Ex : make docs-freshness BASE=origin/main  ·  hook pre-commit : --staged.
 docs-freshness:
 	@python3 scripts/check-docs-freshness.py $(if $(BASE),$(BASE),)
+
+# (Re)génère llms-full.txt (carte agent à contenu embarqué). docs-check vérifie
+# qu'il est à jour ; lancer cette cible après toute modif d'orientation/dossiers.
+llms-full:
+	@python3 scripts/gen-llms-full.py
 
 # Active les hooks versionnés (.githooks/pre-commit : docs-check + docs-freshness --staged).
 hooks-install:

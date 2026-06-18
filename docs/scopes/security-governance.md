@@ -6,6 +6,8 @@
 > le scope « gardien » : il relie les contrôles des autres scopes à une posture cohérente.
 > **Sous-agent** : sécurité / conformité / architecture. **État** :
 > [`../../ralph/state/security-governance.md`](../../ralph/state/security-governance.md).
+>
+> 👤 **Owner** : Sécurité / conformité / architecture · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 

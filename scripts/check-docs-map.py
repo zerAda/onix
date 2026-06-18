@@ -22,7 +22,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess  # nosec B404 - appel python à arguments fixes, jamais shell=True
 import sys
+from datetime import date
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REGISTRY = os.path.join(ROOT, "docs", "scopes", "scopes.json")
@@ -83,6 +85,69 @@ def check_sections(reg: dict) -> list[str]:
     return errs
 
 
+def check_owners(reg: dict) -> list[str]:
+    """Chaque dossier doit AFFICHER son owner (ligne '**Owner** : <owner registre>')."""
+    errs: list[str] = []
+    for name, spec in reg["scopes"].items():
+        path = os.path.join(ROOT, spec["dossier"])
+        if not os.path.isfile(path):
+            continue
+        owner = spec.get("owner", "")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        if f"**Owner** : {owner}" not in text:
+            errs.append(
+                f"dossier '{spec['dossier']}' : ligne owner absente ou ≠ registre "
+                f"(attendu '**Owner** : {owner}')"
+            )
+    return errs
+
+
+def check_review(reg: dict) -> list[str]:
+    """Avertissement : revue périodique échue (today - last_reviewed > review_days)."""
+    warns: list[str] = []
+    days = int(reg.get("review_days", 0) or 0)
+    if days <= 0:
+        return warns
+    today = date.today()
+    for name, spec in reg["scopes"].items():
+        raw = spec.get("last_reviewed")
+        if not raw:
+            warns.append(f"scope '{name}' : 'last_reviewed' absent du registre")
+            continue
+        try:
+            last = date.fromisoformat(raw)
+        except ValueError:
+            warns.append(f"scope '{name}' : 'last_reviewed' invalide ({raw}, attendu AAAA-MM-JJ)")
+            continue
+        overdue = (today - last).days - days
+        if overdue > 0:
+            warns.append(
+                f"scope '{name}' : revue échue de {overdue} j "
+                f"(dernière {raw}, cadence {days} j) → relire le dossier et MAJ last_reviewed"
+            )
+    return warns
+
+
+def check_llms_full() -> list[str]:
+    """llms-full.txt (carte embarquée générée) doit être à jour vs ses sources."""
+    gen = os.path.join(ROOT, "scripts", "gen-llms-full.py")
+    if not os.path.isfile(gen):
+        return []
+    try:
+        out = subprocess.run(  # nosec B603
+            [sys.executable, gen, "--check"], capture_output=True, text=True, check=False
+        )
+    except (OSError, ValueError) as exc:
+        return [f"impossible de vérifier llms-full.txt : {exc}"]
+    if out.returncode != 0:
+        msg = (out.stdout or out.stderr or "llms-full.txt périmé").strip()
+        if msg.startswith("✗"):
+            msg = msg[1:].strip()
+        return [msg]
+    return []
+
+
 def nav_files(reg: dict) -> list[str]:
     files = ["CLAUDE.md", "AGENTS.md", "docs/DOCS_INDEX.md", "docs/scopes/README.md", "llms.txt"]
     files += [spec["dossier"] for spec in reg["scopes"].values()]
@@ -132,8 +197,14 @@ def main() -> int:
         print(f"✗ registre illisible ({REGISTRY}) : {exc}")
         return 1
 
-    errors = check_registry(reg) + check_sections(reg) + check_links(reg)
-    warnings = check_orphans(reg)
+    errors = (
+        check_registry(reg)
+        + check_sections(reg)
+        + check_owners(reg)
+        + check_links(reg)
+        + check_llms_full()
+    )
+    warnings = check_orphans(reg) + check_review(reg)
 
     for w in warnings:
         print(f"  ⚠ {w}")

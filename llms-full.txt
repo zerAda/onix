@@ -1,0 +1,901 @@
+# onix — llms-full.txt (carte agent, CONTENU EMBARQUÉ)
+# FICHIER GÉNÉRÉ — NE PAS ÉDITER À LA MAIN. Régénérer : `make llms-full`.
+# Source : scripts/gen-llms-full.py (orientation + dossiers de scope du registre).
+# Pour un agent sans accès fichiers : tout le contexte d'orientation en un bloc.
+
+
+## Sommaire (fichiers embarqués)
+
+- AGENTS.md
+- CLAUDE.md
+- docs/scopes/README.md
+- docs/scopes/access-gateway.md
+- docs/scopes/actions.md
+- docs/scopes/rag-prompts.md
+- docs/scopes/monitoring.md
+- docs/scopes/deploy-ops.md
+- docs/scopes/security-governance.md
+
+
+==============================================================================
+# FICHIER EMBARQUÉ : AGENTS.md
+==============================================================================
+
+# AGENTS.md — guide d'embarquement pour agents (et humains) sur **onix**
+
+> **Lis ce fichier en premier.** Il oriente tout développement futur : ce qu'est
+> onix, comment c'est organisé, comment build/test/déployer, les **règles de jeu**
+> non-négociables, et où vit chaque *scope*. (`CLAUDE.md` pointe ici.)
+
+## 1. C'est quoi onix (en 30 secondes)
+**onix = un assistant RAG d'entreprise, 100 % souverain et auto-hébergé**, bâti sur
+**Onyx** (plateforme RAG open-source, ex-Danswer) + **Ollama** (LLM local), **plus
+une couche de compensation `onix`** qui ajoute ce qu'Onyx FOSS ne fournit pas pour
+un client régulé (RGPD, multi-utilisateur, SharePoint client-360).
+
+**Pourquoi cette couche existe** (cf. [`docs/audit-onyx/00-VERDICT.md`](docs/audit-onyx/00-VERDICT.md))
+: l'audit byte-level d'Onyx v4.1.1 conclut **« plateforme premium prod-ready, PAS un
+POC »**, MAIS les fonctions entreprise décisives sont **payantes (EE/Cloud)** ou
+**absentes** : RBAC par-document (perm-sync = EE), **audit-trail (absent partout)**,
+chiffrement des secrets (off par défaut, clair), SSO complet (partiel). onix comble
+ces manques **en FOSS** : passerelle RBAC + ACL par-doc, audit HMAC chaîné, redaction
+PII, DLP egress, rétention/effacement, télémétrie OFF, déploiement durci.
+
+## 2. Modèle mental — 4 couches
+```
+┌─ Couche INFRA (Azure/AKS ou Docker Compose) ── deploy/ ─────────────────┐
+│  Postgres · Redis · OpenSearch · MinIO · ingress/TLS · Key Vault        │
+├─ Couche LLM ── Ollama (local, provider natif Onyx `ollama_chat`) ───────┤
+├─ Couche ONYX (FOSS, MIT) ── RAG : connecteurs, indexation, chat, model-server
+├─ Couche ONIX (notre valeur ajoutée) ───────────────────────────────────┤
+│  access-gateway/  (RBAC + ACL par-doc + cache RBAC-safe + streaming + /metrics)
+│  actions/         (audit OCR, génération .docx, tâches, notify, usage/coût, admin, audit HMAC, PII, DLP, rétention)
+│  prompts/         (agent commercial sourcé, anti-injection)
+│  tests/rag/       (red-team + garde-fous + éval RAGAS)
+│  monitoring/      (Prometheus/Grafana/Loki)
+└─────────────────────────────────────────────────────────────────────────┘
+```
+Détail : [`ARCHITECTURE.md`](ARCHITECTURE.md) (racine) + [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+## 3. Carte du dépôt
+| Chemin | Rôle |
+|---|---|
+| `docker-compose.yml` (+ `.gpu`/`.performance`/`.prod-local`/`.lan`) | Stack mono-poste durcie ; `.prod-local` = **production machine unique** (santé+ordre+`restart:always`), `.lan` = accès testeurs LAN |
+| `access-gateway/` | Proxy RBAC FastAPI : cloisonnement, **ACL par-doc**, cache, streaming, `/metrics` |
+| `actions/` | Microservice `onix-actions` : OCR/docgen/tasks/notify/usage/coût/admin + sécurité/RGPD |
+| `prompts/` | Prompt système de l'agent commercial (sourcé, anti-injection) |
+| `tests/rag/` | Garde-fous (red-team, post-filtre), éval **RAGAS** (`ragas_eval/`) |
+| `monitoring/` | Observabilité locale (Prometheus/Grafana/Loki/alertes) |
+| `deploy/k8s/onix-ha/` | **Chart Helm HA** (OpenSearch/Postgres/MinIO/Redis HA, HPA, Celery, +gateway, +GPU) |
+| `deploy/prod/` | Compose prod exposé (Caddy TLS + OIDC oauth2-proxy + passerelle) — domaine public |
+| `deploy/local-prod/` | **Production machine unique** : unit systemd (démarrage au boot) + README (cf. `docs/PROD_LOCAL.md`) |
+| `deploy/azure/` | **Azure/AKS** : `values-azure.yaml`, `setup-entra.sh`, **`bicep/`** (IaC validée `bicep build`) — passerelle = template natif du chart |
+| `scripts/` | `detect-hardware`(.sh/.ps1), `gen-secrets.sh`, `pull-models.sh`, `sync-doc-acl.py`, backup/restore, verify |
+| `docs/` | Toute la doc de scope (index : [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md)) |
+| `docs/audit-onyx/` | Audit byte-level d'Onyx (7 dimensions + verdict) |
+
+## 4. Build / test / déploiement
+```bash
+# Mono-poste (dev/démo)
+make tune && make secrets && make up && make verify     # détecte HW, génère secrets, démarre, vérifie
+make models                                             # pré-tire les modèles Ollama (num_ctx gravé)
+# POC local complet (machine perso, connexion SharePoint, 1-2 testeurs) → docs/POC_LOCAL.md
+make preflight-local                                    # pré-vol des prérequis AVANT make up (daemon, max_map_count, RAM, disque, ports, secrets)
+# PRODUCTION sur MACHINE UNIQUE (durci : santé+ordre+restart:always, Tailscale/LAN) → docs/PROD_LOCAL.md
+make up-local-prod && make verify                       # stack prod-local + contrôle de bout en bout
+
+# Qualité (DOIT rester vert — voir §5)
+make test            # lint + compose-validate + pytest + bandit + pip-audit + gitleaks + trivy
+make rag-eval        # éval RAGAS LIVE (juge Ollama local) ; rag-eval-ci = + gate anti-régression
+
+# Helm (HA)
+helm lint deploy/k8s/onix-ha
+helm template t deploy/k8s/onix-ha -f deploy/azure/values-azure.yaml
+
+# Azure/AKS : runbook docs/DEPLOY_AZURE.md  ·  IaC repeatable : deploy/azure/bicep/
+```
+Suites pytest : `actions/tests`, `access-gateway/tests`, `tests/rag` (offline) ; éval/boot live = manuels.
+
+## 5. Règles de jeu (NON négociables)
+1. **Honnêteté > esbroufe. Zéro mock présenté comme du réel.** Si un truc n'est pas
+   testé/vérifié, dis-le. Le client est exigeant ; une fausse affirmation = perte de confiance.
+2. **Les portes de qualité restent VERTES** : `pytest` (actions/gateway/rag), `pip-audit
+   --strict` (0 CVE), `gitleaks` (0 secret), `bandit` (0 medium+), `helm lint`,
+   `compose config`. On relève les pins dès qu'une CVE apparaît (cf. `tests/rag/requirements.txt`).
+3. **Sécurité par défaut** : aucun secret en repo (`.env` gitignoré, généré par
+   `gen-secrets.sh`) ; fail-closed ; `runAsNonRoot` ; egress allowlisté ; télémétrie OFF.
+4. **Style** : commentaires/docstrings **en français**, **stdlib-first** (pas de dépendance
+   lourde sans raison), code qui ressemble au code voisin.
+5. **Surfaces disjointes** quand tu parallélises (clones `/tmp` isolés, merge par SHA) —
+   c'est le pattern multi-agent éprouvé de ce repo.
+6. **FOSS vs EE** : toujours distinguer. Ne présuppose pas qu'une feature « entreprise »
+   est gratuite (cf. l'audit). Le RBAC par-doc retenu ici = **gateway FOSS** (filtre de sortie).
+
+## 6. Où vit chaque scope (liens)
+> **Navigation agent** : commence par le **dossier de scope** [`docs/scopes/`](docs/scopes/README.md)
+> (un fichier par scope : code, commandes, tests, invariants, observabilité, docs, journal),
+> puis suis ses liens. Routeur sujet→doc : [`CLAUDE.md`](CLAUDE.md) § « Carte de navigation ».
+- **RAG / qualité / Ollama** : [`docs/RAG_OPTIMIZATION.md`](docs/RAG_OPTIMIZATION.md) · [`docs/PLAYBOOK_ONYX_RAG.md`](docs/PLAYBOOK_ONYX_RAG.md) · [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) · [`docs/RAG_EVAL.md`](docs/RAG_EVAL.md)
+- **RBAC / cache / streaming** : [`docs/RBAC.md`](docs/RBAC.md) · [`docs/DECISION_RBAC.md`](docs/DECISION_RBAC.md) · [`docs/CACHE.md`](docs/CACHE.md) · [`docs/STREAMING.md`](docs/STREAMING.md)
+- **Fonctions applicatives** : [`docs/ACTIONS.md`](docs/ACTIONS.md) · [`docs/FINOPS.md`](docs/FINOPS.md) · [`docs/AGENT_COMMERCIAL.md`](docs/AGENT_COMMERCIAL.md)
+- **Sécurité / RGPD** : [`SECURITY.md`](SECURITY.md) · [`docs/SECURITY.md`](docs/SECURITY.md) · [`docs/SECURITY_RGPD_ACTIONS.md`](docs/SECURITY_RGPD_ACTIONS.md) · [`docs/RGPD.md`](docs/RGPD.md)
+- **Déploiement / HA / ops** : [`docs/POC_LOCAL.md`](docs/POC_LOCAL.md) · [`docs/PROD_LOCAL.md`](docs/PROD_LOCAL.md) · [`docs/RUNBOOK.md`](docs/RUNBOOK.md) · [`docs/HA_SCALING.md`](docs/HA_SCALING.md) · [`docs/DEPLOY_PROD.md`](docs/DEPLOY_PROD.md) · [`docs/DEPLOY_AZURE.md`](docs/DEPLOY_AZURE.md) · [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)
+- **SharePoint / connecteurs** : [`docs/connectors/SHAREPOINT.md`](docs/connectors/SHAREPOINT.md)
+- **Audit Onyx + parité** : [`docs/audit-onyx/00-VERDICT.md`](docs/audit-onyx/00-VERDICT.md) · [`docs/PARITE_ENTREPRISE.md`](docs/PARITE_ENTREPRISE.md) · [`docs/COMPARATIF_COPILOT_AC360.md`](docs/COMPARATIF_COPILOT_AC360.md)
+- **Index complet** : [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md)
+
+## 7. Pièges à ne pas casser
+- Onyx connecte Ollama via le **nom de service interne** (`http://…-ollama:11434`), pas localhost.
+- `num_ctx` : défaut Onyx 4096 = **troncature** ; il est câblé (compose/Helm/Modelfile) — ne pas régresser.
+- Azure : Redis = **TLS 6380 + noeviction** ; Postgres = `sslmode=require` ; **poser `ENCRYPTION_KEY_SECRET`** (sinon secrets en clair).
+- Le cache **ne stocke QUE** le corps périmètre-déterministe ; l'ACL par-doc est ré-appliquée **par requête** (jamais mutualisée). Ne pas inverser cet ordre.
+- Permission-sync SharePoint = **EE + certificat** ; en FOSS on indexe sans ACL → la passerelle fait le cloisonnement (filtre de sortie).
+
+
+==============================================================================
+# FICHIER EMBARQUÉ : CLAUDE.md
+==============================================================================
+
+# CLAUDE.md
+
+Ce dépôt suit **[`AGENTS.md`](AGENTS.md) — lis-le en premier** (embarquement,
+architecture, build/test/déploiement, règles de jeu, carte des scopes).
+
+Rappels rapides pour Claude Code :
+- **Qualité (doit rester vert)** : `make test` (pytest + bandit + pip-audit + gitleaks
+  + trivy + compose/helm). Suites offline : `actions/tests`, `access-gateway/tests`, `tests/rag`.
+- **Démarrage** : `make tune && make secrets && make up && make verify`.
+- **Conventions** : commentaires **en français**, stdlib-first, **zéro secret en repo**, **zéro mock présenté comme réel**.
+- **Contexte clé** : Onyx FOSS ≠ entreprise turnkey (RBAC/audit/chiffrement = EE/absent) →
+  la couche `onix` comble en FOSS. Toujours distinguer **FOSS vs EE**. Cf. `docs/audit-onyx/00-VERDICT.md`.
+- **Architecture** : [`ARCHITECTURE.md`](ARCHITECTURE.md) · **Sécurité** : [`SECURITY.md`](SECURITY.md) · **Index doc** : [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md).
+
+## 🧭 Carte de navigation (sujet → doc)
+
+> Pour intervenir : pars du **dossier de scope** (`docs/scopes/`), puis suis ses liens
+> (code, commandes, tests, invariants, observabilité, docs de fond, journal). C'est
+> l'**infra de doc pour agents**. Index des dossiers : [`docs/scopes/README.md`](docs/scopes/README.md).
+
+| Tu cherches… | Va directement voir |
+|---|---|
+| RBAC / cache / streaming / ACL par-doc · SharePoint · Fabric | [`docs/scopes/access-gateway.md`](docs/scopes/access-gateway.md) |
+| OCR / docgen / tâches · audit HMAC · PII · DLP · rétention · FinOps | [`docs/scopes/actions.md`](docs/scopes/actions.md) |
+| Qualité RAG · garde-fous · RAGAS · prompt agent | [`docs/scopes/rag-prompts.md`](docs/scopes/rag-prompts.md) |
+| Métriques / logs / alertes / SLO / dashboards | [`docs/scopes/monitoring.md`](docs/scopes/monitoring.md) |
+| Compose / Helm HA / Azure / scripts / branding | [`docs/scopes/deploy-ops.md`](docs/scopes/deploy-ops.md) |
+| Sécurité transverse · RGPD · **FOSS vs EE** · parité | [`docs/scopes/security-governance.md`](docs/scopes/security-governance.md) |
+| Décision RBAC détaillée · e2e accès LIVE | [`docs/RBAC.md`](docs/RBAC.md) · [`docs/DECISION_RBAC.md`](docs/DECISION_RBAC.md) · [`docs/E2E_ACCESS_LIVE.md`](docs/E2E_ACCESS_LIVE.md) |
+| Démarrer / déployer | [`docs/POC_LOCAL.md`](docs/POC_LOCAL.md) · [`docs/PROD_LOCAL.md`](docs/PROD_LOCAL.md) · [`docs/DEPLOY_AZURE.md`](docs/DEPLOY_AZURE.md) |
+| Audit Onyx (verdict, dimensions) | [`docs/audit-onyx/00-VERDICT.md`](docs/audit-onyx/00-VERDICT.md) |
+| Tout (index exhaustif) | [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md) |
+
+## 🔄 Tenir cette doc-infra à jour (à chaque action)
+
+> Principe (« context engineering ») : *un agent n'est aussi bon que la dernière
+> fois où son contexte a été revu.* La fraîcheur est donc **vérifiée, pas espérée**.
+
+- **Règle (non négociable)** : tu touches le code d'un **scope** → tu mets à jour
+  **son** [`docs/scopes/<scope>.md`](docs/scopes/) (carte du code/commandes), **son**
+  `docs/audit-reality/<scope>.md` (preuve `fichier:ligne`) et **son**
+  `ralph/state/<scope>.md` (journal). « Zéro mock présenté comme réel » vaut aussi pour la doc.
+- **Commandes** :
+  - `make docs-check` — STRUCTURE : registre [`docs/scopes/scopes.json`](docs/scopes/scopes.json),
+    gabarit des dossiers, 0 lien mort. Inclus dans `make lint` → `make test` **et en CI**.
+  - `make docs-freshness` — ANTI-DRIFT : refuse une modif de code de scope **sans** MAJ doc
+    (gate CI sur PR ; dérogation justifiée `[docs-skip:<scope>]`).
+  - `make hooks-install` — exécute ces deux gardes en **pre-commit** (à chaque commit).
+- **Source de vérité / nouveau scope** : édite [`docs/scopes/scopes.json`](docs/scopes/scopes.json)
+  (registre) + crée son `docs/scopes/<scope>.md` (gabarit : [`docs/scopes/README.md`](docs/scopes/README.md)).
+- **Assistant guidé** : skill `/update-scope-docs` (met à jour dossier+audit+state, régénère
+  `llms-full.txt`, fait passer les gardes au vert).
+- **Cartes agent racine** : [`llms.txt`](llms.txt) (compacte) · `llms-full.txt` (contenu
+  embarqué, **généré** : `make llms-full`).
+
+
+==============================================================================
+# FICHIER EMBARQUÉ : docs/scopes/README.md
+==============================================================================
+
+# Dossiers de scope — infrastructure de navigation pour agents
+
+> **But.** Un agent (ou un humain) qui doit intervenir sur onix part d'**ICI**,
+> choisit son **scope**, et trouve dans **un seul fichier** : la carte du code, les
+> commandes, les tests, les invariants à ne pas casser, l'observabilité, les docs
+> de fond et le journal d'état. C'est la couche « routeur » entre la vue projet
+> (`CLAUDE.md` / `AGENTS.md`) et les docs de fond (`docs/*.md`).
+
+Embarquement projet : [`../../AGENTS.md`](../../AGENTS.md) · Routeur sujet→doc :
+[`../../CLAUDE.md`](../../CLAUDE.md) · Index doc complet :
+[`../DOCS_INDEX.md`](../DOCS_INDEX.md) · Méthode de durcissement (boucles) :
+[`../../ralph/ORCHESTRATION.md`](../../ralph/ORCHESTRATION.md).
+
+## Les 6 scopes
+
+| Scope | Dossier agent | Mission (1 ligne) | Code | Audit ↔ État |
+|---|---|---|---|---|
+| **access-gateway** | [`access-gateway.md`](access-gateway.md) | Passerelle RBAC : cloisonnement groupe→Document Set, ACL par-doc, cache RBAC-safe, streaming, `/metrics` | [`../../access-gateway/`](../../access-gateway/) | [audit](../audit-reality/access-gateway.md) · [état](../../ralph/state/access-gateway.md) |
+| **actions** | [`actions.md`](actions.md) | Microservice `onix-actions` : OCR, docgen, tâches, notify, usage/coût, admin + sécurité/RGPD (audit HMAC, PII, DLP, rétention) | [`../../actions/`](../../actions/) | [audit](../audit-reality/actions.md) · [état](../../ralph/state/actions.md) |
+| **rag-prompts** | [`rag-prompts.md`](rag-prompts.md) | Qualité RAG : garde-fous red-team, post-filtre déterministe, éval RAGAS, prompt agent sourcé/anti-injection | [`../../tests/rag/`](../../tests/rag/) · [`../../prompts/`](../../prompts/) | [audit](../audit-reality/rag-prompts.md) · [état](../../ralph/state/rag-prompts.md) |
+| **monitoring** | [`monitoring.md`](monitoring.md) | Observabilité : Prometheus/Grafana/Loki/Promtail/Alertmanager/Blackbox, alertes + SLO | [`../../monitoring/`](../../monitoring/) | [audit](../audit-reality/monitoring.md) · [état](../../ralph/state/monitoring.md) |
+| **deploy-ops** | [`deploy-ops.md`](deploy-ops.md) | Déploiement & exploitation : Compose (mono-poste/prod-local/prod), Helm HA, Azure/bicep, scripts ops | [`../../deploy/`](../../deploy/) · [`../../scripts/`](../../scripts/) | [audit](../audit-reality/deploy-ops.md) · [état](../../ralph/state/deploy-ops.md) |
+| **security-governance** | [`security-governance.md`](security-governance.md) | Sécurité transverse & conformité : modèle de menaces, durcissement, RGPD (registre, DPIA), parité FOSS/EE | [`../../SECURITY.md`](../../SECURITY.md) · [`../SECURITY.md`](../SECURITY.md) | [audit](../audit-reality/security-governance.md) · [état](../../ralph/state/security-governance.md) |
+
+## Carte sujet → scope (recherche rapide)
+
+| Si tu cherches… | Scope | Dossier / doc de fond |
+|---|---|---|
+| RBAC, cloisonnement, Document Set, ACL par-doc | access-gateway | [`access-gateway.md`](access-gateway.md) · [`../RBAC.md`](../RBAC.md) · [`../DECISION_RBAC.md`](../DECISION_RBAC.md) |
+| Cache (HMAC périmètre, sémantique) | access-gateway | [`../CACHE.md`](../CACHE.md) |
+| Streaming (NDJSON), garde DUR incrémental | access-gateway | [`../STREAMING.md`](../STREAMING.md) |
+| SharePoint, Microsoft Graph, perm-sync | access-gateway | [`../connectors/SHAREPOINT.md`](../connectors/SHAREPOINT.md) |
+| Microsoft Fabric / OneLake / Power BI | access-gateway | [`../connectors/FABRIC.md`](../connectors/FABRIC.md) |
+| e2e d'accès LIVE (SharePoint + Fabric) | access-gateway | [`../E2E_ACCESS_LIVE.md`](../E2E_ACCESS_LIVE.md) |
+| OCR, génération .docx, tâches, notify | actions | [`actions.md`](actions.md) · [`../ACTIONS.md`](../ACTIONS.md) |
+| Comptage tokens / coûts (FinOps) | actions | [`../FINOPS.md`](../FINOPS.md) |
+| Audit-trail HMAC, PII, DLP, rétention | actions | [`../SECURITY_RGPD_ACTIONS.md`](../SECURITY_RGPD_ACTIONS.md) |
+| État déporté (HA des actions) | actions | [`../STATELESS_ACTIONS.md`](../STATELESS_ACTIONS.md) |
+| Qualité RAG, num_ctx, embedding, reranker | rag-prompts | [`rag-prompts.md`](rag-prompts.md) · [`../RAG_OPTIMIZATION.md`](../RAG_OPTIMIZATION.md) · [`../PLAYBOOK_ONYX_RAG.md`](../PLAYBOOK_ONYX_RAG.md) |
+| Éval RAGAS (gate anti-régression) | rag-prompts | [`../RAG_EVAL.md`](../RAG_EVAL.md) |
+| Red-team, post-filtre, garde-fous | rag-prompts | [`../QA_GUARDRAILS.md`](../QA_GUARDRAILS.md) · [`../E2E_GUARDRAILS.md`](../E2E_GUARDRAILS.md) |
+| Prompt agent commercial (anti-injection) | rag-prompts | [`../AGENT_COMMERCIAL.md`](../AGENT_COMMERCIAL.md) |
+| Métriques, logs, alertes, SLO, dashboards | monitoring | [`monitoring.md`](monitoring.md) · [`../OBSERVABILITY.md`](../OBSERVABILITY.md) |
+| Démarrage mono-poste / POC local | deploy-ops | [`deploy-ops.md`](deploy-ops.md) · [`../POC_LOCAL.md`](../POC_LOCAL.md) |
+| Production machine unique | deploy-ops | [`../PROD_LOCAL.md`](../PROD_LOCAL.md) |
+| Prod exposée (Caddy TLS + OIDC) | deploy-ops | [`../DEPLOY_PROD.md`](../DEPLOY_PROD.md) |
+| Helm HA / scale-out | deploy-ops | [`../HA_SCALING.md`](../HA_SCALING.md) |
+| Azure / AKS / bicep | deploy-ops | [`../DEPLOY_AZURE.md`](../DEPLOY_AZURE.md) |
+| Branding UI GEREP | deploy-ops | [`../BRANDING_GEREP.md`](../BRANDING_GEREP.md) |
+| Modèle de sécurité, menaces, durcissement | security-governance | [`security-governance.md`](security-governance.md) · [`../../SECURITY.md`](../../SECURITY.md) |
+| RGPD, registre, DPIA | security-governance | [`../RGPD.md`](../RGPD.md) · [`../REGISTRE_TRAITEMENTS.md`](../REGISTRE_TRAITEMENTS.md) · [`../DPIA_TEMPLATE.md`](../DPIA_TEMPLATE.md) |
+| Audit Onyx (FOSS vs EE), parité | security-governance | [`../audit-onyx/00-VERDICT.md`](../audit-onyx/00-VERDICT.md) · [`../PARITE_ENTREPRISE.md`](../PARITE_ENTREPRISE.md) |
+
+## Anatomie d'un dossier de scope (gabarit)
+
+Chaque `docs/scopes/<scope>.md` suit le **même plan** (pour que l'agent sache où
+regarder, et pour la validation automatique) :
+
+1. **Mission & frontière FOSS/EE** — ce que le scope apporte, et ce qui reste EE/absent.
+2. **Carte du code** — chemins → rôle, point(s) d'entrée.
+3. **Commandes** — build / test / run propres au scope (cibles `make` réelles).
+4. **Tests & preuves** — suites, ce qu'elles prouvent.
+5. **Invariants & pièges** — ce qu'il ne faut **pas** casser (cf. `AGENTS.md §7`).
+6. **Observabilité** — métriques / logs / alertes du scope.
+7. **Docs de fond** — pour approfondir.
+8. **Audit & journal** — `docs/audit-reality/<scope>.md` + `ralph/state/<scope>.md`.
+9. **Sous-agent** — discipline, skills, MCP, cibles de preuve (cf. `ORCHESTRATION.md §2`).
+10. **Maintenir cette fiche** — quand et comment la mettre à jour.
+
+## Tenir l'infra à jour (« à chaque action »)
+
+Source de vérité : le registre [`scopes.json`](scopes.json) (scope → code/dossier/audit/state).
+
+```bash
+make docs-check        # STRUCTURE : registre + gabarit des dossiers + 0 lien mort (CI + make test)
+make docs-freshness    # ANTI-DRIFT : code de scope modifié ⇒ sa doc DOIT l'être (gate CI sur PR)
+make hooks-install     # pose les deux gardes en pre-commit (à chaque commit)
+```
+Règle : **tu touches le code d'un scope → tu mets à jour son dossier ici**, son
+`docs/audit-reality/<scope>.md` (preuve `fichier:ligne`) et son
+`ralph/state/<scope>.md` (journal). Dérogation justifiée : `[docs-skip:<scope>]` dans
+le commit. Détail : [`../../CLAUDE.md`](../../CLAUDE.md) § « Tenir cette doc-infra à jour ».
+Carte agent racine : [`../../llms.txt`](../../llms.txt).
+
+
+==============================================================================
+# FICHIER EMBARQUÉ : docs/scopes/access-gateway.md
+==============================================================================
+
+# Scope `access-gateway` — dossier agent
+
+> **Mission** : passerelle FastAPI placée **devant** Onyx qui apporte, en FOSS, ce
+> qu'Onyx réserve à l'EE — le **cloisonnement par utilisateur** (groupe Entra →
+> Document Set), l'**ACL par-document** (filtre de sortie), un **cache RBAC-safe**,
+> le **streaming** et l'exposition `/metrics`.
+> **Sous-agent** : sécurité plateforme (FastAPI/Redis). **État** :
+> [`../../ralph/state/access-gateway.md`](../../ralph/state/access-gateway.md).
+>
+> 👤 **Owner** : Sécurité plateforme (FastAPI/Redis) · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
+
+Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
+
+## 1. Mission & frontière FOSS/EE
+
+| | |
+|---|---|
+| **Apporte (FOSS)** | cloisonnement groupe→Document Set forcé à la requête ; ACL par-doc OR-mergée (statique + Graph SharePoint) appliquée **en sortie** ; cache déterministe par périmètre ; streaming NDJSON ; `/metrics`. |
+| **Reste EE/Onyx** | la *permission-sync* SharePoint native (propagation des ACL à l'index) = **EE + certificat**. En FOSS, Onyx indexe sans ACL → **la passerelle cloisonne** (filtre de sortie, limite assumée : le LLM a pu *voir* le contenu pendant la génération — cf. [`../RBAC.md`](../RBAC.md)). |
+
+## 2. Carte du code — [`../../access-gateway/`](../../access-gateway/)
+
+| Fichier | Rôle |
+|---|---|
+| [`app/main.py`](../../access-gateway/app/main.py) | **Point d'entrée** FastAPI. Endpoints : `GET /health`, `GET /metrics`, `GET /v1/authorized-document-sets`, `POST /v1/chat/send-message` (force le filtre Document Set + relais Onyx + post-filtre), `POST /v1/feedback`. |
+| [`app/config.py`](../../access-gateway/app/config.py) | `Settings` 12-factor (env-only). Tout réglage : Onyx amont, source des groupes, Graph, Fabric/gold, cache, doc_acl, streaming. |
+| [`app/identity.py`](../../access-gateway/app/identity.py) | Extraction de l'identité vérifiée depuis `X-OIDC-Claims` (oid/upn/groups), cache TTL. |
+| [`app/mapping.py`](../../access-gateway/app/mapping.py) | Mapping **groupe Entra → Document Set** (fichier JSON, `deny_if_no_match`). |
+| [`app/graph_client.py`](../../access-gateway/app/graph_client.py) | Graph app-only : `transitiveMemberOf` (groupes Entra d'un user). |
+| [`app/graph_acl.py`](../../access-gateway/app/graph_acl.py) | ACL par-doc **dérivée de SharePoint** (`fetch_item_principals` : users/groups/siteGroups en lecture), `GraphDocACL` (TTL). |
+| [`app/doc_acl.py`](../../access-gateway/app/doc_acl.py) | ACL statique (`doc_id → {users,groups}`) + composite (OR-merge avec Graph). Politique par défaut deny. |
+| [`app/fabric_client.py`](../../access-gateway/app/fabric_client.py) | Client **Fabric / OneLake / Power BI** (GET-only, 3 audiences, `is_gold_path` fail-closed, auth `az` injectable). |
+| [`app/fabric_acl.py`](../../access-gateway/app/fabric_acl.py) | `can_principal_read` **fail-closed**, gold-only (roleAssignments ∪ principalAccess OneLake). |
+| [`app/cache.py`](../../access-gateway/app/cache.py) | Cache **RBAC-safe** (clé HMAC incluant le périmètre trié) + tier sémantique opt-in + garde anti-divergence. |
+| [`app/guardrail.py`](../../access-gateway/app/guardrail.py) | Post-filtre garde-fous sur la réponse de l'assistant. |
+| [`app/streaming.py`](../../access-gateway/app/streaming.py) | Relais **NDJSON** (`application/x-ndjson`) token-par-token + garde DUR incrémental + override final. |
+| [`app/onyx_proxy.py`](../../access-gateway/app/onyx_proxy.py) | Relais HTTP vers Onyx amont (timeouts, en-têtes). |
+| [`app/metrics.py`](../../access-gateway/app/metrics.py) | Compteurs Prometheus (`/metrics`). |
+| [`app/audit.py`](../../access-gateway/app/audit.py) | Journal d'audit structuré des décisions d'accès (acteur haché). |
+| [`tests/`](../../access-gateway/tests/) | Suite **offline** (httpx mocké) + harnais e2e LIVE (`tests/e2e/`). |
+
+## 3. Commandes
+
+```bash
+make secrets-gateway                 # génère GATEWAY_CACHE_HMAC_SECRET (access-gateway/.env)
+pytest access-gateway/tests          # suite offline (aucun réseau réel)
+# e2e LIVE (vrai tenant) — cf. docs/E2E_ACCESS_LIVE.md
+python access-gateway/tests/e2e/run_access_e2e.py
+```
+
+## 4. Tests & preuves
+
+- **Offline** : `pytest access-gateway/tests` — RBAC accordé/refusé, filtre Document
+  Set forcé, fail-closed (cache off sans secret, ACL deny par défaut), Fabric gold-only,
+  régression GUID OneLake. Aucun appel réseau (httpx `MockTransport`).
+- **LIVE** : `tests/e2e/run_access_e2e.py` (SharePoint A1–A3, Fabric B1–B5) — réutilise
+  le code déployé ; SKIP propre sans creds (exit 2). Cf. [`../E2E_ACCESS_LIVE.md`](../E2E_ACCESS_LIVE.md).
+
+## 5. Invariants & pièges (ne pas casser)
+
+- **Cache ↔ ACL** : le cache **ne stocke QUE** le corps déterministe par périmètre ;
+  l'**ACL par-doc est ré-appliquée PAR requête** (jamais mutualisée). **Ne pas inverser.**
+- **Fail-closed** partout : identité absente → 401 ; aucun groupe mappé +
+  `deny_if_no_match` → refus ; source ACL indisponible → on n'accorde pas.
+- **Fabric = lecture seule, tables GOLD uniquement** (`is_gold_path`). Aucune méthode
+  POST/PUT/DELETE ne doit exister dans `fabric_client.py`.
+- **siteGroups ≠ groupes Entra** : `graph_acl` capte `siteGroup.id` (entiers SharePoint)
+  mais la résolution user renvoie des **GUID Entra** → partager via **groupes Entra**
+  (cf. [`../DECISION_RBAC.md`](../DECISION_RBAC.md)).
+- **Zéro secret loggé** (jeton/claims jamais journalisés).
+
+## 6. Observabilité
+
+`GET /metrics` (Prometheus) + journal d'audit structuré (`app/audit.py`). Dashboard
+[`../../monitoring/grafana/dashboards/onix-gateway.json`](../../monitoring/grafana/dashboards/onix-gateway.json).
+Vue d'ensemble : [`../OBSERVABILITY.md`](../OBSERVABILITY.md).
+
+## 7. Docs de fond
+
+[`../RBAC.md`](../RBAC.md) · [`../DECISION_RBAC.md`](../DECISION_RBAC.md) ·
+[`../CACHE.md`](../CACHE.md) · [`../STREAMING.md`](../STREAMING.md) ·
+[`../connectors/SHAREPOINT.md`](../connectors/SHAREPOINT.md) ·
+[`../connectors/FABRIC.md`](../connectors/FABRIC.md) ·
+[`../E2E_ACCESS_LIVE.md`](../E2E_ACCESS_LIVE.md).
+
+## 8. Audit & journal
+
+Écarts doc↔code : [`../audit-reality/access-gateway.md`](../audit-reality/access-gateway.md).
+Journal de boucle : [`../../ralph/state/access-gateway.md`](../../ralph/state/access-gateway.md).
+Prompt de scope : [`../../ralph/scopes/access-gateway.md`](../../ralph/scopes/access-gateway.md).
+
+## 9. Sous-agent
+
+| | |
+|---|---|
+| Discipline | Sécurité plateforme (FastAPI/Redis) |
+| Skills | `/security-review`, `/code-review`, `/verify`, `/simplify` |
+| MCP | `Context7` (fastapi, starlette, redis-py) **avant** de coder une API ; `github` (CI) |
+| Cibles de preuve | `pytest access-gateway/tests`, `/metrics`, invariant cache↔ACL |
+
+## 10. Maintenir cette fiche
+
+Touche au code `access-gateway/` ⇒ mets à jour §2 (carte du code), §3/§4 si une
+commande/test change, et reporte la preuve `fichier:ligne` dans
+[`../audit-reality/access-gateway.md`](../audit-reality/access-gateway.md) + le journal.
+Vérifie les liens : `make docs-check`.
+
+
+==============================================================================
+# FICHIER EMBARQUÉ : docs/scopes/actions.md
+==============================================================================
+
+# Scope `actions` — dossier agent
+
+> **Mission** : microservice `onix-actions` (FastAPI) qui porte les **fonctions
+> applicatives** (OCR, génération `.docx`, tâches asynchrones, notifications,
+> usage/coût, admin/kill-switch) **et** la couche **sécurité/RGPD** qu'Onyx ne
+> fournit pas : audit-trail **HMAC chaîné**, redaction **PII**, **DLP** egress,
+> **rétention/effacement**.
+> **Sous-agent** : backend + RGPD. **État** :
+> [`../../ralph/state/actions.md`](../../ralph/state/actions.md).
+>
+> 👤 **Owner** : Backend + RGPD · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
+
+Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
+
+## 1. Mission & frontière FOSS/EE
+
+| | |
+|---|---|
+| **Apporte (FOSS)** | OCR/docgen/tasks/notify ; **audit-trail vérifiable** (HMAC chaîné — absent partout dans Onyx) ; redaction PII ; DLP egress ; rétention/effacement RGPD ; comptage tokens **réels** + coûts (FinOps) ; admin/kill-switch ; mode stateless (Postgres/Redis/S3) pour la HA. |
+| **Reste EE/absent** | l'audit-trail entreprise d'Onyx est **absent** (FOSS et EE) → c'est `actions` qui le fournit. Cf. [`../audit-onyx/30-security.md`](../audit-onyx/30-security.md). |
+
+## 2. Carte du code — [`../../actions/`](../../actions/)
+
+| Fichier | Rôle |
+|---|---|
+| [`app/main.py`](../../actions/app/main.py) | **Point d'entrée** FastAPI (endpoints actions + `/metrics`, rate-limit, identité d'appelant). |
+| [`app/ocr.py`](../../actions/app/ocr.py) | OCR (pytesseract/pdf2image) sur documents. |
+| [`app/docgen.py`](../../actions/app/docgen.py) | Génération `.docx` (python-docx). |
+| [`app/tasks.py`](../../actions/app/tasks.py) · [`app/celery_app.py`](../../actions/app/celery_app.py) | Tâches (synchrones + file Celery opt-in). |
+| [`app/notify.py`](../../actions/app/notify.py) | Notifications. |
+| [`app/audit_log.py`](../../actions/app/audit_log.py) · [`app/audit_engine.py`](../../actions/app/audit_engine.py) | **Audit-trail HMAC chaîné** (intégrité vérifiable). |
+| [`app/security.py`](../../actions/app/security.py) · [`app/caller_identity.py`](../../actions/app/caller_identity.py) | Auth d'appelant (JWT OIDC), durcissement. |
+| [`app/dlp.py`](../../actions/app/dlp.py) | **DLP** egress (filtrage des sorties sensibles). |
+| [`app/retention.py`](../../actions/app/retention.py) | Rétention / effacement (RGPD). |
+| [`app/usage_tracker.py`](../../actions/app/usage_tracker.py) · [`app/cost_tracker.py`](../../actions/app/cost_tracker.py) | Usage + **coûts** (tokens réels). |
+| [`app/llm.py`](../../actions/app/llm.py) | Accès LLM (Ollama local). |
+| [`app/admin_state.py`](../../actions/app/admin_state.py) | Admin / **kill-switch**. |
+| [`app/db.py`](../../actions/app/db.py) · [`app/objstore.py`](../../actions/app/objstore.py) | Persistance opt-in (Postgres) + stockage objet (S3/MinIO) — mode stateless HA. |
+| [`app/safe_logger.py`](../../actions/app/safe_logger.py) | Logs sans fuite (PII/secrets). |
+| [`tests/`](../../actions/tests/) | Suite **offline** (audit HMAC, PII, DLP, rétention, FinOps…). |
+
+## 3. Commandes
+
+```bash
+pytest actions/tests                 # suite offline
+make bandit                          # bandit sur actions/ (0 medium+)
+pip-audit --requirement actions/requirements.txt --strict
+```
+
+## 4. Tests & preuves
+
+`pytest actions/tests` — couvre l'intégrité de l'audit HMAC (chaînage), la redaction
+PII, le DLP egress, la rétention/effacement, le comptage de coûts. Offline.
+
+## 5. Invariants & pièges
+
+- **Audit-trail = intégrité** : le chaînage HMAC ne doit jamais être cassé (toute
+  écriture chaîne le hash précédent). Secret HMAC en env, **jamais** en repo.
+- **PII/DLP fail-safe** : en cas de doute, **rédiger/bloquer** plutôt que laisser fuir.
+- **Stateless opt-in** : imports paresseux (`db.py`/`objstore.py`) — le mode mono-poste
+  SQLite ne doit **pas** exiger Postgres/S3. Ne pas régresser.
+- **stdlib-first** : pas de dépendance lourde sans raison (cf. `requirements.txt` épinglé).
+
+## 6. Observabilité
+
+`/metrics` Prometheus (instrumentation HTTP + FinOps + kill-switch). Dashboard
+[`../../monitoring/grafana/dashboards/onix-actions.json`](../../monitoring/grafana/dashboards/onix-actions.json).
+Détail : [`../OBSERVABILITY.md`](../OBSERVABILITY.md).
+
+## 7. Docs de fond
+
+[`../ACTIONS.md`](../ACTIONS.md) · [`../FINOPS.md`](../FINOPS.md) ·
+[`../SECURITY_RGPD_ACTIONS.md`](../SECURITY_RGPD_ACTIONS.md) ·
+[`../STATELESS_ACTIONS.md`](../STATELESS_ACTIONS.md) · [`../RGPD.md`](../RGPD.md).
+
+## 8. Audit & journal
+
+[`../audit-reality/actions.md`](../audit-reality/actions.md) ·
+[`../../ralph/state/actions.md`](../../ralph/state/actions.md) ·
+[`../../ralph/scopes/actions.md`](../../ralph/scopes/actions.md).
+
+## 9. Sous-agent
+
+| | |
+|---|---|
+| Discipline | Backend + RGPD |
+| Skills | `/security-review`, `/code-review`, `/verify` |
+| MCP | `Context7` (fastapi, pydantic, python-docx, pytesseract) ; `github` |
+| Cibles de preuve | `pytest actions/tests`, audit HMAC, PII, DLP |
+
+## 10. Maintenir cette fiche
+
+Touche au code `actions/` ⇒ mets à jour §2 + §4, reporte la preuve dans
+[`../audit-reality/actions.md`](../audit-reality/actions.md) et le journal.
+Vérifie : `make docs-check`.
+
+
+==============================================================================
+# FICHIER EMBARQUÉ : docs/scopes/rag-prompts.md
+==============================================================================
+
+# Scope `rag-prompts` — dossier agent
+
+> **Mission** : **qualité et sûreté du RAG** — garde-fous red-team, post-filtre
+> déterministe sur la réponse, éval **RAGAS** souveraine (juge Ollama local) avec
+> gate anti-régression, et le **prompt système** de l'agent commercial (sourcé,
+> anti-injection).
+> **Sous-agent** : ML/RAG + prompt-engineering. **État** :
+> [`../../ralph/state/rag-prompts.md`](../../ralph/state/rag-prompts.md).
+>
+> 👤 **Owner** : ML/RAG + prompt-engineering · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
+
+Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
+
+## 1. Mission & frontière FOSS/EE
+
+| | |
+|---|---|
+| **Apporte (FOSS)** | jeux de tests red-team + post-filtre déterministe (réponses sourcées, anti-fuite, anti-injection) ; pipeline d'éval RAGAS local (zéro cloud) + gate anti-régression ; prompt agent commercial versionné. |
+| **Contexte Onyx** | la qualité RAG dépend du **réglage Onyx/Ollama** (`num_ctx`, embedding FR, reranker) — réglages câblés côté `deploy-ops`/`monitoring`. Ici on **mesure** et on **garde** la qualité. |
+
+## 2. Carte du code — [`../../tests/rag/`](../../tests/rag/) · [`../../prompts/`](../../prompts/)
+
+| Fichier | Rôle |
+|---|---|
+| [`../../prompts/agent_commercial_systeme.md`](../../prompts/agent_commercial_systeme.md) | **Prompt système** de l'agent « Commercial 360 » (sourcé, anti-injection). |
+| [`../../prompts/exemples_questions.md`](../../prompts/exemples_questions.md) | Banque de questions d'exemple. |
+| [`../../tests/rag/test_red_team.py`](../../tests/rag/test_red_team.py) | Vecteurs **red-team** (injection, fuite de prompt, exfiltration). |
+| [`../../tests/rag/guardrail_postfilter.py`](../../tests/rag/guardrail_postfilter.py) · [`test_postfilter.py`](../../tests/rag/test_postfilter.py) | **Post-filtre déterministe** + ses tests. |
+| [`../../tests/rag/test_prompt_contract.py`](../../tests/rag/test_prompt_contract.py) | Contrat du prompt (invariants). |
+| [`../../tests/rag/test_eval_dataset.py`](../../tests/rag/test_eval_dataset.py) | Validité du dataset d'éval. |
+| [`../../tests/rag/ragas_eval/`](../../tests/rag/ragas_eval/) | Pipeline **RAGAS** : `runner.py`, `judge.py`/`scripted_judge.py`, `metrics.py`, `compare_scores.py`, `gen_baseline.py`. |
+| [`../../tests/rag/run_live.py`](../../tests/rag/run_live.py) · [`live_harness.py`](../../tests/rag/live_harness.py) · [`test_live_ollama.py`](../../tests/rag/test_live_ollama.py) | Harnais **LIVE** (Ollama réel). |
+
+## 3. Commandes
+
+```bash
+make rag-deps                        # dépendances de test (pytest, PyYAML, requests)
+pytest tests/rag                     # suite offline (red-team, post-filtre, contrat)
+make rag-eval                        # éval RAGAS LIVE (juge Ollama local)
+make rag-eval-ci                     # + gate anti-régression (compare au baseline)
+```
+
+## 4. Tests & preuves
+
+- **Offline** : `pytest tests/rag` — red-team (l'attaque est refusée/neutralisée),
+  post-filtre déterministe, contrat de prompt, validité dataset.
+- **LIVE** : `make rag-eval` / `-ci` — scores RAGAS vs baseline (anti-régression).
+  Preuves garde-fous : [`../E2E_GUARDRAILS.md`](../E2E_GUARDRAILS.md) ·
+  [`../LIVE_GUARDRAILS_RESULTS.md`](../LIVE_GUARDRAILS_RESULTS.md).
+
+## 5. Invariants & pièges
+
+- **Post-filtre déterministe** : pas de dépendance à l'aléatoire du LLM pour la
+  décision de blocage (sinon non reproductible). Garde DUR incrémental côté streaming.
+- **Anti-injection** : le prompt système doit rester **sourcé** ; toute consigne
+  utilisateur qui tente de l'écraser est neutralisée (couverte par red-team).
+- **Souveraineté** : éval **100 % locale** (juge Ollama) — aucun appel cloud.
+- **Embedding déterministe** : un embedding non déterministe casse le cache sémantique
+  et l'éval — ne pas changer de modèle sans rejouer le baseline.
+
+## 6. Observabilité
+
+Qualité suivie par l'éval RAGAS (scores vs baseline) ; les métriques runtime du chat
+passent par la passerelle (`/metrics`). Cf. [`../RAG_EVAL.md`](../RAG_EVAL.md).
+
+## 7. Docs de fond
+
+[`../RAG_OPTIMIZATION.md`](../RAG_OPTIMIZATION.md) ·
+[`../PLAYBOOK_ONYX_RAG.md`](../PLAYBOOK_ONYX_RAG.md) · [`../RAG_EVAL.md`](../RAG_EVAL.md) ·
+[`../QA_GUARDRAILS.md`](../QA_GUARDRAILS.md) · [`../AGENT_COMMERCIAL.md`](../AGENT_COMMERCIAL.md) ·
+[`../PERFORMANCE.md`](../PERFORMANCE.md).
+
+## 8. Audit & journal
+
+[`../audit-reality/rag-prompts.md`](../audit-reality/rag-prompts.md) ·
+[`../../ralph/state/rag-prompts.md`](../../ralph/state/rag-prompts.md) ·
+[`../../ralph/scopes/rag-prompts.md`](../../ralph/scopes/rag-prompts.md).
+
+## 9. Sous-agent
+
+| | |
+|---|---|
+| Discipline | ML/RAG + prompt-engineering |
+| Skills | `/code-review`, `/verify`, `claude-api` |
+| MCP | `Context7` (ragas, ollama) ; `github` |
+| Cibles de preuve | `pytest tests/rag`, `make rag-eval`, anti-injection |
+
+## 10. Maintenir cette fiche
+
+Touche aux prompts/garde-fous/éval ⇒ mets à jour §2 + §4, rejoue le baseline RAGAS si
+besoin, reporte dans [`../audit-reality/rag-prompts.md`](../audit-reality/rag-prompts.md)
+et le journal. Vérifie : `make docs-check`.
+
+
+==============================================================================
+# FICHIER EMBARQUÉ : docs/scopes/monitoring.md
+==============================================================================
+
+# Scope `monitoring` — dossier agent
+
+> **Mission** : **observabilité** de toute la stack — collecte métriques
+> (Prometheus + Blackbox), logs (Loki + Promtail), tableaux de bord (Grafana),
+> **alertes** (Alertmanager) et **SLO**. Le tout en surcouche Compose dédiée,
+> activable indépendamment.
+> **Sous-agent** : observabilité / SRE. **État** :
+> [`../../ralph/state/monitoring.md`](../../ralph/state/monitoring.md).
+>
+> 👤 **Owner** : Observabilité / SRE · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
+
+Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
+
+## 1. Mission & frontière FOSS/EE
+
+| | |
+|---|---|
+| **Apporte (FOSS)** | métriques applicatives (gateway `/metrics`, actions `/metrics`) + infra, alertes actionnables + SLO, dashboards Grafana, logs centralisés Loki. Pile 100 % open-source/souveraine. |
+| **À ne pas affirmer** | une alerte/dashboard ne vaut que si la **métrique sous-jacente est réellement émise**. Vérifier alerte ↔ métrique (cf. audit-reality). |
+
+## 2. Carte du code — [`../../monitoring/`](../../monitoring/)
+
+| Fichier | Rôle |
+|---|---|
+| [`docker-compose.monitoring.yml`](../../monitoring/docker-compose.monitoring.yml) | Surcouche Compose de la pile observabilité. |
+| [`prometheus/prometheus.yml`](../../monitoring/prometheus/prometheus.yml) | Scrape config (cibles : gateway, actions, infra). |
+| [`prometheus/rules/onix-alerts.yml`](../../monitoring/prometheus/rules/onix-alerts.yml) | Règles d'**alerte**. |
+| [`prometheus/rules/onix-slo.yml`](../../monitoring/prometheus/rules/onix-slo.yml) | Règles **SLO**. |
+| [`alertmanager/alertmanager.yml`](../../monitoring/alertmanager/alertmanager.yml) | Routage des alertes. |
+| [`blackbox/blackbox.yml`](../../monitoring/blackbox/blackbox.yml) | Sondes synthétiques (probes HTTP). |
+| [`loki/loki-config.yml`](../../monitoring/loki/loki-config.yml) · [`promtail/promtail-config.yml`](../../monitoring/promtail/promtail-config.yml) | Logs centralisés + collecte. |
+| [`grafana/provisioning/`](../../monitoring/grafana/provisioning/) | Datasources + provisioning des dashboards. |
+| [`grafana/dashboards/`](../../monitoring/grafana/dashboards/) | Dashboards : `onix-gateway.json`, `onix-actions.json`, `onix-infra.json`. |
+
+## 3. Commandes
+
+```bash
+make monitor-up                      # démarre la pile observabilité
+make monitor-config                  # valide la compose monitoring (config -q)
+make monitor-logs                    # logs de la pile
+make monitor-down                    # arrête la pile
+make lint                            # yamllint (workflows + monitoring)
+```
+
+## 4. Tests & preuves
+
+- `make monitor-config` (compose valide) + `make lint` (YAML monitoring valide) — tous
+  deux inclus dans `make test`.
+- **Cohérence** : chaque alerte/SLO doit référencer une métrique réellement exposée
+  (gateway/actions `/metrics`). Preuves : [`../OBSERVABILITY.md`](../OBSERVABILITY.md).
+
+## 5. Invariants & pièges
+
+- **Pas d'alerte fantôme** : ne pas référencer une métrique non émise (faux positif/négatif).
+- `/metrics` est **indépendant** de la stack monitoring : la passerelle/actions exposent
+  toujours `/metrics` ; la pile monitoring est **opt-in** (ne pas créer de fausse
+  dépendance « /metrics nécessite WS2 »).
+- YAML valide (`yamllint` relaxed) — le `lint` casse sinon.
+
+## 6. Observabilité
+
+C'est **le** scope d'observabilité. Sources scrappées : gateway (`onix-gateway.json`),
+actions (`onix-actions.json`), infra (`onix-infra.json`). Détail :
+[`../OBSERVABILITY.md`](../OBSERVABILITY.md).
+
+## 7. Docs de fond
+
+[`../OBSERVABILITY.md`](../OBSERVABILITY.md) · [`../RUNBOOK.md`](../RUNBOOK.md)
+(incidents/alertes) · [`../audit-onyx/60-observability-runtime.md`](../audit-onyx/60-observability-runtime.md).
+
+## 8. Audit & journal
+
+[`../audit-reality/monitoring.md`](../audit-reality/monitoring.md) ·
+[`../../ralph/state/monitoring.md`](../../ralph/state/monitoring.md) ·
+[`../../ralph/scopes/monitoring.md`](../../ralph/scopes/monitoring.md).
+
+## 9. Sous-agent
+
+| | |
+|---|---|
+| Discipline | Observabilité / SRE |
+| Skills | `/code-review`, `/verify` |
+| MCP | `Context7` (prometheus, grafana, loki, promtail) ; `github` |
+| Cibles de preuve | `make monitor-config`, `make lint`, alertes ↔ métriques émises |
+
+## 10. Maintenir cette fiche
+
+Touche à `monitoring/` ⇒ mets à jour §2, vérifie alerte↔métrique, reporte dans
+[`../audit-reality/monitoring.md`](../audit-reality/monitoring.md) et le journal.
+Vérifie : `make docs-check`.
+
+
+==============================================================================
+# FICHIER EMBARQUÉ : docs/scopes/deploy-ops.md
+==============================================================================
+
+# Scope `deploy-ops` — dossier agent
+
+> **Mission** : **déployer et exploiter** onix de façon reproductible — du mono-poste
+> (Docker Compose durci) à la **production machine unique** (overlay santé + systemd),
+> la **prod exposée** (Caddy TLS + OIDC), la **HA Kubernetes** (chart Helm), et
+> **Azure/AKS** (bicep IaC) — plus les **scripts** d'ops (secrets, hardware, backup…).
+> **Sous-agent** : SRE / DevOps / IaC. **État** :
+> [`../../ralph/state/deploy-ops.md`](../../ralph/state/deploy-ops.md).
+>
+> 👤 **Owner** : SRE / DevOps / IaC · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
+
+Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
+
+## 1. Mission & frontière FOSS/EE
+
+| | |
+|---|---|
+| **Apporte (FOSS)** | stack souveraine auto-hébergée, durcie par défaut (localhost, runAsNonRoot, egress allowlisté, télémétrie OFF) ; IaC validée (`compose config`, `helm lint`, `bicep build`) ; zéro étape manuelle cachée (cible `make` pour tout). |
+| **Branding UI** | surcouche nginx GEREP (thème/logo/titre) — le whitelabel **admin** Onyx est EE ; on fait l'équivalent en FOSS via nginx (cf. [`../BRANDING_GEREP.md`](../BRANDING_GEREP.md)). |
+
+## 2. Carte du code — [`../../deploy/`](../../deploy/) · [`../../scripts/`](../../scripts/)
+
+| Chemin | Rôle |
+|---|---|
+| [`../../docker-compose.yml`](../../docker-compose.yml) | Stack mono-poste durcie (base). Surcouches : `.gpu`, `.performance`, `.prod-local`, `.lan`. |
+| [`../../deploy/prod/`](../../deploy/prod/) | **Prod exposée** : `docker-compose.prod.yml` + `Caddyfile` (TLS auto) + `nginx.prod.conf` (oauth2-proxy → passerelle) + `env.prod.template`. |
+| [`../../deploy/local-prod/`](../../deploy/local-prod/) | **Prod machine unique** : unit `onix.service` (systemd, boot) + README. |
+| [`../../deploy/k8s/onix-ha/`](../../deploy/k8s/onix-ha/) | **Chart Helm HA** (OpenSearch/Postgres/MinIO/Redis HA, HPA, Celery, gateway, GPU). |
+| [`../../deploy/azure/`](../../deploy/azure/) | **Azure/AKS** : `values-azure.yaml`, `bicep/` (IaC), README. |
+| [`../../nginx/`](../../nginx/) | `onyx.conf` (reverse-proxy mono-poste) + `branding/` (thème GEREP). |
+| [`../../scripts/`](../../scripts/) | `gen-secrets.sh`, `detect-hardware.sh/.ps1`, `pull-models.sh`, `preflight-local.sh`/`preflight-prod.sh`, `verify.sh`, `backup.sh`/`restore.sh`, `sync-doc-acl.py`, `setup-sharepoint-app.sh`/`setup-fabric-app.sh`. |
+
+## 3. Commandes
+
+```bash
+# Mono-poste (dev/démo)
+make tune && make secrets && make up && make verify
+make preflight-local                 # pré-vol AVANT make up
+# Production machine unique (durci)
+make up-local-prod && make verify
+# Prod exposée (Caddy TLS + OIDC)
+make config-prod                     # valide base + surcouche prod
+make secrets-prod && make up-prod
+# Helm HA
+make k8s-lint && make k8s-template   # (helm lint + template)
+# Validation IaC (incluse dans make test)
+make compose-validate                # tous les compose
+# Nettoyage RELEASE (retire le jetable, garde code+docs+configs+.env+backups)
+make clean                           # caches/artefacts/temporaires régénérables
+make clean-deep                      # clean + venvs Python locaux
+```
+
+## 4. Tests & preuves
+
+- `make compose-validate` (tous les overlays) + `make k8s-lint`/`k8s-template` +
+  `bicep build` (Azure) — IaC valide, **incluse dans `make test`** (axe A6
+  reproductibilité, cf. [`../../ralph/ORCHESTRATION.md`](../../ralph/ORCHESTRATION.md)).
+- `make verify` : contrôle de bout en bout d'une stack démarrée.
+
+## 5. Invariants & pièges
+
+- **Ollama via nom de service interne** (`http://…-ollama:11434`), jamais `localhost`.
+- **`num_ctx`** câblé (compose/Helm/Modelfile) : défaut Onyx 4096 = **troncature** —
+  ne pas régresser.
+- **Azure** : Redis = **TLS 6380 + noeviction** ; Postgres = `sslmode=require` ;
+  **poser `ENCRYPTION_KEY_SECRET`** (sinon secrets en clair).
+- **Zéro secret en repo** : `.env` gitignoré, généré par `gen-secrets.sh`.
+- Conteneur nginx lié à **127.0.0.1** côté hôte (mono-poste) ; surcouches prod
+  réécrites avec `!reset` (ne pas perdre les volumes — cf. branding).
+
+## 6. Observabilité
+
+Démarrage via `make verify` ; la pile observabilité est le scope
+[`monitoring.md`](monitoring.md). Runbook ops : [`../RUNBOOK.md`](../RUNBOOK.md).
+
+## 7. Docs de fond
+
+[`../POC_LOCAL.md`](../POC_LOCAL.md) · [`../PROD_LOCAL.md`](../PROD_LOCAL.md) ·
+[`../DEPLOY_PROD.md`](../DEPLOY_PROD.md) · [`../HA_SCALING.md`](../HA_SCALING.md) ·
+[`../HA_ACCEPTANCE.md`](../HA_ACCEPTANCE.md) · [`../DEPLOY_AZURE.md`](../DEPLOY_AZURE.md) ·
+[`../RUNBOOK.md`](../RUNBOOK.md) · [`../PERFORMANCE.md`](../PERFORMANCE.md) ·
+[`../BRANDING_GEREP.md`](../BRANDING_GEREP.md).
+
+## 8. Audit & journal
+
+[`../audit-reality/deploy-ops.md`](../audit-reality/deploy-ops.md) ·
+[`../../ralph/state/deploy-ops.md`](../../ralph/state/deploy-ops.md) ·
+[`../../ralph/scopes/deploy-ops.md`](../../ralph/scopes/deploy-ops.md).
+
+## 9. Sous-agent
+
+| | |
+|---|---|
+| Discipline | SRE / DevOps / IaC |
+| Skills | `/code-review`, `/verify` |
+| MCP | `Microsoft_Learn` (AKS, bicep, Key Vault), `Context7` (helm, compose) ; `github` |
+| Cibles de preuve | `helm lint`, `compose config`, `bicep build`, cibles `make` |
+
+## 10. Maintenir cette fiche
+
+Touche à `deploy/`, `nginx/`, `scripts/` ou un compose ⇒ mets à jour §2/§3, rejoue
+`make compose-validate`/`k8s-lint`, reporte dans
+[`../audit-reality/deploy-ops.md`](../audit-reality/deploy-ops.md) et le journal.
+Vérifie : `make docs-check`.
+
+
+==============================================================================
+# FICHIER EMBARQUÉ : docs/scopes/security-governance.md
+==============================================================================
+
+# Scope `security-governance` — dossier agent
+
+> **Mission** : la **sécurité transverse** et la **conformité** — modèle de menaces,
+> baseline de durcissement, mapping audit→mitigations, RGPD (registre, DPIA, droits),
+> et la **vérité FOSS vs EE** (parité réelle vs assistant cloud d'entreprise). C'est
+> le scope « gardien » : il relie les contrôles des autres scopes à une posture cohérente.
+> **Sous-agent** : sécurité / conformité / architecture. **État** :
+> [`../../ralph/state/security-governance.md`](../../ralph/state/security-governance.md).
+>
+> 👤 **Owner** : Sécurité / conformité / architecture · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
+
+Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
+
+## 1. Mission & frontière FOSS/EE
+
+| | |
+|---|---|
+| **Apporte (FOSS)** | posture « sécurité par défaut » (fail-closed, localhost, runAsNonRoot, egress allowlisté, télémétrie OFF) ; RGPD opérationnel (registre, DPIA, droits) ; traçabilité de la parité (chaque claim ↔ code/audit). |
+| **Vérité FOSS vs EE** | l'audit byte-level d'Onyx établit ce qui est **EE/Cloud** (perm-sync, SCIM, chiffrement secrets, analytics) vs **absent** (audit-trail) vs **FOSS**. onix comble **en FOSS** ; ce scope **interdit** de présenter une feature EE comme gratuite. |
+
+## 2. Carte (transverse — docs + contrôles dans les autres scopes)
+
+| Chemin | Rôle |
+|---|---|
+| [`../../SECURITY.md`](../../SECURITY.md) | **Modèle de sécurité** racine (menaces, contrôles, audit→mitigations, RGPD). |
+| [`../SECURITY.md`](../SECURITY.md) | Baseline de durcissement (localhost, services, auth). |
+| [`../SECURITY_RGPD_ACTIONS.md`](../SECURITY_RGPD_ACTIONS.md) | Sécurité/RGPD applicative (impl. dans le scope `actions`). |
+| [`../RGPD.md`](../RGPD.md) · [`../REGISTRE_TRAITEMENTS.md`](../REGISTRE_TRAITEMENTS.md) · [`../DPIA_TEMPLATE.md`](../DPIA_TEMPLATE.md) | Conformité : droits, registre des traitements, DPIA. |
+| [`../audit-onyx/`](../audit-onyx/) | **Audit byte-level d'Onyx** (7 dimensions + verdict) — base factuelle FOSS/EE. |
+| [`../PARITE_ENTREPRISE.md`](../PARITE_ENTREPRISE.md) · [`../COMPARATIF_COPILOT_AC360.md`](../COMPARATIF_COPILOT_AC360.md) | Parité vs assistant cloud / Copilot. |
+| Gates CI | `bandit`, `gitleaks`, `pip-audit --strict`, `trivy` (cf. `make test`). |
+
+> Les **contrôles** vivent dans les scopes concernés : ACL/cloisonnement →
+> [`access-gateway.md`](access-gateway.md) ; audit HMAC/PII/DLP/rétention →
+> [`actions.md`](actions.md) ; durcissement infra → [`deploy-ops.md`](deploy-ops.md).
+> Ce scope en assure la **cohérence et la conformité**.
+
+## 3. Commandes
+
+```bash
+make bandit                          # 0 vulnérabilité medium+
+make gitleaks                        # 0 secret
+make pip-audit                       # 0 CVE (strict) sur les requirements épinglés
+make trivy                           # scan FS/image (CI)
+make test                            # barrière complète (inclut les 4 ci-dessus)
+```
+
+## 4. Tests & preuves
+
+- Gates sécurité **verts** (`bandit`/`gitleaks`/`pip-audit`/`trivy`) — axe A3 de
+  [`../../ralph/ORCHESTRATION.md`](../../ralph/ORCHESTRATION.md).
+- **Parité ↔ code** : chaque affirmation de parité doit citer un code/test/avis
+  (cf. [`../audit-reality/security-governance.md`](../audit-reality/security-governance.md)).
+- RGPD : redaction PII testée + rétention/effacement effectifs (impl. `actions`).
+
+## 5. Invariants & pièges
+
+- **FOSS vs EE toujours distingué** — ne jamais présupposer qu'une feature « entreprise »
+  est gratuite (cf. l'audit). Whitelabel admin, perm-sync, SCIM = **EE**.
+- **Zéro mock présenté comme réel** : si non testé/vérifié, le dire.
+- **Fail-closed par défaut** ; **zéro secret en repo** ; **télémétrie OFF**.
+- On relève les **pins** dès qu'une CVE apparaît — on ne désactive **jamais** un gate.
+
+## 6. Observabilité
+
+Sécurité observable : journal d'audit (gateway `app/audit.py` + actions audit HMAC),
+alertes sécurité (scope [`monitoring.md`](monitoring.md)). Cf. [`../../SECURITY.md`](../../SECURITY.md).
+
+## 7. Docs de fond
+
+[`../../SECURITY.md`](../../SECURITY.md) · [`../SECURITY.md`](../SECURITY.md) ·
+[`../SECURITY_RGPD_ACTIONS.md`](../SECURITY_RGPD_ACTIONS.md) · [`../RGPD.md`](../RGPD.md) ·
+[`../audit-onyx/00-VERDICT.md`](../audit-onyx/00-VERDICT.md) ·
+[`../PARITE_ENTREPRISE.md`](../PARITE_ENTREPRISE.md).
+
+## 8. Audit & journal
+
+[`../audit-reality/security-governance.md`](../audit-reality/security-governance.md) ·
+[`../audit-reality/_VERDICT.md`](../audit-reality/_VERDICT.md) ·
+[`../../ralph/state/security-governance.md`](../../ralph/state/security-governance.md) ·
+[`../../ralph/scopes/security-governance.md`](../../ralph/scopes/security-governance.md).
+
+## 9. Sous-agent
+
+| | |
+|---|---|
+| Discipline | Sécurité / conformité / architecture |
+| Skills | `/security-review`, `deep-research`, `/code-review` |
+| MCP | `Microsoft_Learn` (Entra/SSO/Key Vault) ; `github` |
+| Cibles de preuve | gates CI sécurité, claims de parité ↔ code |
+
+## 10. Maintenir cette fiche
+
+Touche à la posture sécurité/RGPD ou à un claim de parité ⇒ mets à jour §2, vérifie
+les gates, reporte dans
+[`../audit-reality/security-governance.md`](../audit-reality/security-governance.md)
+et le journal. Vérifie : `make docs-check`.
