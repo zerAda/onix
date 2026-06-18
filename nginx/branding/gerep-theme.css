@@ -1,0 +1,285 @@
+/* ==========================================================================
+   gerep-theme.css — Thème GEREP pour l'UI Onyx (surcouche, NON-fork)
+   --------------------------------------------------------------------------
+   Onyx est livré comme image préfabriquée (onyx-web-server) : on ne le forke
+   PAS. Ce fichier est injecté AVANT </head> par nginx (sub_filter, cf.
+   nginx/onyx.conf) et re-teinte l'UI aux couleurs GEREP en surchargeant :
+     1) les design-tokens OPAL/Onyx (@onyx-ai/opal + Tailwind), et
+     2) des sélecteurs larges en repli (fallbacks) au cas où les noms diffèrent.
+
+   Marque GEREP — « votre conseiller en protection sociale »
+     · Primaire  : #094785  (bleu profond)   — barres, boutons, focus, liens
+     · Accent    : #E96D11  (orange)          — CTA / mises en avant parcimonieuses
+     · Secondaire: #B6B8DD  (lavande)         — surfaces douces, états subtils
+
+   Accessibilité (WCAG AA, ratio visé ≥ 4.5:1 pour le texte) :
+     · texte BLANC sur #094785            → ~8.6:1  ✓ (titres, boutons primaires)
+     · texte #094785 sur blanc            → ~8.6:1  ✓
+     · l'orange #E96D11 est trop clair pour du texte blanc en petit corps
+       (~3.0:1) : on l'emploie en aplat de CTA AVEC texte foncé, ou comme
+       liseré/accent décoratif — JAMAIS en petit texte orange sur blanc.
+
+   RÉGLAGE EN LIVE : tout est piloté par les variables --gerep-* ci-dessous.
+   Pour ajuster une teinte, modifier UNE variable ici et recharger (Ctrl+F5).
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1) TOKENS GEREP (source de vérité unique)
+   -------------------------------------------------------------------------- */
+:root {
+  /* — Bleu primaire + échelle dérivée (du plus clair au plus profond) — */
+  --gerep-primary:          #094785; /* couleur de marque principale */
+  --gerep-primary-strong:   #063461; /* hover/active foncé (boutons pressés) */
+  --gerep-primary-hover:    #0b5199; /* survol des boutons primaires */
+  --gerep-primary-subtle:   #e6eef6; /* fond très clair teinté bleu (badges) */
+  --gerep-primary-tint:     #d0deee; /* surfaces sélectionnées douces */
+  --gerep-primary-contrast: #ffffff; /* texte/icône SUR le bleu primaire (AA) */
+
+  /* — Accent orange (CTA / mise en avant ; usage parcimonieux) — */
+  --gerep-accent:           #E96D11; /* orange de marque */
+  --gerep-accent-strong:    #c25709; /* hover/active de l'accent (AA texte blanc ~4.6:1) */
+  --gerep-accent-subtle:    #fcecdd; /* fond très clair teinté orange */
+  --gerep-accent-contrast:  #1f1300; /* texte FONCÉ sur aplat orange (lisibilité AA) */
+
+  /* — Secondaire lavande (surfaces douces, états subtils) — */
+  --gerep-secondary:        #B6B8DD; /* lavande de marque */
+  --gerep-secondary-strong: #8d90c4; /* lavande appuyée (bordures, hover doux) */
+  --gerep-secondary-subtle: #ececf6; /* fond lavande très clair */
+
+  /* — État de focus (anneau accessible, visible au clavier) — */
+  --gerep-focus-ring:       #0b5199; /* anneau bleu vif, contraste suffisant */
+  --gerep-focus-ring-alpha: rgba(11, 81, 153, 0.45); /* halo translucide */
+
+  /* — Surfaces neutres (on garde des gris pour la lisibilité du contenu) — */
+  --gerep-surface:          #ffffff; /* fond principal clair */
+  --gerep-surface-muted:    #f5f7fa; /* fond secondaire légèrement bleuté */
+  --gerep-border:           #d8e0ea; /* bordure neutre teintée bleu */
+  --gerep-text:             #14213a; /* texte principal (presque noir bleuté) */
+}
+
+/* --------------------------------------------------------------------------
+   2) SURCHARGE DES JETONS OPAL / ONYX  (mode clair)
+   -------------------------------------------------------------------------- */
+:root {
+  /* Couleur de thème primaire OPAL : pilote la plupart des accents bleus. */
+  --theme-primary-06: var(--gerep-primary);
+  --theme-primary-05: var(--gerep-primary-hover);
+  --theme-primary-04: var(--gerep-secondary-strong);
+  --theme-blue-05:    var(--gerep-primary);
+
+  /* Liens d'action (texte cliquable). */
+  --action-link-05: var(--gerep-primary);
+  --action-link-06: var(--gerep-primary-strong);
+
+  /* Ré-teinte complète de l'échelle --blue-* vers le bleu GEREP.
+     01 = très clair → 95 = très profond. Sert partout où Onyx pioche du bleu. */
+  --blue-01: #f3f7fc;
+  --blue-02: #e6eef6;
+  --blue-03: #c9dcee;
+  --blue-04: #9bbcdd;
+  --blue-05: #5f93c4;
+  --blue-06: var(--gerep-primary-hover);
+  --blue-07: var(--gerep-primary);
+  --blue-08: var(--gerep-primary-strong);
+  --blue-09: #052a4f;
+  --blue-10: #04203d;
+  /* Variantes de nommage rencontrées selon les builds OPAL. */
+  --blue-15: #e6eef6;
+  --blue-25: #c9dcee;
+  --blue-35: #9bbcdd;
+  --blue-45: #5f93c4;
+  --blue-55: var(--gerep-primary-hover);
+  --blue-65: var(--gerep-primary);
+  --blue-75: var(--gerep-primary-strong);
+  --blue-85: #052a4f;
+  --blue-95: #04203d;
+
+  /* Accent orange GEREP via l'échelle --orange-*. */
+  --orange-01: #fff6ee;
+  --orange-02: var(--gerep-accent-subtle);
+  --orange-03: #f8c79a;
+  --orange-04: #f3a25a;
+  --orange-05: var(--gerep-accent);
+  --orange-06: var(--gerep-accent-strong);
+  --orange-07: #9c4607;
+  --orange-55: var(--gerep-accent);
+  --orange-65: var(--gerep-accent-strong);
+
+  /* Secondaire lavande via l'échelle --purple-* (Onyx mappe le violet ici). */
+  --purple-01: #f6f6fc;
+  --purple-02: var(--gerep-secondary-subtle);
+  --purple-03: #d7d8ee;
+  --purple-04: var(--gerep-secondary);
+  --purple-05: var(--gerep-secondary-strong);
+  --purple-06: #6b6ea8;
+  --purple-55: var(--gerep-secondary);
+  --purple-65: var(--gerep-secondary-strong);
+
+  /* On NE touche PAS aux neutres/gris ni aux textes : la lisibilité du
+     contenu (réponses, documents) prime. On se contente d'un léger biais
+     bleuté sur les bordures pour l'harmonie de marque. */
+  --border-01: #eef2f7;
+  --border-02: var(--gerep-border);
+  --border-03: #c4d0de;
+
+  /* Surfaces : on garde le blanc/gris OPAL, juste un soupçon de bleu froid. */
+  --background-tint-00: #ffffff;
+  --background-tint-01: var(--gerep-surface-muted);
+  --background-tint-02: var(--gerep-primary-subtle);
+
+  /* Rayons & ombres : on laisse les valeurs OPAL telles quelles (cohérence
+     d'ensemble) ; on n'en redéfinit que si un réglage de marque l'exige.
+     Exemple d'ombre teintée bleu, désactivé par défaut :
+     --shadow-02: 0 4px 12px rgba(9, 71, 133, 0.12); */
+}
+
+/* --------------------------------------------------------------------------
+   2bis) SURCHARGE DES JETONS — mode sombre (.dark)
+   Onyx applique la classe .dark sur <html>/<body>. On éclaircit légèrement le
+   bleu GEREP pour qu'il reste vif et contrasté sur fond foncé.
+   -------------------------------------------------------------------------- */
+.dark {
+  --gerep-primary:          #2f7ec0; /* bleu GEREP éclairci pour fond sombre */
+  --gerep-primary-hover:    #4a93d0;
+  --gerep-primary-strong:   #1c5e96;
+  --gerep-primary-contrast: #06223d; /* texte foncé sur bleu clair (AA) */
+  --gerep-focus-ring:       #5aa6dc;
+  --gerep-focus-ring-alpha: rgba(90, 166, 220, 0.5);
+
+  /* Jetons OPAL en sombre. */
+  --theme-primary-06: var(--gerep-primary);
+  --theme-primary-05: var(--gerep-primary-hover);
+  --theme-blue-05:    var(--gerep-primary);
+  --action-link-05:   #6fb2e2; /* liens plus clairs et lisibles sur fond foncé */
+  --action-link-06:   #8fc5ea;
+
+  --blue-05: #5aa6dc;
+  --blue-06: var(--gerep-primary);
+  --blue-07: var(--gerep-primary-hover);
+  --blue-08: #1c5e96;
+  --blue-65: var(--gerep-primary);
+  --blue-75: var(--gerep-primary-hover);
+
+  /* L'accent orange reste vif et fonctionne déjà bien sur fond sombre. */
+  --orange-05: var(--gerep-accent);
+  --orange-06: #f0832e;
+  --orange-55: var(--gerep-accent);
+}
+
+/* --------------------------------------------------------------------------
+   3) FALLBACKS ROBUSTES (sélecteurs larges)
+   Repli au cas où certains noms de jetons diffèrent selon la version Onyx.
+   `!important` CIBLÉ (uniquement la couleur de marque), pour ne pas casser la
+   mise en page. Tout reste pilotable depuis les variables --gerep-* en tête.
+   NB : ces sélecteurs sont volontairement génériques → à AFFINER EN LIVE une
+   fois l'UI réelle visible (cf. docs/BRANDING_GEREP.md, caveat).
+   -------------------------------------------------------------------------- */
+
+/* — Boutons primaires : aplat bleu GEREP, texte blanc (AA). — */
+button[data-variant="primary"],
+button.btn-primary,
+.btn-primary,
+[class*="primary"][class*="button"],
+button[type="submit"]:not([data-variant]):not(.btn-secondary) {
+  background-color: var(--gerep-primary) !important;
+  border-color: var(--gerep-primary) !important;
+  color: var(--gerep-primary-contrast) !important;
+}
+button[data-variant="primary"]:hover,
+button.btn-primary:hover,
+.btn-primary:hover,
+[class*="primary"][class*="button"]:hover {
+  background-color: var(--gerep-primary-hover) !important;
+  border-color: var(--gerep-primary-hover) !important;
+}
+button[data-variant="primary"]:active,
+button.btn-primary:active,
+.btn-primary:active {
+  background-color: var(--gerep-primary-strong) !important;
+  border-color: var(--gerep-primary-strong) !important;
+}
+
+/* — CTA d'accent (orange) : aplat orange + texte FONCÉ pour la lisibilité. — */
+button[data-variant="accent"],
+.btn-accent,
+[class*="cta"] {
+  background-color: var(--gerep-accent) !important;
+  border-color: var(--gerep-accent) !important;
+  color: var(--gerep-accent-contrast) !important;
+}
+button[data-variant="accent"]:hover,
+.btn-accent:hover,
+[class*="cta"]:hover {
+  background-color: var(--gerep-accent-strong) !important;
+  color: #ffffff !important; /* sur l'orange foncé, le blanc repasse AA (~4.6:1) */
+}
+
+/* — Liens : bleu GEREP, soulignement au survol pour l'affordance. — */
+a:not([class*="button"]):not([class*="btn"]) {
+  color: var(--action-link-05, var(--gerep-primary));
+}
+a:not([class*="button"]):not([class*="btn"]):hover {
+  color: var(--gerep-primary-strong);
+  text-decoration: underline;
+}
+
+/* — Focus clavier visible : anneau bleu GEREP (accessibilité). — */
+:focus-visible {
+  outline: 2px solid var(--gerep-focus-ring) !important;
+  outline-offset: 2px !important;
+  border-radius: 4px;
+}
+/* Champs de saisie : liseré + halo bleu GEREP au focus. */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[contenteditable="true"]:focus-visible {
+  outline: none !important;
+  border-color: var(--gerep-focus-ring) !important;
+  box-shadow: 0 0 0 3px var(--gerep-focus-ring-alpha) !important;
+}
+
+/* — Barre latérale / sidebar : léger fond teinté + accent de marque. — */
+nav[class*="sidebar"],
+aside[class*="sidebar"],
+[class*="Sidebar"],
+[data-testid*="sidebar"] {
+  background-color: var(--gerep-surface-muted);
+}
+
+/* — Élément de navigation actif (conversation/onglet sélectionné). — */
+nav a[aria-current="page"],
+nav [aria-selected="true"],
+[class*="sidebar"] [data-active="true"],
+[class*="sidebar"] a.active {
+  background-color: var(--gerep-primary-tint) !important;
+  color: var(--gerep-primary-strong) !important;
+  border-left: 3px solid var(--gerep-primary) !important;
+}
+
+/* — Badges / pastilles « actifs » : aplat bleu de marque. — */
+[class*="badge"][class*="active"],
+[class*="Badge"][data-active="true"],
+.tag-active {
+  background-color: var(--gerep-primary-subtle) !important;
+  color: var(--gerep-primary-strong) !important;
+  border: 1px solid var(--gerep-secondary-strong) !important;
+}
+
+/* — Curseur / sélection de texte aux couleurs de marque (détail soigné). — */
+::selection {
+  background-color: var(--gerep-secondary);
+  color: var(--gerep-text);
+}
+:root {
+  accent-color: var(--gerep-primary); /* cases à cocher / radios / sliders natifs */
+  caret-color:  var(--gerep-primary); /* curseur de saisie */
+}
+
+/* — Barre de progression / chargement (indexation, streaming). — */
+progress::-webkit-progress-value { background-color: var(--gerep-primary); }
+progress::-moz-progress-bar       { background-color: var(--gerep-primary); }
+[role="progressbar"] > div,
+[class*="progress"] [class*="bar"] {
+  background-color: var(--gerep-primary) !important;
+}

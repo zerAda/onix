@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  favicon GEREP — « mark » dérivé du logo (nginx/branding/gerep-logo.svg).
+  On reprend le motif de gauche (le « G » : voile lavande + boucle orange)
+  posé sur une pastille bleu profond GEREP (#094785) pour un favicon lisible
+  et contrasté à petite taille (onglet navigateur, raccourci).
+  Couleurs officielles : bleu #094785 · orange #E96D11 · lavande #B6B8DD.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="GEREP">
+  <!-- Pastille de fond : bleu profond GEREP, coins arrondis (favicon « app icon »). -->
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="#094785"/>
+
+  <!-- Motif du logo, recentré et mis à l'échelle dans la pastille.
+       viewBox source du logo : 0 0 112.6 61.2 ; on isole la zone x≈0..44.
+       translate + scale pour centrer le « G » dans le carré 64×64. -->
+  <g transform="translate(11.5 9) scale(0.78)">
+    <!-- Voile lavande (chemin .st0 du logo). -->
+    <path fill="#B6B8DD" d="M13,30c6.6-2.3,14.2-4,21.3-3.2c4.2,0.4,8.1,2.3,9.5,6.5c2.2,6.9-5.4,19-7.1,22c-1.2,2-2,3.5-2.6,4.5 c-0.9,1.5-0.3,1.9,0.6,0.4c2.7-4,25.9-36,6.8-41.1c-7.5-2-16.4,0.3-23.6,2.7c-1.4,0.5-1.9,1.8-2.9,3.8C14.2,27.5,13.6,28.8,13,30"/>
+    <!-- Boucle orange (chemin .st1 du logo) : accent de marque. -->
+    <path fill="#E96D11" d="M35,52.9c-1.7,0.2-3.6,0.3-5.7,0.3C7.8,53.1,0,37.4,0,27C0,10.4,13,0,27.7,0c5,0,9.1,1,12.4,2.8 C40.5,3,41,3.2,40.9,3.5c-0.1,0.3-0.6,0.1-1,0c-2.3-0.8-4.8-1.2-7.4-1.2c-12.7,0-23,10.7-23,24.1c0,12.5,10.5,26.6,25.4,26.2 c0,0,0.1,0,0.1,0c0.2,0,0.5,0,0.5,0.1C35.5,52.8,35.3,52.8,35,52.9"/>
+    <!-- Jambage « G » (chemin .st2 du logo) : repris en blanc pour ressortir sur le bleu. -->
+    <path fill="#FFFFFF" d="M41.7,38.8v8.3c-2.5,1.2-5.8,2-9.3,2c-8,0-14.7-5.3-14.7-13.2c0-7,6.1-13.8,14.6-13.9c2.8,0,5.7,0.7,8.7,2.3 l0.3,3.6c-1.1-1.1-4.6-4.1-9-4.1c-8,0-10.4,7.1-10.2,11.5c0.4,7.2,5.8,12,10.5,11.9c2,0,3.4-0.2,4.9-1v-7.6c0-1.2-0.4-2.7-0.7-3.1 h5.3C42.1,36.1,41.7,37.6,41.7,38.8"/>
+  </g>
+</svg>
