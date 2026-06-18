@@ -53,6 +53,11 @@
 | [`DEPLOY_AZURE.md`](DEPLOY_AZURE.md) | **Azure/AKS** : runbook az+helm, IaC `deploy/azure/bicep/`, gotchas |
 | [`OBSERVABILITY.md`](OBSERVABILITY.md) | Métriques/logs/alertes (Onyx + gateway + actions) |
 
+## 🎨 UI · branding
+| Doc | Contenu |
+|---|---|
+| [`BRANDING_GEREP.md`](BRANDING_GEREP.md) | Surcouche de marque GEREP (thème CSS injecté via nginx `sub_filter`, palette/rôles, whitelabel admin, accessibilité AA, réglage live) |
+
 ## 🔌 Connecteurs
 | Doc | Contenu |
 |---|---|
