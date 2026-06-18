@@ -47,29 +47,30 @@
 
 | Question | Réponse (à compléter) |
 |---|---|
-| Base légale | _(intérêt légitime / contrat / …)_ |
-| Minimisation | UPN/clients **hashés** ; requêtes RAG non stockées en clair ; champs libres **redactés** |
+| Base légale | **TODO (décision client)** — intérêt légitime (art. 6-1-f) / contrat (art. 6-1-b) à qualifier par le RT/DPO |
+| Minimisation | UPN/clients **hashés SHA-256** ; requêtes RAG non stockées en clair (seule la longueur l'est) ; champs libres **redactés** (`actions/app/safe_logger.py:44-157`) |
 | Qualité des données | Audit typé (MATCH/MISMATCH/…), verdict explicite |
-| Information des personnes | _(mention d'information / politique de confidentialité)_ |
-| Exercice des droits | Accès/rectification : admin Onyx ; **effacement ciblé** : `POST /admin/retention/erase` (art. 17) |
-| Sous-traitance | _(le cas échéant ; contrats art. 28)_ |
+| Information des personnes | **TODO (décision client)** — mention d'information / politique de confidentialité à fournir par le RT |
+| Exercice des droits | Accès/rectification : admin Onyx ; **effacement ciblé** : `POST /admin/retention/erase` (art. 17 — `actions/app/retention.py:153-209`) |
+| Sous-traitance | **Aucun sous-traitant IA/cloud externe** (tout local). Seuls tiers possibles : SMTP/webhook **désignés par le client** via l'allowlist egress (défaut **deny-all**) → contrats art. 28 **TODO (décision client)** s'ils sont activés |
 
 ---
 
 ## 3. Mesures de sécurité (art. 32) — déjà en place (WS2)
 
-| Mesure | Mise en œuvre |
+| Mesure | Mise en œuvre (preuve `fichier:ligne`) |
 |---|---|
-| Redaction PII (logs + champs libres) | `safe_logger.redact` (JWT/IBAN/NIR/email) + anti-CRLF |
-| Authentification | Clé de service + **identité vérifiée** (HMAC/JWT) ; **clé admin séparée** obligatoire |
-| Contrôle d'accès / quota | Gating admin (kill-switch/flags/blocage) **fail-closed** ; rate-limit par appelant |
-| Traçabilité inviolable | Journal d'audit **chaîné HMAC** + vérification |
-| Chiffrement en transit | **STARTTLS** SMTP exigé ; egress **https-only** + anti-SSRF |
-| Contrôle des flux sortants | **DLP allowlist** (webhook/tasks) |
-| Limitation de conservation | **Purge TTL** configurable |
-| Effacement | **Effacement ciblé par sujet** (hash) |
-| Souveraineté | 100 % local (Ollama/OpenSearch/MinIO), aucune télémétrie |
-| Chiffrement au repos | _(recommandé : LUKS/BitLocker/FileVault sur l'hôte — à confirmer)_ |
+| Redaction PII (logs + champs libres) | `actions/app/safe_logger.py:44-157` (JWT/IBAN/NIR/email/CB/tél) + anti-CRLF |
+| Authentification | Clé de service + **identité vérifiée** (HMAC/JWT) `actions/app/caller_identity.py:94-120` ; **clé admin séparée** obligatoire `actions/app/security.py:177-209` |
+| Contrôle d'accès / quota | Gating admin (kill-switch/flags/blocage) **fail-closed** ; rate-limit par appelant (`actions/app/security.py`) |
+| Traçabilité inviolable | Journal d'audit **chaîné HMAC** + vérification `actions/app/audit_log.py:88-195` ; endpoint `actions/app/main.py:872` |
+| Chiffrement en transit | **STARTTLS** SMTP exigé `actions/app/notify.py:114-135` ; egress **https-only** + anti-SSRF `actions/app/dlp.py:88-150` |
+| Contrôle des flux sortants | **DLP allowlist** (webhook/tasks) `actions/app/dlp.py:88-150`, deny-all par défaut |
+| Limitation de conservation | **Purge TTL** configurable (`ONIX_RETENTION_DAYS`, défaut 365 j) `actions/app/retention.py:57-119` |
+| Effacement | **Effacement ciblé par sujet** (hash, + `.docx`/S3) `actions/app/retention.py:153-209` |
+| Chiffrement secrets connecteurs (au repos, base Onyx) | `ENCRYPTION_KEY_SECRET` **généré + imposé au boot** : `scripts/gen-secrets.sh:80`, `docker-compose.yml:59,118` (`:?`), `env.template:50` |
+| Souveraineté | 100 % local (Ollama/OpenSearch/MinIO), aucune télémétrie (`DISABLE_TELEMETRY=true`) |
+| Chiffrement au repos (disque hôte) | **TODO (décision client)** — recommandé : LUKS/BitLocker/FileVault sur l'hôte (non géré par l'outil) |
 
 ---
 

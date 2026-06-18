@@ -8,6 +8,16 @@
 >
 > Appui à la conformité, **pas un avis juridique**.
 
+> **Lecture du registre — factuel vs à décider.** Les éléments **techniques**
+> ci-dessous (durées de conservation par défaut, mesures de sécurité,
+> sous-traitants techniques, absence de transfert hors UE) sont **renseignés à
+> partir de ce qui est réellement implémenté** dans `onix-actions` (preuves
+> `fichier:ligne`). Les éléments relevant d'une **décision du responsable de
+> traitement** (notamment la **base légale** et l'**information des personnes**)
+> restent marqués **`TODO (décision client)`** : ils ne peuvent pas être tranchés
+> par l'outil. Ne présentez pas ce registre comme une conformité acquise tant que
+> ces décisions ne sont pas prises et validées par le DPO.
+
 ---
 
 ## Fiche 1 — Audit documentaire & assistance commerciale
@@ -17,11 +27,12 @@
 | **Responsable de traitement** | _(organisation, coordonnées)_ |
 | **DPO** | _(nom, e-mail)_ |
 | **Finalité(s)** | Assistance à la préparation commerciale : contrôle de cohérence documentaire (audit OCR), génération de fiches de RDV `.docx`, relances/tâches, notifications. |
-| **Base légale** | _(à qualifier : exécution d'un contrat / intérêt légitime)_ |
+| **Base légale** | **TODO (décision client)** — _à qualifier par le RT/DPO : exécution d'un contrat (art. 6-1-b) / intérêt légitime (art. 6-1-f). L'outil ne tranche pas._ |
 | **Catégories de personnes** | Collaborateurs (commerciaux, administrateurs) ; personnes concernées par les documents traités (clients / prospects). |
 | **Catégories de données** | Identité et données contractuelles présentes dans les documents fournis ; **éventuelles données de santé** (garanties/plafonds — à confirmer) ; identifiants techniques (UPN, **hashés** dans les traces). |
 | **Destinataires** | Interne. Systèmes externes UNIQUEMENT via egress **allowlisté** (webhook / SMTP du client). **Aucun fournisseur d'IA externe** (Ollama local). |
-| **Transferts hors UE** | **Aucun** (traitement 100 % local/souverain). |
+| **Sous-traitants (art. 28)** | **Aucun sous-traitant IA/cloud externe** par conception (inférence, index et fichiers **sur site**). Les seuls tiers possibles sont **désignés et maîtrisés par le client** via l'allowlist egress (`ONIX_EGRESS_ALLOWLIST`) : serveur **SMTP** (notifications) et **webhook** de tâches — _à lister par le client s'il en active ; contrats art. 28 le cas échéant_. Sans allowlist, l'egress est **refusé par défaut** (`ONIX_EGRESS_DEFAULT_DENY=true`). |
+| **Transferts hors UE** | **Aucun** (traitement 100 % local/souverain ; aucune télémétrie sortante, `DISABLE_TELEMETRY=true`). |
 | **Durées de conservation** | Données d'usage / tâches terminées / fichiers `.docx` : **`ONIX_RETENTION_DAYS`** (défaut **365 jours**), purge par âge. Journal d'audit administratif : conservé pour traçabilité (ne contient **que des hash**). Documents sources : gérés côté Onyx (cf. `RGPD.md`). |
 | **Mesures de sécurité (art. 32) — renvoi 30-1-g** | Voir tableau ci-dessous. |
 
