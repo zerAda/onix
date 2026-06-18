@@ -153,6 +153,24 @@ Usage: env:\n{{ include "onix.dataTierSecretEnv" . | nindent 12 }}
 {{- end -}}
 
 {{/*
+Variables d'environnement SECRÈTES de onix-actions (WS2), injectées depuis le
+Secret K8s. Noms de clés FIXES, lus par le code (security.py / audit_log.py /
+caller_identity.py). Sans ces clés en HA : /admin/* tombe en 403 fail-closed et
+la chaîne d'audit retombe en SHA-256 au lieu du HMAC promis. Les VALEURS viennent
+du Secret (existingSecret ou secrets.create) — JAMAIS du repo.
+Usage: env:\n{{ include "onix.actionsSecretEnv" . | nindent 12 }}
+*/}}
+{{- define "onix.actionsSecretEnv" -}}
+{{- $secret := include "onix.secretName" . -}}
+- name: ONIX_ACTIONS_ADMIN_KEY
+  valueFrom: { secretKeyRef: { name: {{ $secret }}, key: ONIX_ACTIONS_ADMIN_KEY } }
+- name: ONIX_ACTIONS_AUDIT_HMAC_KEY
+  valueFrom: { secretKeyRef: { name: {{ $secret }}, key: ONIX_ACTIONS_AUDIT_HMAC_KEY } }
+- name: ONIX_ACTIONS_CALLER_HMAC_SECRET
+  valueFrom: { secretKeyRef: { name: {{ $secret }}, key: ONIX_ACTIONS_CALLER_HMAC_SECRET } }
+{{- end -}}
+
+{{/*
 Variables d'environnement SECRÈTES de l'access-gateway, injectées depuis le
 Secret K8s (mêmes clés que deploy/azure/access-gateway.yaml). Noms FIXES, lus par
 le code (config.py / audit.py). GATEWAY_CACHE_REDIS_URL contient la clé Redis (TLS)

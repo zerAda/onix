@@ -47,6 +47,10 @@ secrets:
   #   POSTGRES_PASSWORD, OPENSEARCH_ADMIN_PASSWORD, REDIS_PASSWORD,
   #   S3_AWS_ACCESS_KEY_ID, S3_AWS_SECRET_ACCESS_KEY, SECRET, USER_AUTH_SECRET,
   #   ONIX_ACTIONS_API_KEY, BROKER_PASSWORD
+  #   # onix-actions WS2 (security.py / audit_log.py / caller_identity.py) — SINON
+  #   # /admin/* en 403 fail-closed et chaîne d'audit en repli SHA-256 :
+  #   ONIX_ACTIONS_ADMIN_KEY, ONIX_ACTIONS_AUDIT_HMAC_KEY, ONIX_ACTIONS_CALLER_HMAC_SECRET
+  #   # (générées par scripts/gen-secrets.sh ; 48 car. ; jamais en repo)
   values: {}                # rempli SEULEMENT si create=true (déconseillé)
 
 # -----------------------------------------------------------------------------

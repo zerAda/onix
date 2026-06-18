@@ -33,6 +33,10 @@ secrets:
     USER_AUTH_SECRET: "devauth"
     ONIX_ACTIONS_API_KEY: "devapikey"
     BROKER_PASSWORD: "brokerpass"
+    # onix-actions WS2 (clés factices CI ; en prod via existingSecret/Key Vault).
+    ONIX_ACTIONS_ADMIN_KEY: "devadminkey"
+    ONIX_ACTIONS_AUDIT_HMAC_KEY: "devaudithmac"
+    ONIX_ACTIONS_CALLER_HMAC_SECRET: "devcallerhmac"
 
 # Anti-affinité en "soft" (cluster mono-nœud kind) : les 2 répliques restent
 # schedulables sur le même nœud (preferred, pas required).

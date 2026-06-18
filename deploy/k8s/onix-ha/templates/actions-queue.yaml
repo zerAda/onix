@@ -124,6 +124,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "onix.secretName" . }}
                   key: ONIX_ACTIONS_API_KEY
+            {{- include "onix.actionsSecretEnv" . | nindent 12 }}
             - name: BROKER_PASSWORD
               valueFrom:
                 secretKeyRef:
