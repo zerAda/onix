@@ -248,3 +248,61 @@ groups:
           description: >-
             Le point de montage {{ $labels.mountpoint }} a moins de 10 %
             d'espace libre ({{ $value | printf "%.1f" }} %).
+
+  # ---------------------------------------------------------------------------
+  # 5. OpenSearch : santé du cluster + pression mémoire JVM. Métriques émises par
+  #    l'elasticsearch-exporter v1.7.0 (cible `opensearch`, cf. prometheus.yml).
+  #    Noms vérifiés pour cette version :
+  #      elasticsearch_cluster_health_status{cluster,color}   (1 = couleur active)
+  #      elasticsearch_cluster_health_up                      (1 = exporter joint le cluster)
+  #      elasticsearch_jvm_memory_used_bytes{area="heap",name}
+  #      elasticsearch_jvm_memory_max_bytes{area="heap",name}
+  # ---------------------------------------------------------------------------
+  - name: onix-opensearch
+    rules:
+      - alert: OpenSearchClusterRed
+        # Couleur de santé RED active depuis 2 min : au moins un shard primaire
+        # est indisponible (perte de données possible). Critique.
+        expr: max(elasticsearch_cluster_health_status{color="red"}) == 1
+        for: 2m
+        labels:
+          severity: critical
+          component: opensearch
+        annotations:
+          summary: "Cluster OpenSearch en état RED"
+          description: >-
+            Le cluster OpenSearch est en santé RED depuis 2 min : au moins un
+            shard primaire est non assigné (indexation/recherche dégradées).
+
+      - alert: OpenSearchExporterDown
+        # L'exporter ne parvient plus à interroger le cluster (cluster injoignable
+        # ou exporter en échec) depuis 2 min. Double signal avec TargetDown.
+        expr: max(elasticsearch_cluster_health_up) == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: opensearch
+        annotations:
+          summary: "OpenSearch injoignable (exporter en échec)"
+          description: >-
+            L'elasticsearch-exporter ne parvient plus à lire l'état du cluster
+            OpenSearch depuis 2 min (elasticsearch_cluster_health_up == 0) :
+            cluster arrêté ou injoignable. Indexation/recherche RAG impactées.
+
+      - alert: OpenSearchHeapHigh
+        # Pression mémoire JVM > 90 % du heap max depuis 10 min : risque de pauses
+        # GC longues / OOM. Seuil prudent, à ajuster selon le dimensionnement.
+        expr: >-
+          100 * sum by (name) (elasticsearch_jvm_memory_used_bytes{area="heap"})
+          /
+          clamp_min(sum by (name) (elasticsearch_jvm_memory_max_bytes{area="heap"}), 1) > 90
+        for: 10m
+        labels:
+          severity: warning
+          component: opensearch
+        annotations:
+          summary: "Heap JVM OpenSearch saturé (> 90 %)"
+          description: >-
+            La JVM OpenSearch ({{ $labels.name }}) utilise plus de 90 % de son
+            heap depuis 10 min ({{ $value | printf "%.1f" }} %) : risque de
+            pauses GC / OOM. Augmentez le heap ou réduisez la charge.
