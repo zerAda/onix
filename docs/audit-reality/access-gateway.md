@@ -18,22 +18,30 @@ CONFIRMÉ par preuve** (cf. CACHE.md ligne « §11 ordering » ci-dessous).
 
 ## Tableau récapitulatif (comptage par classe)
 
-| Classe | Nb |
-|---|---:|
-| ✅ CONFORME | 71 |
-| ⚠️ ÉCART MINEUR | 11 |
-| ❌ ÉCART MAJEUR | 1 |
-| 🕳️ DOC-SANS-CODE | 0 |
-| 🔇 CODE-SANS-DOC | 5 |
-| ❔ NON VÉRIFIABLE | 6 |
-| **Total** | **94** |
+| Classe | Nb (initial) | Nb (après itér. 1) |
+|---|---:|---:|
+| ✅ CONFORME | 71 | 73 |
+| ⚠️ ÉCART MINEUR | 11 | 9 |
+| ❌ ÉCART MAJEUR | 1 | 1 |
+| 🕳️ DOC-SANS-CODE | 0 | 0 |
+| 🔇 CODE-SANS-DOC | 5 | 5 |
+| ❔ NON VÉRIFIABLE | 6 | 6 |
+| **Total** | **94** | **94** |
+
+> **Mise à jour itération 1 (2026-06-18)** — réconciliation **doc-truth** (aucun
+> changement de code) : STR-14 (SSE→NDJSON) et DEC-09 (« 52 tests »→267) passent
+> de ⚠️ à ✅. Les écarts transverses CODE-DOC-01 (admin-bypass inerte), CODE-DOC-07
+> (fail-loud/fail-safe du cache) et CODE-DOC-08 (`_READ_ROLES` partiel) sont
+> désormais **documentés conformément au comportement réel** (CACHE.md §3/§4,
+> RBAC.md §4.3 bis). Gate `pytest access-gateway/tests` = **267 passed**.
 
 **Synthèse honnête** : le scope est d'une fidélité doc↔code remarquable. Le seul
 écart **majeur** est une **affirmation de sécurité sur le tier sémantique** (le
 garde anti-divergence ne porte QUE sur la question normalisée d'indexation par
 défaut, cas nominal — *voir détail CACHE-26* ; non, c'est précis : voir plus bas).
-Les écarts mineurs sont surtout des **valeurs/chemins** ou des **nuances de
-vocabulaire** (« SSE » vs NDJSON, « 52 tests » obsolète, chemin `doc_acl.json`).
+Les écarts mineurs restants sont surtout des **valeurs/chemins** ou des **nuances
+de vocabulaire** ; les nuances « SSE »/« 52 tests » ont été **corrigées** à
+l'itération 1.
 
 ---
 
@@ -86,7 +94,7 @@ vocabulaire** (« SSE » vs NDJSON, « 52 tests » obsolète, chemin `doc_acl.js
 | DEC-06 | §2.1 Journal d'accès, identité hachée (`audit.py`), HMAC-SHA256 `GATEWAY_AUDIT_SALT` | ✅ | `app/audit.py:34-57` | |
 | DEC-07 | §2.4 Révocation : `GATEWAY_GROUP_CACHE_TTL` **défaut 300 s** | ✅ | `config.py:167` (`"300"`) | |
 | DEC-08 | §6.3 Fail-closed (testé) | ✅ | `test_failclosed.py` (3 cas) | |
-| DEC-09 | §6 « **52 tests au total** », « 52 tests verts » | ⚠️ | `access-gateway/tests/*` = **267** fonctions de test | Chiffre **obsolète/sous-estimé** (suite très étendue depuis). Doc à actualiser. |
+| DEC-09 | §6 « **267 tests au total** », « 267 tests verts » | ✅ | `pytest access-gateway/tests --collect-only` = **267** (2026-06-18) ; `DECISION_RBAC.md` §6 L303-309, §8 L326-327 corrigés | **Corrigé** (itér. 1) : chiffre « 52 » obsolète → **267** réels, comptage vérifié. |
 | DEC-10 | §6.4 audit JSON `onix.gateway.audit`, identité pseudonymisée, jamais message | ✅ | `app/audit.py:31,75-93` | |
 | DEC-11 | §5.2 code EE Onyx non-MIT / proprio | ❔ | — | Référence Onyx externe (non vendoré). |
 | DEC-12 | §3 prix Onyx (Business 20 $/u/mois, EE sur devis…) | ❔ | — | Sources web datées 2026-06-16 ; hors code. |
@@ -106,7 +114,7 @@ vocabulaire** (« SSE » vs NDJSON, « 52 tests » obsolète, chemin `doc_acl.js
 | CACHE-07 | Secret = `GATEWAY_CACHE_HMAC_SECRET` ; **principal PAS dans la clé** | ✅ | `app/cache.py:292-308` ; `config.py:176` | Justifié §2.3. |
 | CACHE-08 | Isolation prouvée par `test_cache.py::TestCacheKey::test_key_isolation_by_perimeter` | ✅ | `test_cache.py:97` | Existe. |
 | CACHE-09 | Bypass : `no_store`, `streaming`, `write_intent`, `explicit_admin_bypass`, ordre `no-store > streaming > admin > write` | ✅ | `app/cache.py:648-697` | Ordre code exact (admin avant write). |
-| CACHE-10 | `explicit_admin_bypass` **ignoré pour les non-admins** | ✅ (unité) / ⚠️ (intégration) | `app/cache.py:681-684` | Le code unité gère `is_admin`. **MAIS** `main.py:405` appelle `should_bypass(payload, headers)` **sans `is_admin`** → en prod, `is_admin` vaut toujours `False` ⇒ le bypass admin n'est **jamais déclenchable** par le chemin réel. Voir CODE-DOC-01. |
+| CACHE-10 | `explicit_admin_bypass` **ignoré pour les non-admins** ; **inerte en prod** (non câblé) | ✅ | `app/cache.py:681-684` (unité) ; `app/main.py:405` (sans `is_admin`) ; `CACHE.md §3` note « État de câblage réel » + §5/§13.6 notes | **Corrigé (doc) itér. 1** : la doc décrit désormais le comportement RÉEL — logique testée unitairement mais **non atteignable** par le chemin HTTP (toujours `is_admin=False`). Code inchangé (impact sécurité nul). |
 | CACHE-11 | `build_cache` : disabled→None ; secret manquant→**RuntimeError (LOUD)** ; redis_url→RedisBackend ; sinon InMemoryBackend | ✅ | `app/cache.py:962-993` | |
 | CACHE-12 | Exception-safety : défaut backend → miss propre, jamais 5xx ; observable `cache_errors_total{op}` | ✅ | `app/cache.py:764-787,209-217` ; `metrics.py:313-320` | |
 | CACHE-13 | `cache.py` n'importe PAS FastAPI (pur Python + redis) | ✅ | `app/cache.py` (aucun import fastapi) | |
@@ -149,7 +157,7 @@ vocabulaire** (« SSE » vs NDJSON, « 52 tests » obsolète, chemin `doc_acl.js
 | STR-11 | Cache correctement contourné pour les flux (`should_bypass` renvoie `"streaming"` pour `stream=True`) | ✅ (mécanisme) / ⚠️ (chemin) | `app/cache.py:677-678` | Vrai dans `should_bypass`. **MAIS** en réalité `main.py:362-391` traite le streaming **avant** d'appeler `should_bypass` (ligne 405) : le flux ne passe jamais par la logique cache, donc `cache_bypassed{streaming}` **n'est pas incrémenté** sur le chemin réel. Pas de fuite (le but est atteint), mais le compteur de bypass « streaming » reste à 0 en prod. Voir CODE-DOC-02. |
 | STR-12 | §6 schéma Onyx amont (NDJSON : `answer_piece`, `top_documents`, `citation_num/document_id`, `error`) ; tolérance versions (`content`/`text`/`token`) | ✅ | `app/streaming.py:96-105,116-134,224-233` | `_PIECE_FIELDS` tolère les variantes. |
 | STR-13 | Format déployé Onyx réel (legacy vs typé) « à confirmer contre l'instance » | ❔ | `app/streaming.py:31-33` (commentaire) | Honnêtement marqué « à confirmer ». Onyx non vendoré. |
-| STR-14 | Titre/doc parlent de **« Streaming SSE »** | ⚠️ | `app/streaming.py:113` ; `app/main.py:391` (`media_type="application/x-ndjson"`) | Le transport réel est **NDJSON** (`application/x-ndjson`), **pas** du Server-Sent Events (`text/event-stream`). La doc elle-même précise « NDJSON » au §4/§6 ; seul le **titre** « SSE » est trompeur. Cohérence interne à resserrer. |
+| STR-14 | Titre/doc parlent de **« Streaming NDJSON »** | ✅ | `app/main.py:391` (`media_type="application/x-ndjson"`) ; `STREAMING.md` L1 (titre), encadré « Transport = NDJSON », §1 L31 ; `CACHE.md` L92, L303 | **Corrigé (doc) itér. 1** : titre « SSE » → « NDJSON », note explicite avec preuve `main.py:391`, et occurrences « SSE » de CACHE.md remplacées par « NDJSON ». Transport réel confirmé NDJSON (pas `text/event-stream`). |
 | STR-15 | §10 `test_streaming.py` offline, async, couvre relais/avortements/override/ACL/fail-closed/audit | ✅ | `test_streaming.py` (16 cas) | Couverture conforme. |
 | STR-16 | §9 câblage `main.py` via `httpx.stream` + `StreamingResponse`, injecte guardrail/doc_acl/onyx_proxy réels | ✅ | `app/main.py:362-391` | L'exemple doc utilise `build_request/send(stream=True)` ; le code réel utilise `http.stream(...)` (équivalent). |
 
@@ -157,13 +165,14 @@ vocabulaire** (« SSE » vs NDJSON, « 52 tests » obsolète, chemin `doc_acl.js
 
 | # | Constat | Classe | Preuve |
 |---|---|---|---|
-| CODE-DOC-01 | `should_bypass(is_admin=...)` jamais passé par `main.py` → `explicit_admin_bypass` **inerte en prod** (toujours non-admin). Documenté comme fonctionnel (CACHE.md §3). | ⚠️/🔇 | `app/main.py:405` vs `app/cache.py:648-684` |
+| CODE-DOC-01 | `should_bypass(is_admin=...)` jamais passé par `main.py` → `explicit_admin_bypass` **inerte en prod** (toujours non-admin). **Doc alignée (itér. 1)** : CACHE.md §3 décrit l'inertie. | ✅ (doc) | `app/main.py:405` vs `app/cache.py:648-684` ; `CACHE.md §3` |
 | CODE-DOC-02 | Le compteur `cache_bypassed{streaming}` n'est jamais incrémenté (streaming court-circuité avant la logique cache). | 🔇 | `app/main.py:362-391` vs `:405-419` |
 | CODE-DOC-03 | Endpoint `POST /v1/feedback` (`onix_gateway_feedback_total{rating}`) **non documenté** dans les 4 docs du scope. | 🔇 | `app/main.py:512-544` ; `metrics.py:78-82` |
 | CODE-DOC-04 | Endpoint `GET /v1/authorized-document-sets` (introspection) non mentionné par RBAC.md. | 🔇 | `app/main.py:276-302` |
 | CODE-DOC-05 | `GET /metrics` renvoie **503** (pas 404) si génération Prometheus échoue ; 404 seulement si désactivé. Nuance non documentée. | 🔇 | `app/main.py:222-239` |
 | CODE-DOC-06 | `GATEWAY_AUDIT_SALT` absent → sel **éphémère par processus** (corrélation intra-run seulement). Bien documenté dans `audit.py` mais **pas** dans RBAC.md (qui suppose un sel fixe). | ⚠️ | `app/audit.py:34-40` |
-| CODE-DOC-07 | `make_cache_key` lève si secret manquant (filet) ; `main.py` désactive le cache (fail-safe) plutôt que crasher — divergence avec CACHE.md §4 « fail-loud au démarrage ». | ⚠️ | `app/main.py:164-167` vs `cache.py:962-980` |
+| CODE-DOC-08 | `_READ_ROLES` = liste blanche FINIE → rôles SharePoint custom/localisés non reconnus → item omis → faux refus (fail-closed, perte de **disponibilité**). **Doc ajoutée (itér. 1)** : RBAC.md §4.3 bis documente la limite. | ✅ (doc) | `app/graph_acl.py:70,152-161` ; `RBAC.md §4.3 bis` |
+| CODE-DOC-07 | `build_cache` lève si secret manquant (filet fail-loud) ; `main.py` capte et désactive le cache (fail-safe, log CRITICAL) plutôt que crasher. **Doc alignée (itér. 1)** : CACHE.md §4/§7 décrit la **dégradation gracieuse** réelle. | ✅ (doc) | `app/main.py:164-168` vs `cache.py:976-980` ; `CACHE.md §4`, §7 |
 
 > **Note hors-scope mais signalée** : `CLAUDE.md`/`AGENTS.md` parlent d'« **audit
 > HMAC chaîné** ». Le code `audit.py` réalise une **pseudonymisation HMAC** des
@@ -183,26 +192,32 @@ ACL ré-appliquée par requête, fail-closed streaming, audit pseudonymisé) son
 **implémentés ET testés**. Le piège AGENTS §7 est respecté (CACHE-15).
 
 ### P1 — à corriger avant un audit client exigeant
-1. **`explicit_admin_bypass` inerte** (CODE-DOC-01) : la doc CACHE.md §3 présente
-   une fonctionnalité non atteignable par le chemin réel. Soit câbler `is_admin`
-   dans `main.py`, soit retirer la promesse de la doc (règle de jeu n°1 : ne pas
-   présenter comme réel ce qui ne l'est pas). *Impact sécurité nul, impact
-   honnêteté réel.*
-2. **`graph_acl` `_READ_ROLES` partiel** : la liste blanche de rôles
-   (`graph_acl.py:70`) peut **omettre** des rôles SharePoint custom/localisés →
-   item à tort **omis** → citation refusée à un ayant-droit (faux négatif
-   d'accès). Discipline fail-closed correcte, mais à documenter comme limite
-   (perte de disponibilité possible) et à compléter selon le tenant.
-3. **Divergence fail-loud vs fail-safe du cache** (CODE-DOC-07) : un secret HMAC
-   manquant **désactive silencieusement** le cache (CRITICAL log) au lieu de
-   bloquer le démarrage comme l'annonce CACHE.md §4. Choix défendable
-   (disponibilité), mais **contredit la doc** → aligner l'un sur l'autre.
+1. **`explicit_admin_bypass` inerte** (CODE-DOC-01) — ✅ **RÉSOLU (doc) itér. 1** :
+   CACHE.md §3 (note « État de câblage réel ») + §5/§13.6 décrivent désormais
+   l'inertie (logique testée unitairement mais non atteignable par le chemin HTTP,
+   `is_admin` toujours `False`). La promesse n'est plus présentée comme
+   opérationnelle (règle de jeu n°1). Code volontairement **inchangé** (impact
+   sécurité nul ; câbler `is_admin` resterait possible plus tard).
+2. **`graph_acl` `_READ_ROLES` partiel** (CODE-DOC-08) — ✅ **RÉSOLU (doc) itér. 1** :
+   RBAC.md §4.3 bis documente la liste blanche FINIE (`graph_acl.py:70`), le
+   risque de faux refus pour rôles custom/localisés (perte de **disponibilité**,
+   jamais de confidentialité), la nature **fail-closed** délibérée et la procédure
+   d'extension de `_READ_ROLES` par tenant. Code **inchangé**.
+3. **Divergence fail-loud vs fail-safe du cache** (CODE-DOC-07) — ✅ **RÉSOLU (doc)
+   itér. 1** : CACHE.md §4 (note « Comportement réel au démarrage ») + §7
+   décrivent la **dégradation gracieuse** réelle (`build_cache` lève une
+   `RuntimeError`, mais `main.py:164-168` la capte → cache OFF + log CRITICAL,
+   pas d'arrêt). Choix de disponibilité désormais aligné sur la doc. Code
+   **inchangé**.
 
 ### P2 — propreté / dette documentaire
-4. **« 52 tests » obsolète** (DEC-09) : la suite compte **267** tests. Actualiser
-   DECISION_RBAC.md §6/§8 (sous-estimation, pas surestimation — risque faible).
-5. **« Streaming SSE » trompeur** (STR-14) : transport réel = NDJSON
-   (`application/x-ndjson`). Renommer le titre (« Streaming NDJSON ») ou clarifier.
+4. **« 52 tests » obsolète** (DEC-09) — ✅ **RÉSOLU itér. 1** : DECISION_RBAC.md
+   §6/§8 actualisés à **267** tests (comptage `pytest --collect-only` vérifié le
+   2026-06-18).
+5. **« Streaming SSE » trompeur** (STR-14) — ✅ **RÉSOLU itér. 1** : STREAMING.md
+   titre renommé « Streaming NDJSON » + note de transport (preuve `main.py:391`) ;
+   occurrences « SSE » de CACHE.md (L92, L303) remplacées par NDJSON. Transport
+   réel = `application/x-ndjson` (pas `text/event-stream`).
 6. **Endpoints non documentés** (`/v1/feedback`, `/v1/authorized-document-sets`,
    nuance 503 de `/metrics`) — compléter CACHE.md/RBAC.md/OBSERVABILITY.md.
 7. **Compteur `cache_bypassed{streaming}`** mort en prod (CODE-DOC-02) : soit
