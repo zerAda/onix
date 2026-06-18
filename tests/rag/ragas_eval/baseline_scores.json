@@ -1,5 +1,5 @@
 {
-  "_comment": "Baseline anti-régression RAGAS — agrégats d'un run de référence SAIN. Rafraîchir UNIQUEMENT via `compare_scores --update` après revue. Le comparateur échoue si une métrique chute de plus de la tolérance sous ces valeurs. Cf. docs/RAG_EVAL.md.",
+  "_comment": "Baseline anti-régression RAGAS — agrégats produits DÉTERMINISTEMENT par le juge scripté (tests/rag/ragas_eval/scripted_judge.py) sur golden_fr.json, via `python -m ragas_eval.gen_baseline --write` (aucun modèle live, reproductible byte-level). Graine de référence : un vrai juge ≥ 7B score différemment → rafraîchir via `compare_scores --update` après le premier run nightly sain. Cf. docs/RAG_EVAL.md.",
   "aggregates": {
     "faithfulness": 0.75,
     "context_precision": 0.875,

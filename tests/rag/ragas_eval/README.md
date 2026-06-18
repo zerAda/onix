@@ -28,14 +28,25 @@ pareil), puis un **gate** compare aux seuils.
 
 ```
 ragas_eval/
-├── golden_fr.json   # jeu doré FR (≥ 8 items) + 2 cas DÉGRADÉS (hallucination, contexte hors-sujet)
-├── judge.py         # prompts FR + décomposition LLM + extraction JSON ROBUSTE ; llm() injectable
-├── metrics.py       # agrégation DÉTERMINISTE des verdicts → scores ∈ [0,1] + gate (testable sans LLM)
-├── runner.py        # charge le golden set, score, rapport FR, gate, --json, --backend ; exit≠0 si FAIL
-├── conftest.py      # active les imports en nom plat (convention tests/rag)
+├── golden_fr.json      # jeu doré FR (≥ 8 items) + 2 cas DÉGRADÉS (hallucination, contexte hors-sujet)
+├── judge.py            # prompts FR + décomposition LLM + extraction JSON ROBUSTE ; llm() injectable
+├── metrics.py          # agrégation DÉTERMINISTE des verdicts → scores ∈ [0,1] + gate (testable sans LLM)
+├── runner.py           # charge le golden set, score, rapport FR, gate, --json, --backend ; exit≠0 si FAIL
+├── scripted_judge.py   # juge SCRIPTÉ déterministe (faux LLM) — oracle des tests ET de la baseline
+├── gen_baseline.py     # (re)génère baseline_scores.json DÉTERMINISTEMENT (sans Ollama), --write/--check
+├── baseline_scores.json# graine de référence anti-régression (produite par gen_baseline)
+├── conftest.py         # active les imports en nom plat (convention tests/rag)
 ├── test_ragas_eval.py  # tests OFFLINE (juge scripté, AUCUN réseau)
-└── README.md        # ce fichier
+└── README.md           # ce fichier
 ```
+
+> **Provenance de la baseline (reproductible byte-level).** `baseline_scores.json`
+> (`0.75` / `0.875` / `1.0`) est produit par `gen_baseline.py` en scorant
+> `golden_fr.json` avec `scripted_judge.py` — **aucun modèle live**. On reproduit
+> à l'octet près via `python -m ragas_eval.gen_baseline --write` ; le test
+> `test_baseline_is_reproducible_from_scripted_judge` garde l'invariant. C'est une
+> **graine déterministe**, pas un run d'un vrai juge ≥ 7B (à rafraîchir après le
+> premier run nightly sain — cf. `docs/RAG_EVAL.md`).
 
 La frontière clé : **`judge.py` parle au LLM**, **`metrics.py` fait les maths**.
 Toute la mathématique des métriques et la logique du gate sont donc **testables
