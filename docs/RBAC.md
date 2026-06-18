@@ -208,6 +208,23 @@ item** réelles de SharePoint (Microsoft Graph) et en construit une ACL **vivant
   recoupe `grantedToV2.user.id` → utilisateurs, `grantedToV2.group.id` → groupes
   Entra, `grantedToV2.siteGroup.id` → groupes SharePoint (+ variante liste
   `grantedToIdentitiesV2`). Casse-insensible.
+- **Reconnaissance des rôles de lecture — liste blanche FINIE (limite assumée,
+  fail-closed).** Une permission n'est retenue comme « lecture » que si l'un de ses
+  `roles` figure dans une **liste blanche fixe** :
+  `{read, write, owner, sp.full control, sp.read, sp.contribute}`
+  (`access-gateway/app/graph_acl.py:70`, appliquée par `_permission_grants_read`,
+  `graph_acl.py:152-161`). Un rôle **hors de cette liste** — notamment un **rôle
+  SharePoint personnalisé** (« custom role definition ») ou un **libellé localisé**
+  (autre langue) — n'est **pas** reconnu : `_permission_grants_read` renvoie
+  `False`, le principal de cette permission est **ignoré**, et l'item peut être
+  **omis** de l'ACL Graph. **Conséquence** : sous `default_policy=deny`, un
+  **ayant-droit légitime** détenteur d'un rôle custom/localisé peut se voir
+  **refuser une citation** (faux négatif d'accès = perte de **disponibilité**,
+  jamais de **confidentialité**). C'est une **discipline fail-closed délibérée**
+  (on n'accorde pas l'accès sur un rôle qu'on ne sait pas interpréter), mais elle
+  suppose que vos rôles SharePoint utilisent les libellés standards ci-dessus.
+  **À adapter par tenant** : si vous employez des rôles custom conférant la lecture,
+  étendez `_READ_ROLES` (lowercase) avant de vous fier au sync Graph en production.
 - **Maillon dur `doc_id ↔ item`** : un **mapping explicite**
   `{ doc_id: {site_id, drive_id, item_id} }` relie un doc Onyx à son item
   SharePoint (Onyx stocke l'URL source / l'id de drive-item dans les métadonnées).
