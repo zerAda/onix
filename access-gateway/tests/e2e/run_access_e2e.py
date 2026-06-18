@@ -478,10 +478,11 @@ async def run_fabric(settings, report: Report, timeout: float) -> None:
 
         # ── B2 : connectivité OneLake (listing + lecture optionnelle) ─────
         try:
+            gold_prefix = settings.fabric_gold_tables_prefix
             paths = await fabric.onelake_list_paths(workspace_id, item_id, item_type)
             proof = (
-                f"jeton stockage acquis ; {len(paths)} chemin(s) listé(s) sous "
-                f"{item_id}.{item_type}/Files."
+                f"jeton stockage acquis ; {len(paths)} chemin(s) listé(s) sous le "
+                f"périmètre GOLD (lakehouse {item_id}, préfixe '{gold_prefix}')."
             )
             if onelake_path:
                 blob = await fabric.onelake_read_file(
