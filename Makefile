@@ -448,9 +448,23 @@ sbom:
 	@echo "✓ SBOM écrit : sbom.onix-actions.spdx.json"
 
 monitor-up:
+	@# Garde-fou anti admin/admin : on refuse de démarrer Grafana sans un
+	@# GRAFANA_ADMIN_PASSWORD FORT dans .env. Sans ce contrôle, le compose
+	@# retomberait sur un défaut connu et l'UI loopback serait exposée en
+	@# identifiants devinables. `make secrets` génère ce mot de passe (32 car.).
+	@PW=$$(sed -n 's/^GRAFANA_ADMIN_PASSWORD=//p' .env 2>/dev/null | head -n1); \
+	  if [ -z "$$PW" ]; then \
+	    echo "✗ GRAFANA_ADMIN_PASSWORD absent de .env. Lancez 'make secrets' (ou définissez un mot de passe fort) avant 'make monitor-up'."; exit 1; \
+	  fi; \
+	  case "$$PW" in admin|*CHANGEME*) \
+	    echo "✗ GRAFANA_ADMIN_PASSWORD trivial/par défaut. Définissez un vrai secret (make secrets)."; exit 1;; esac; \
+	  if [ $${#PW} -lt 12 ]; then \
+	    echo "✗ GRAFANA_ADMIN_PASSWORD trop court (< 12 caractères). Renforcez-le (make secrets)."; exit 1; \
+	  fi
 	@$(MONITORING_COMPOSE) up -d
 	@P=$$(sed -n 's/^GRAFANA_HOST_PORT=//p' .env 2>/dev/null | head -n1); P=$${P:-3001}; \
-	  echo "✓ Observabilité démarrée. Grafana : http://localhost:$$P (admin / GRAFANA_ADMIN_PASSWORD)."
+	  U=$$(sed -n 's/^GRAFANA_ADMIN_USER=//p' .env 2>/dev/null | head -n1); U=$${U:-onix-admin}; \
+	  echo "✓ Observabilité démarrée. Grafana : http://localhost:$$P (utilisateur : $$U / GRAFANA_ADMIN_PASSWORD)."
 
 monitor-down:
 	@$(MONITORING_COMPOSE) down

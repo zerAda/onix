@@ -12,8 +12,27 @@ data:
   # --- Onyx : câblage data-tier (hôtes en clair, pas de secret) ---
   POSTGRES_HOST: {{ include "onix.postgresHost" . | quote }}
   POSTGRES_USER: "postgres"
+  {{- /* PIÈGE Azure (AGENTS.md §7) : Postgres managé impose sslmode=require ; Redis
+         managé = TLS 6380 + noeviction. La GATEWAY a déjà son URL rediss://…:6380/1,
+         mais ONYX (base 0) lit REDIS_SSL/REDIS_PORT et POSTGRES_PORT/POSTGRES_SSLMODE
+         DIRECTEMENT depuis l'env (cf. app_configs.py REDIS_SSL opt-in :526). Rendus
+         UNIQUEMENT si l'intégrateur les pose (in-cluster non-TLS => comportement
+         inchangé). REDIS_SSL confirmé par le code ; POSTGRES_SSLMODE = passthrough
+         opérateur (psycopg/libpq) — voir docs/DEPLOY_AZURE.md gotchas. */ -}}
+  {{- with .Values.postgresql.port }}
+  POSTGRES_PORT: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.postgresql.sslmode }}
+  POSTGRES_SSLMODE: {{ . | quote }}
+  {{- end }}
   OPENSEARCH_HOST: {{ include "onix.opensearchHost" . | quote }}
   REDIS_HOST: {{ include "onix.redisHost" . | quote }}
+  {{- with .Values.redis.port }}
+  REDIS_PORT: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.redis.ssl }}
+  REDIS_SSL: "true"
+  {{- end }}
   S3_ENDPOINT_URL: {{ include "onix.minioEndpoint" . | quote }}
   MODEL_SERVER_HOST: {{ printf "%s-inference-model-server" (include "onix.fullname" .) | quote }}
   INDEXING_MODEL_SERVER_HOST: {{ printf "%s-index-model-server" (include "onix.fullname" .) | quote }}
@@ -27,7 +46,24 @@ data:
   ONIX_OLLAMA_URL: {{ .Values.actions.config.ollamaUrl | quote }}
   ONIX_BUDGET_WARN_PCT: {{ .Values.actions.config.budgetWarnPct | quote }}
   # Persistance déportée (HA) : SQLite local remplacé par Postgres partagé.
-  ONIX_DB_BACKEND: "postgres"
+  # Backend pilotable par l'intégrateur (sqlite en mono-poste) ; défaut postgres.
+  ONIX_DB_BACKEND: {{ .Values.actions.config.dbBackend | default "postgres" | quote }}
+  # Base partagée Onyx/onix_actions (le code dérive le DSN depuis POSTGRES_* si
+  # ONIX_DB_URL est vide). POSTGRES_HOST/USER déjà posés plus haut ; le mot de
+  # passe vient du Secret côté Deployment.
+  POSTGRES_DB: {{ .Values.actions.config.dbName | default "onyx" | quote }}
+{{- if .Values.actions.config.dbUrl }}
+  ONIX_DB_URL: {{ .Values.actions.config.dbUrl | quote }}
+{{- end }}
+{{- if .Values.actions.config.dbSchema }}
+  ONIX_DB_SCHEMA: {{ .Values.actions.config.dbSchema | quote }}
+{{- end }}
+  # Stockage objet partagé pour les .docx générés (sinon GET /download casse en
+  # multi-réplica : une réplique sans le fichier local répond 404). Les creds S3
+  # (S3_AWS_ACCESS_KEY_ID/SECRET) viennent du Secret ; S3_ENDPOINT_URL est posé
+  # plus haut. Cf. docs/STATELESS_ACTIONS.md §3/§7 et actions/app/objstore.py.
+  ONIX_OBJECT_STORE: {{ .Values.actions.config.objectStore | default "local" | quote }}
+  ONIX_S3_BUCKET: {{ .Values.actions.config.s3Bucket | default "onyx-file-store-bucket" | quote }}
 {{- if .Values.actionsQueue.enabled }}
   # File asynchrone : backend de résultats (Postgres) ; le broker (mot de passe)
   # est injecté côté Deployment via le Secret.

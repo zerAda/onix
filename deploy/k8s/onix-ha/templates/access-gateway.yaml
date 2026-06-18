@@ -90,6 +90,14 @@ spec:
         - name: access-gateway
           image: "{{ .Values.accessGateway.image.repository }}:{{ .Values.accessGateway.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- /* readOnlyRootFilesystem OPT-IN (défaut OFF). Durcissement CONTENEUR
+                 (champ container-level, distinct du securityContext pod). Sûr ici :
+                 access-gateway est stateless ; les écritures transitoires vont sur
+                 l'emptyDir /tmp (cf. volumes ci-dessous). Désactivé => non rendu. */}}
+          {{- if .Values.accessGateway.readOnlyRootFilesystem }}
+          securityContext:
+            readOnlyRootFilesystem: true
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.accessGateway.port }}
@@ -107,6 +115,12 @@ spec:
             - name: doc-acl
               mountPath: /config
               readOnly: true
+            {{- if .Values.accessGateway.readOnlyRootFilesystem }}
+            {{- /* rootfs en lecture seule => /tmp doit rester inscriptible
+                   (tempfile Python, uvicorn). emptyDir éphémère monté ici. */}}
+            - name: tmp
+              mountPath: /tmp
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health
@@ -124,6 +138,11 @@ spec:
           configMap:
             name: {{ .Values.accessGateway.docAclConfigMap | default (printf "%s-doc-acl" (include "onix.fullname" .)) }}
             optional: true
+        {{- if .Values.accessGateway.readOnlyRootFilesystem }}
+        # Espace d'écriture éphémère pour /tmp quand le rootfs est en lecture seule.
+        - name: tmp
+          emptyDir: {}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

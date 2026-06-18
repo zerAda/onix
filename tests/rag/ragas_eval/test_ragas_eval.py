@@ -1,7 +1,8 @@
 """Tests **offline** du harnais d'évaluation RAGAS souveraine.
 
-Aucun réseau, aucun Ollama : on **injecte un juge scripté** (``ScriptedJudge``)
-qui imite un LLM-juge en se basant sur le contenu réel des prompts (présence des
+Aucun réseau, aucun Ollama : on **injecte le juge scripté** (``ScriptedJudge``,
+importé de `scripted_judge.py` — même oracle que le générateur de baseline) qui
+imite un LLM-juge en se basant sur le contenu réel des prompts (présence des
 chiffres dans le contexte, mention du sujet dans les chunks…). La discrimination
 des métriques **émerge donc des données**, comme avec un vrai juge — elle n'est
 pas codée en dur item par item.
@@ -18,12 +19,12 @@ Ces tests doivent passer sous `make pytest` (et `pytest -q tests/rag`) SANS rés
 from __future__ import annotations
 
 import json
-import re
 from typing import List
 
 import pytest
 
 # Imports par nom plat (paquet `ragas_eval` + dossier ajouté au path par runner).
+import gen_baseline as gen_baseline_mod
 import judge as judge_mod
 import metrics as metrics_mod
 import runner as runner_mod
@@ -33,102 +34,11 @@ from judge import (
     ItemJudgement,
     extract_json,
 )
+# Oracle unique : le même juge scripté sert aux tests ET au générateur de baseline
+# (`scripted_judge.py`) → la provenance de la baseline est exactement ce que ces
+# tests offline vérifient.
+from scripted_judge import ScriptedJudge
 
-
-# ===========================================================================
-# Juge scripté (faux LLM) — déterministe, basé sur le CONTENU des prompts.
-# ===========================================================================
-_NUM_RE = re.compile(r"\d[\d\s.,]*")
-
-
-def _numbers(text: str) -> List[str]:
-    """Suites de chiffres normalisées (espaces/insécables retirés) — pour comparer
-    « 142 € » du contexte avec « 142 » d'une affirmation."""
-    out = []
-    for m in _NUM_RE.findall(text or ""):
-        norm = re.sub(r"[\s .,]", "", m)
-        if norm:
-            out.append(norm)
-    return out
-
-
-class ScriptedJudge:
-    """Faux juge : route selon la métrique détectée dans le prompt `user`.
-
-    * faithfulness : découpe la réponse en phrases-claims ; un claim est « étayé »
-      si tous ses nombres apparaissent dans le contexte (sinon non étayé) ;
-    * context_precision : un chunk est pertinent s'il mentionne le sujet de la
-      question (heuristique de recouvrement de mots-clés) ;
-    * answer_relevancy : note 4 si la réponse n'est pas vide et reprend un mot-clé
-      de la question, sinon 1.
-    """
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def __call__(self, system: str, user: str) -> str:
-        self.calls += 1
-        if user.startswith("Décompose la RÉPONSE") or "affirmations atomiques" in user:
-            return self._faithfulness(user)
-        if "CHUNKS DE CONTEXTE" in user:
-            return self._context_precision(user)
-        if "à quel point la RÉPONSE adresse" in user or "Barème" in user:
-            return self._answer_relevancy(user)
-        return "{}"  # inconnu → objet vide (le runner comptera l'anomalie)
-
-    # -- parsing utilitaire des sections du prompt --
-    @staticmethod
-    def _section(user: str, start: str, end: str) -> str:
-        i = user.find(start)
-        if i == -1:
-            return ""
-        i += len(start)
-        j = user.find(end, i)
-        return user[i:j] if j != -1 else user[i:]
-
-    def _faithfulness(self, user: str) -> str:
-        context = self._section(user, "CONTEXTE :", "RÉPONSE À ÉVALUER :")
-        answer = self._section(user, "RÉPONSE À ÉVALUER :", "Réponds par cet objet")
-        ctx_nums = set(_numbers(context))
-        claims = [c.strip() for c in re.split(r"[.\n]", answer) if c.strip()]
-        # Refus honnête → aucune affirmation vérifiable.
-        if any(k in answer.lower() for k in ("non disponible", "n'est pas mentionné",
-                                             "pas mentionné")):
-            return json.dumps({"claims": []}, ensure_ascii=False)
-        out = []
-        for cl in claims:
-            nums = _numbers(cl)
-            supported = all(n in ctx_nums for n in nums) if nums else True
-            out.append({"claim": cl, "supported": supported, "reason": "auto"})
-        return json.dumps({"claims": out}, ensure_ascii=False)
-
-    def _context_precision(self, user: str) -> str:
-        question = self._section(user, "QUESTION :", "CHUNKS DE CONTEXTE")
-        chunks_blob = self._section(user, "(numérotés) :", "Réponds par cet objet")
-        subject_words = self._subject_words(question)
-        chunks = re.findall(r"\[(\d+)\]\s*(.*)", chunks_blob)
-        out = []
-        for idx, body in chunks:
-            low = body.lower()
-            relevant = any(w in low for w in subject_words)
-            out.append({"index": int(idx), "relevant": relevant, "reason": "auto"})
-        return json.dumps({"chunks": out}, ensure_ascii=False)
-
-    def _answer_relevancy(self, user: str) -> str:
-        question = self._section(user, "QUESTION :", "RÉPONSE :")
-        answer = self._section(user, "RÉPONSE :", "Réponds par cet objet")
-        words = self._subject_words(question)
-        score = 4 if (answer.strip() and any(w in answer.lower() for w in words)) else 1
-        return json.dumps({"score": score, "reason": "auto"}, ensure_ascii=False)
-
-    @staticmethod
-    def _subject_words(question: str) -> List[str]:
-        # Mots-clés du domaine présents dans la question (heuristique simple).
-        candidates = ["alpha", "cotisation", "plafond", "hospitalisation",
-                      "échéance", "renouvellement", "dossier", "synthèse",
-                      "téléphone", "dirigeant", "point d'attention"]
-        low = question.lower()
-        return [w for w in candidates if w in low] or ["alpha"]
 
 
 # ===========================================================================
@@ -451,3 +361,36 @@ def test_golden_set_shape_and_required_fields():
         ids.add(it["id"])
     # Les cas dégradés exigés par la recette sont présents.
     assert "G07" in ids and "G08" in ids
+
+
+# ===========================================================================
+# 8. Provenance de la baseline : reproductible byte-level (juge scripté).
+# ===========================================================================
+def test_baseline_is_reproducible_from_scripted_judge():
+    """La baseline committée DOIT être exactement ce que le générateur
+    déterministe produit (juge scripté + golden set), sans aucun modèle live.
+    C'est la preuve de provenance demandée par l'audit : un relecteur reproduit
+    les 3 valeurs à l'octet près en relançant `gen_baseline`."""
+    aggregates = gen_baseline_mod.compute_aggregates()
+    # Valeurs de référence livrées (cf. baseline_scores.json).
+    assert aggregates == {
+        "faithfulness": 0.75,
+        "context_precision": 0.875,
+        "answer_relevancy": 1.0,
+    }
+    # Le fichier committé est byte-identique au rendu du générateur (idempotence).
+    rendered = gen_baseline_mod.render_baseline(aggregates)
+    committed = gen_baseline_mod.BASELINE_PATH.read_text(encoding="utf-8")
+    assert committed == rendered, (
+        "baseline_scores.json n'est PAS le rendu déterministe du générateur. "
+        "Relance `python -m ragas_eval.gen_baseline --write` puis revois le diff."
+    )
+
+
+def test_baseline_matches_runner_aggregates_with_scripted_judge():
+    """Cohérence end-to-end : les agrégats du runner (juge scripté) sur le golden
+    set complet égalent ceux figés dans la baseline."""
+    items = runner_mod.load_golden()
+    _scores, aggregates, _gate = runner_mod.evaluate(items, llm=ScriptedJudge())
+    rounded = {k: round(v, 6) for k, v in aggregates.items()}
+    assert rounded == gen_baseline_mod.compute_aggregates()

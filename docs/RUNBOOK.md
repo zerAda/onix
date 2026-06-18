@@ -62,6 +62,14 @@ Mettre à jour Ollama : ajuster `OLLAMA_IMAGE_TAG` puis `make update`.
   `minio_data`, `file-system` dans `backups/<horodatage>/`, redémarrage.
   (Les modèles Ollama ne sont pas sauvegardés : re-tirables via `make models`.)
 - `make restore DIR=backups/<horodatage>` : restaure (écrase) ces volumes.
+- **Profils** : par défaut le script cible la stack de base (`docker-compose.yml`).
+  Sur un déploiement PROD exposé ou machine-unique, passez le profil pour que l'arrêt
+  de cohérence couvre TOUS les services (Caddy/oauth2-proxy/gateway ou overlay
+  prod-local), pas seulement Onyx :
+  ```bash
+  PROFILE=prod ENV=deploy/prod/.env.prod make backup   # prod exposé
+  PROFILE=local-prod make backup                        # prod machine unique
+  ```
 
 ## 6. Dépannage
 
@@ -106,8 +114,10 @@ Souvent un démarrage encore en cours. Réessayer après 1–2 min ; vérifier
 ## 7. Montée en charge (optionnel)
 
 - **Model server d'indexation dédié** : pour de gros volumes d'indexation,
-  rétablir un second `inference_model_server` (`INDEXING_ONLY=True`) et pointer
-  `INDEXING_MODEL_SERVER_HOST` dessus dans `.env`. Coût : +RAM.
+  activer le profil performance avec `make up PERF=1` — il démarre le service
+  `indexing_model_server` (`INDEXING_ONLY=True`, défini dans
+  `docker-compose.performance.yml`) et pointe `INDEXING_MODEL_SERVER_HOST` dessus.
+  Cumulable avec `GPU=1`. Coût : +RAM.
 - **OpenSearch** : augmenter `OPENSEARCH_HEAP` (≈ 50 % de `OPENSEARCH_MEM_LIMIT`).
 - **GPU** : `make up GPU=1` + modèle plus capable (`llama3.1:8b`, `qwen2.5:14b`).
 

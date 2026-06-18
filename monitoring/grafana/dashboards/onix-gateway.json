@@ -1,0 +1,253 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "title": "onix-gateway — passerelle RBAC : qualité, RAG & flux NDJSON",
+  "uid": "onix-gateway",
+  "tags": ["onix", "gateway", "rbac", "rag"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Passerelle (santé scrape)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "max(up{job=\"onix-access-gateway\"})" }
+      ],
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Taux d'erreurs upstream (5 min)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(onix_gateway_upstream_errors_total[5m])) / clamp_min(sum(rate(onix_gateway_requests_total[5m])), 1)"
+        }
+      ],
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.02 }, { "color": "red", "value": 0.05 } ] }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Hit-rate cache effectif (5 min)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(onix_gateway_cache_hits_total[5m])) / clamp_min(sum(rate(onix_gateway_cache_hits_total[5m])) + sum(rate(onix_gateway_cache_misses_total[5m])), 1)"
+        }
+      ],
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 0.2 }, { "color": "green", "value": 0.4 } ] }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Réponses SANS citation (5 min)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(onix_gateway_answer_without_citation_total[5m])) / clamp_min(sum(rate(onix_gateway_answer_with_citation_total[5m])) + sum(rate(onix_gateway_answer_without_citation_total[5m])), 1)"
+        }
+      ],
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.2 }, { "color": "red", "value": 0.4 } ] }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Décisions RBAC — allow / deny (req/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (decision) (rate(onix_gateway_requests_total[5m]))",
+          "legendFormat": "{{decision}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 15, "stacking": { "mode": "normal" } } } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Latence p50 / p95 / p99 (s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(onix_gateway_request_latency_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(onix_gateway_request_latency_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(onix_gateway_request_latency_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 5 } } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Garde-fous — passages par règle (req/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (rule, blocked) (rate(onix_gateway_guardrail_total[5m]))",
+          "legendFormat": "{{rule}} (bloqué={{blocked}})"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "bars", "fillOpacity": 40 } } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Citations — avec / sans / sans contexte (req/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(onix_gateway_answer_with_citation_total[5m]))", "legendFormat": "avec citation" },
+        { "refId": "B", "expr": "sum(rate(onix_gateway_answer_without_citation_total[5m]))", "legendFormat": "sans citation" },
+        { "refId": "C", "expr": "sum(rate(onix_gateway_answer_no_context_total[5m]))", "legendFormat": "sans contexte" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Erreurs de relais amont Onyx (→ 502) (err/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(onix_gateway_upstream_errors_total[5m]))", "legendFormat": "erreurs amont" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 20 } } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Cache — hit-rate effectif (hors bypass volontaires)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(onix_gateway_cache_hits_total[5m])) / clamp_min(sum(rate(onix_gateway_cache_hits_total[5m])) + sum(rate(onix_gateway_cache_misses_total[5m])), 1)",
+          "legendFormat": "hit-rate"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "drawStyle": "line", "fillOpacity": 15 } } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Cache — hits par tier / misses / bypass par raison (op/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tier) (rate(onix_gateway_cache_hits_total[5m]))", "legendFormat": "hit {{tier}}" },
+        { "refId": "B", "expr": "sum(rate(onix_gateway_cache_misses_total[5m]))", "legendFormat": "miss" },
+        { "refId": "C", "expr": "sum by (reason) (rate(onix_gateway_cache_bypassed_total[5m]))", "legendFormat": "bypass {{reason}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Retours utilisateur — feedback up / down (évt/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (rating) (rate(onix_gateway_feedback_total[5m]))",
+          "legendFormat": "{{rating}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "bars", "fillOpacity": 40 } } }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Flux NDJSON — requêtes / avortés par raison / overridés (flux/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(onix_gateway_stream_requests_total[5m]))", "legendFormat": "flux NDJSON" },
+        { "refId": "B", "expr": "sum by (reason) (rate(onix_gateway_stream_aborted_total[5m]))", "legendFormat": "avorté {{reason}}" },
+        { "refId": "C", "expr": "sum(rate(onix_gateway_stream_overridden_total[5m]))", "legendFormat": "overridé" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Taux d'avortement des flux NDJSON (part des flux coupés)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(onix_gateway_stream_aborted_total[5m])) / clamp_min(sum(rate(onix_gateway_stream_requests_total[5m])), 1)",
+          "legendFormat": "taux d'avortement"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 15 },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "red", "value": 0.1 } ] }
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "logs",
+      "title": "Logs onix-access-gateway (Loki)",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 44 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        { "refId": "A", "expr": "{compose_service=\"access-gateway\"}" }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}

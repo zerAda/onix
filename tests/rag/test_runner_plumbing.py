@@ -92,3 +92,10 @@ def test_write_markdown_mentions_both_rates(monkeypatch, tmp_path):
     assert "Prompt seul" in text
     assert "Couche 3" in text or "couche 3" in text
     assert "guardrail_postfilter" in text
+    # Anti-régression de l'honnêteté : l'encadré « indicatif / non reproductible
+    # byte-level » et la commande de régénération doivent toujours être présents.
+    assert "non reproductibles byte-level" in text
+    assert "Commande exacte de régénération" in text
+    assert "run_live.py --markdown" in text
+    # Traçabilité : la version Ollama est renseignée (réelle ou dégradée proprement).
+    assert "Version Ollama" in text

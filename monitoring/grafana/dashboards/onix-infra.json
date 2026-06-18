@@ -115,6 +115,54 @@
         { "refId": "A", "expr": "redis_connected_clients", "legendFormat": "clients" }
       ],
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "OpenSearch — santé du cluster",
+      "description": "Couleur active du cluster (green/yellow/red) via elasticsearch_cluster_health_status{color}. Métrique de l'elasticsearch-exporter v1.7.0 (vaut 1 pour la couleur courante).",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "max by (color) (elasticsearch_cluster_health_status == 1)", "legendFormat": "{{color}}", "instant": true }
+      ],
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "" }, "textMode": "name" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "green": { "color": "green", "index": 0 }, "yellow": { "color": "yellow", "index": 1 }, "red": { "color": "red", "index": 2 } } }
+          ],
+          "color": { "mode": "fixed" }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "OpenSearch — heap JVM utilisée (%)",
+      "description": "Pression mémoire JVM = elasticsearch_jvm_memory_used_bytes / elasticsearch_jvm_memory_max_bytes (area=heap). Métriques de l'elasticsearch-exporter v1.7.0.",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum by (name) (elasticsearch_jvm_memory_used_bytes{area=\"heap\"}) / clamp_min(sum by (name) (elasticsearch_jvm_memory_max_bytes{area=\"heap\"}), 1)",
+          "legendFormat": "{{name}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 15 } } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "OpenSearch — documents indexés",
+      "description": "Nombre total de documents (elasticsearch_indices_docs{cluster}). Métrique de l'elasticsearch-exporter v1.7.0 (--es.all).",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(elasticsearch_indices_docs)", "legendFormat": "documents" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
     }
   ]
 }

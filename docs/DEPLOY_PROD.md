@@ -469,6 +469,13 @@ docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/<org>/onix-actions:1.
 
 - **Sauvegarde** : `make backup` (cf. `RUNBOOK.md` §5) archive `db_volume`,
   `opensearch-data`, `minio_data`, `file-system`.
+- **En déploiement PROD exposé** (`deploy/prod/`), passez le profil pour que l'arrêt
+  bref de cohérence inclue AUSSI Caddy/oauth2-proxy/access-gateway (sinon le bord
+  resterait actif pendant la sauvegarde) :
+  ```bash
+  PROFILE=prod ENV=deploy/prod/.env.prod make backup
+  PROFILE=prod ENV=deploy/prod/.env.prod make restore DIR=backups/<horodatage>
+  ```
 - **Le volume `caddy_data`** (certificats) peut aussi être archivé pour éviter une
   ré-émission après restauration sur une nouvelle machine.
 - **Sans interruption (best effort, mono-nœud)** : Postgres et OpenSearch

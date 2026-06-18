@@ -5,10 +5,10 @@
 # 403 kill-switch, saturation ressources. Les seuils sont volontairement
 # prudents et commentés ; ajustez-les par déploiement.
 #
-# NB : les règles `onix_*` (groupe onix-actions-app) dépendent de l'endpoint
-# /metrics que WS2 doit exposer (cf. docs/OBSERVABILITY.md). Elles restent
-# inertes (aucune série) tant que la cible est down — sans casser l'évaluation
-# des autres groupes (infra/blackbox), qui eux fonctionnent immédiatement.
+# NB : les règles `onix_*` (groupe onix-actions-app) s'appuient sur l'endpoint
+# /metrics exposé par le microservice actions (cf. docs/OBSERVABILITY.md §5).
+# Elles restent inertes (aucune série) tant que la cible est down — sans casser
+# l'évaluation des autres groupes (infra/blackbox), qui fonctionnent toujours.
 # =============================================================================
 groups:
   # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ groups:
             1 minute. Audit / génération / OCR indisponibles.
 
   # ---------------------------------------------------------------------------
-  # 2. Application onix-actions : erreurs, latence, kill-switch (DÉPEND DE WS2).
+  # 2. Application onix-actions : erreurs, latence, kill-switch (basé sur /metrics).
   #    Toutes ces règles consomment des métriques /metrics non encore exposées.
   # ---------------------------------------------------------------------------
   - name: onix-actions-app
@@ -108,7 +108,76 @@ groups:
             Vérifiez que la coupure est intentionnelle.
 
   # ---------------------------------------------------------------------------
-  # 3. FinOps : budget dépassé / proche du seuil (DÉPEND DE WS2 /metrics).
+  # 2b. Passerelle RBAC onix-access-gateway : erreurs amont, latence, flux NDJSON.
+  #     Basé sur les métriques onix_gateway_* (cf. docs/OBSERVABILITY.md §5b).
+  #     Le transport streaming de la passerelle est NDJSON (application/x-ndjson,
+  #     access-gateway/app/main.py:391), pas SSE. Seuils prudents : à ajuster par
+  #     déploiement selon le trafic réel observé sur le dashboard onix-gateway.
+  # ---------------------------------------------------------------------------
+  - name: onix-gateway-app
+    rules:
+      - alert: GatewayHighUpstreamErrorRate
+        # Erreurs de relais amont Onyx (→ 502) > 5 % des requêtes sur 5 min.
+        # Signale un amont Onyx injoignable/instable vu depuis la passerelle.
+        expr: >-
+          (
+            sum(rate(onix_gateway_upstream_errors_total[5m]))
+            /
+            clamp_min(sum(rate(onix_gateway_requests_total[5m])), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: onix-access-gateway
+        annotations:
+          summary: "Taux d'erreurs amont élevé sur la passerelle RBAC"
+          description: >-
+            Plus de 5 % des requêtes de la passerelle échouent au relais vers
+            Onyx (502) sur les 5 dernières minutes
+            ({{ $value | humanizePercentage }}). Vérifiez l'état d'Onyx amont.
+
+      - alert: GatewayHighLatencyP95
+        # p95 de latence bout-en-bout > 30 s sur 5 min. Seuil large car la
+        # latence inclut la génération d'un LLM local (buckets 0.5→120 s) :
+        # 30 s = signal d'un amont anormalement lent, pas d'une génération normale.
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(onix_gateway_request_latency_seconds_bucket[5m]))
+          ) > 30
+        for: 10m
+        labels:
+          severity: warning
+          component: onix-access-gateway
+        annotations:
+          summary: "Latence p95 élevée sur la passerelle RBAC"
+          description: >-
+            La latence bout-en-bout au 95e percentile dépasse 30 s depuis 10 min
+            ({{ $value | printf "%.1f" }} s). Amont LLM/Onyx probablement saturé.
+
+      - alert: GatewayAbnormalStreamAbortRate
+        # Flux NDJSON avortés (garde DUR incrémental ou erreur fail-closed) >
+        # 10 % des flux ouverts sur 5 min. Un avortement ponctuel est NORMAL
+        # (garde-fou anti-exfiltration) ; un taux élevé soutenu est anormal.
+        expr: >-
+          (
+            sum(rate(onix_gateway_stream_aborted_total[5m]))
+            /
+            clamp_min(sum(rate(onix_gateway_stream_requests_total[5m])), 1)
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: onix-access-gateway
+        annotations:
+          summary: "Taux d'avortement des flux NDJSON anormal"
+          description: >-
+            Plus de 10 % des flux NDJSON sont avortés (garde DUR ou erreur
+            fail-closed) depuis 10 min ({{ $value | humanizePercentage }}).
+            Vérifiez les raisons par `reason` sur le dashboard onix-gateway.
+
+  # ---------------------------------------------------------------------------
+  # 3. FinOps : budget dépassé / proche du seuil (basé sur /metrics).
   # ---------------------------------------------------------------------------
   - name: onix-finops
     rules:
@@ -179,3 +248,61 @@ groups:
           description: >-
             Le point de montage {{ $labels.mountpoint }} a moins de 10 %
             d'espace libre ({{ $value | printf "%.1f" }} %).
+
+  # ---------------------------------------------------------------------------
+  # 5. OpenSearch : santé du cluster + pression mémoire JVM. Métriques émises par
+  #    l'elasticsearch-exporter v1.7.0 (cible `opensearch`, cf. prometheus.yml).
+  #    Noms vérifiés pour cette version :
+  #      elasticsearch_cluster_health_status{cluster,color}   (1 = couleur active)
+  #      elasticsearch_cluster_health_up                      (1 = exporter joint le cluster)
+  #      elasticsearch_jvm_memory_used_bytes{area="heap",name}
+  #      elasticsearch_jvm_memory_max_bytes{area="heap",name}
+  # ---------------------------------------------------------------------------
+  - name: onix-opensearch
+    rules:
+      - alert: OpenSearchClusterRed
+        # Couleur de santé RED active depuis 2 min : au moins un shard primaire
+        # est indisponible (perte de données possible). Critique.
+        expr: max(elasticsearch_cluster_health_status{color="red"}) == 1
+        for: 2m
+        labels:
+          severity: critical
+          component: opensearch
+        annotations:
+          summary: "Cluster OpenSearch en état RED"
+          description: >-
+            Le cluster OpenSearch est en santé RED depuis 2 min : au moins un
+            shard primaire est non assigné (indexation/recherche dégradées).
+
+      - alert: OpenSearchExporterDown
+        # L'exporter ne parvient plus à interroger le cluster (cluster injoignable
+        # ou exporter en échec) depuis 2 min. Double signal avec TargetDown.
+        expr: max(elasticsearch_cluster_health_up) == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: opensearch
+        annotations:
+          summary: "OpenSearch injoignable (exporter en échec)"
+          description: >-
+            L'elasticsearch-exporter ne parvient plus à lire l'état du cluster
+            OpenSearch depuis 2 min (elasticsearch_cluster_health_up == 0) :
+            cluster arrêté ou injoignable. Indexation/recherche RAG impactées.
+
+      - alert: OpenSearchHeapHigh
+        # Pression mémoire JVM > 90 % du heap max depuis 10 min : risque de pauses
+        # GC longues / OOM. Seuil prudent, à ajuster selon le dimensionnement.
+        expr: >-
+          100 * sum by (name) (elasticsearch_jvm_memory_used_bytes{area="heap"})
+          /
+          clamp_min(sum by (name) (elasticsearch_jvm_memory_max_bytes{area="heap"}), 1) > 90
+        for: 10m
+        labels:
+          severity: warning
+          component: opensearch
+        annotations:
+          summary: "Heap JVM OpenSearch saturé (> 90 %)"
+          description: >-
+            La JVM OpenSearch ({{ $labels.name }}) utilise plus de 90 % de son
+            heap depuis 10 min ({{ $value | printf "%.1f" }} %) : risque de
+            pauses GC / OOM. Augmentez le heap ou réduisez la charge.

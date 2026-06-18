@@ -106,9 +106,12 @@ Variables (alignées `docker-compose` / chart) : `S3_ENDPOINT_URL`,
 **paresseusement** (le mode local n'a aucune dépendance nouvelle).
 
 > **Rétention RGPD en mode S3.** La purge/effacement (`retention.py`) opère sur la
-> copie **locale** (toujours écrite) et la base ; pour les objets S3, coupler au
-> miroir/cycle de vie du bucket (cf. `backups.minioMirror` du chart). La copie
-> locale d'une réplique éphémère est purgée avec le pod.
+> copie **locale** (toujours écrite), la base **ET les objets S3** : en mode `s3`,
+> `purge_by_age` supprime les objets `jobs/…` plus vieux que la rétention
+> (`objstore.delete_jobs_older_than`) et `erase_subject` supprime les `.docx` du
+> sujet visé (`objstore.delete_subject_docx`). L'effacement art. 17 est donc
+> **exhaustif en HA**, sans dépendre du cycle de vie du bucket. Fail-safe : en
+> mode `local`, aucune opération S3 n'est tentée.
 
 ---
 
@@ -159,10 +162,14 @@ pour rester lisibles via `GET /jobs/{id}`.
 | `ONIX_QUEUE_EAGER` | `false` | exécution synchrone (tests) |
 | `ONIX_ACTIONS_AUDIT_HMAC_KEY` | — | clé de chaînage du journal d'audit (à fixer en prod) |
 
-Le chart [`deploy/k8s/onix-ha`](../deploy/k8s/onix-ha/) câble déjà
-`ONIX_DB_BACKEND=postgres`, `ONIX_QUEUE_ENABLED`, le broker et les `POSTGRES_*` /
-`S3_*` ; `values.yaml` documente les clés alignées (`actions.config.dbBackend`,
-`dbUrl`, `objectStore`, `s3Bucket`, `actionsQueue.resultBackend`).
+Le chart [`deploy/k8s/onix-ha`](../deploy/k8s/onix-ha/) câble dans la ConfigMap
+`ONIX_DB_BACKEND`, `POSTGRES_DB`, **`ONIX_OBJECT_STORE`** + **`ONIX_S3_BUCKET`**
+(piloté par `actions.config.objectStore`/`s3Bucket`), `ONIX_QUEUE_ENABLED`, le
+broker et les `POSTGRES_*` / `S3_*` (creds via Secret). Les **secrets WS2**
+(`ONIX_ACTIONS_ADMIN_KEY`, `ONIX_ACTIONS_AUDIT_HMAC_KEY`,
+`ONIX_ACTIONS_CALLER_HMAC_SECRET`) sont injectés depuis le Secret K8s
+(`onix.actionsSecretEnv`) dans le Deployment `actions` **et** le worker Celery —
+sinon `/admin/*` retombe en 403 et l'audit en SHA-256.
 
 ---
 
@@ -170,7 +177,7 @@ Le chart [`deploy/k8s/onix-ha`](../deploy/k8s/onix-ha/) câble déjà
 
 ### 6.1 Mode par défaut (mono-poste) — **inchangé**
 ```bash
-pytest actions/tests -q        # 71 passed, 4 skipped (PG/S3 skip hors env dédié)
+pytest actions/tests -q        # 90 collectés : 85 passed, 5 skipped (PG/S3 + aiosmtpd skip hors env dédié)
 ```
 La suite historique reste **verte**. Les nouveaux tests Postgres/S3
 (`test_stateless_backends.py`) **skippent** proprement sans conteneur.
@@ -218,6 +225,8 @@ Job réel dispatché (broker Redis), traité par le worker, résultat
 - état applicatif **déporté** vers Postgres partagé → cohérence inter-répliques
   (kill-switch, flags, usage, audit chaîné, tâches) ;
 - fichiers générés **déportés** vers S3/MinIO → `GET /download` multi-réplica ;
+- **effacement/purge RGPD S3** branchés (`erase_subject`/`purge_by_age` suppriment
+  aussi les objets du bucket en mode `s3`) → art. 17 exhaustif en HA ;
 - traitements longs **mis en file** Celery → API non bloquante + scale-out workers.
 - **Aucune régression** du mode mono-poste (défaut SQLite/local/synchrone).
 
@@ -225,8 +234,7 @@ Job réel dispatché (broker Redis), traité par le worker, résultat
 - comportement **HPA** sous charge (scale up/down) — `metrics-server` + test de charge ;
 - **bascule HA** Postgres (CNPG : tuer le primaire), perte d'un nœud MinIO/Redis ;
 - débit réel de la file Celery sous pic, retries/idempotence à l'échelle ;
-- **PodDisruptionBudgets** lors d'un `kubectl drain` ;
-- rétention des objets S3 (cycle de vie bucket) en complément de la purge locale.
+- **PodDisruptionBudgets** lors d'un `kubectl drain`.
 
 > **Honnêteté.** Ce chantier livre le **hook code** rendant `onix-actions`
 > stateless et **prouve** le partage d'état sur conteneurs réels (Postgres +

@@ -58,11 +58,17 @@ az postgres flexible-server db create -g $RG -s $PG -d onyx
 az redis create -g $RG -n $REDIS -l $LOC --sku Premium --vm-size P1 \
   --redis-configuration '{"maxmemory-policy":"noeviction"}'   # broker/locks : PAS d'eviction
 ```
-> **Gotcha Redis (important)** : Azure Cache impose **TLS sur le port 6380**. Côté
-> Onyx **et** passerelle, utilisez une URL `rediss://:<clé>@$REDIS.redis.cache.windows.net:6380/0`
-> (schéma `rediss://` = TLS). Mettez `noeviction` (le défaut LRU casserait le broker/locks).
-> **Gotcha Postgres** : `sslmode=require` (Azure l'exige) — psycopg/Onyx s'y connecte ;
-> vérifier `POSTGRES_*` + SSL dans la ConfigMap/Secret.
+> **Gotcha Redis (important)** : Azure Cache impose **TLS sur le port 6380** (le port
+> non-TLS 6379 est désactivé). Côté **Onyx (base 0)**, `values-azure.yaml` câble
+> désormais `redis.ssl: true` + `redis.port: "6380"` → la ConfigMap rend `REDIS_SSL=true`
+> et `REDIS_PORT=6380` (Onyx lit ces variables ; cf. audit `app_configs.py REDIS_SSL`).
+> Le mot de passe vient du Secret (`REDIS_PASSWORD`). Côté **passerelle (base 1)**, l'URL
+> `rediss://:<clé>@$REDIS.redis.cache.windows.net:6380/1` est dans le Secret. Mettez
+> `noeviction` sur l'instance Azure (le défaut LRU casserait le broker/locks).
+> **Gotcha Postgres** : `sslmode=require` (Azure l'exige côté serveur). `values-azure.yaml`
+> pose `postgresql.port: "5432"` + `postgresql.sslmode: "require"` → ConfigMap
+> `POSTGRES_PORT`/`POSTGRES_SSLMODE` (passthrough psycopg/libpq) ; `POSTGRES_PASSWORD`
+> dans le Secret. In-cluster (CNPG) : ces clés restent vides (non rendues).
 
 ## P1bis — Entra ID (SSO + Graph groupes + SharePoint)
 Sur **votre poste** : `TENANT_ID=<…> KEYVAULT=$KV DOMAIN=$DOMAIN bash deploy/azure/setup-entra.sh`
@@ -72,9 +78,12 @@ Sur **votre poste** : `TENANT_ID=<…> KEYVAULT=$KV DOMAIN=$DOMAIN bash deploy/a
 ## P2 — Secrets (Key Vault → K8s) + images
 ```bash
 # Secrets applicatifs aléatoires dans Key Vault (générés localement)
-ENV_FILE=deploy/prod/.env.prod bash scripts/gen-secrets.sh   # SECRET, USER_AUTH_SECRET, mdp…
+ENV_FILE=deploy/prod/.env.prod bash scripts/gen-secrets.sh   # SECRET, USER_AUTH_SECRET, ENCRYPTION_KEY_SECRET, mdp…
 # …puis pousser chaque clé : az keyvault secret set --vault-name $KV --name SECRET --value …
-# CRITIQUE (audit) : poser ENCRYPTION_KEY_SECRET (sinon secrets connecteurs EN CLAIR) :
+# CRITIQUE (audit) : ENCRYPTION_KEY_SECRET est désormais GÉNÉRÉ par gen-secrets.sh ET
+# lu par le chart (clé `ENCRYPTION_KEY_SECRET` du Secret `onix-secrets` → injectée sur
+# api/background/migrations). Sinon les creds connecteurs Onyx sont EN CLAIR en base.
+# Mapper la clé Key Vault `ENCRYPTION-KEY-SECRET` → clé K8s `ENCRYPTION_KEY_SECRET` (SPC) :
 az keyvault secret set --vault-name $KV -n ENCRYPTION-KEY-SECRET --value "$(openssl rand -hex 32)"
 
 # Exposer les secrets au cluster via SecretProviderClass (Key Vault CSI + Workload Identity)
@@ -94,11 +103,27 @@ helm install $NS deploy/k8s/onix-ha -n $NS -f deploy/azure/values-azure.yaml
 # La passerelle RBAC est un TEMPLATE NATIF du chart (accessGateway.enabled=true dans
 # values-azure.yaml) → déployée par le `helm install` ci-dessus. Rien d'autre à appliquer.
 ```
-**Ingress + OIDC (anti-spoofing)** : déployer **oauth2-proxy** (forward-auth) + une
-règle d'ingress qui route **uniquement `/api/chat/send-message` → `<RELEASE>-access-gateway:8200`** (service du chart)
-(le reste → Onyx natif), en **strippant tout `X-OIDC-Claims` entrant** à l'edge et en
-le posant depuis l'identité vérifiée. Schéma identique à `deploy/prod/` (Caddy/nginx)
-porté en annotations d'ingress AKS.
+**Ingress + OIDC (anti-spoofing)** — état réel du chart vs ce qui reste à câbler :
+
+- ✅ **Route chat → passerelle (templatisée, OPT-IN)** : le chart sait router la route
+  EXACTE `/api/chat/send-message` vers `<RELEASE>-access-gateway:8200` (le reste → Onyx
+  natif) via `ingress.chatViaGateway.enabled=true` (rendu seulement si
+  `accessGateway.enabled`). **Validé statiquement** (`helm template` : route Exact
+  prioritaire sur `/api`) ; **comportement runtime à vérifier sur AKS**.
+- 🚧 **TODO recette (NON livré par le chart, à câbler par l'opérateur)** : le
+  **forward-auth oauth2-proxy** et l'**anti-usurpation** (`strip X-OIDC-Claims` entrant
+  + (re)pose depuis l'identité vérifiée) — schéma de `deploy/prod/` (Caddy/nginx).
+  Raisons : (1) oauth2-proxy **n'est pas un template** de ce chart ; il faut le déployer
+  hors-chart ; (2) le strip d'en-tête exige un **snippet propre au contrôleur**
+  (ex. ingress-nginx `configuration-snippet` / `more_clear_input_headers`), souvent
+  **désactivé par défaut** (`allow-snippet-annotations=false`). Fournir ces
+  comportements via `ingress.chatViaGateway.annotations` (auth-url/auth-signin +
+  snippet). **Tant que ce n'est pas fait, n'activez PAS `chatViaGateway` en prod
+  régulée** : le chat traverserait la passerelle SANS identité vérifiée.
+
+> Alternative pleinement câblée aujourd'hui : le **mono-nœud exposé `deploy/prod/`**
+> (Caddy + oauth2-proxy + nginx) réalise déjà forward-auth + anti-usurpation de bout
+> en bout. L'équivalent AKS « tout-en-annotations » dépend du contrôleur d'ingress.
 
 ## P4 — Intégration RAG
 1. **Ollama** : `kubectl exec` → `ollama pull qwen2.5:7b-instruct` (+ `nomic-embed-text`),

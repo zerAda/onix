@@ -1,0 +1,29 @@
+# =============================================================================
+# onix — pre-commit : miroir LOCAL des portes de sécurité de la CI.
+# -----------------------------------------------------------------------------
+# Installe les hooks :  pre-commit install
+# Lancer sur tout le dépôt :  pre-commit run --all-files
+#
+# Le scan de secrets (gitleaks) est ÉGALEMENT bloquant en CI (.github/workflows/
+# ci.yml, job `validate`) ; ce hook le rejoue AVANT le commit pour échouer tôt.
+# Pin aligné sur la CI (gitleaks v8.18.2) ; la config projet `.gitleaks.toml`
+# (allowlist vérifiée) est utilisée automatiquement.
+# =============================================================================
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.2
+    hooks:
+      - id: gitleaks
+        name: gitleaks (scan de secrets — miroir CI)
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-json
+        # Les dashboards Grafana et openapi.json doivent rester du JSON valide.
+        files: \.(json)$

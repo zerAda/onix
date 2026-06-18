@@ -25,8 +25,10 @@ global:
 
 # Secret applicatif créé depuis Azure Key Vault via le Secret Store CSI Driver
 # (clés : POSTGRES_PASSWORD, OPENSEARCH_ADMIN_PASSWORD, REDIS_PASSWORD, SECRET,
-#  USER_AUTH_SECRET, S3_AWS_ACCESS_KEY_ID, S3_AWS_SECRET_ACCESS_KEY,
-#  ONIX_ACTIONS_API_KEY, BROKER_PASSWORD). Cf. DEPLOY_AZURE.md §Secrets.
+#  USER_AUTH_SECRET, ENCRYPTION_KEY_SECRET, S3_AWS_ACCESS_KEY_ID,
+#  S3_AWS_SECRET_ACCESS_KEY, ONIX_ACTIONS_API_KEY, BROKER_PASSWORD).
+#  ENCRYPTION_KEY_SECRET : SINON les secrets connecteurs Onyx sont EN CLAIR en base.
+#  Cf. DEPLOY_AZURE.md §Secrets.
 secrets:
   existingSecret: "onix-secrets"
 
@@ -68,19 +70,26 @@ actionsQueue:
 
 # --- Postgres MANAGÉ : Azure DB for PostgreSQL Flexible (HA zone-redondant) ---
 # On DÉSACTIVE le CNPG in-cluster et on pointe le FQDN managé. SSL requis
-# (sslmode=require) — Onyx/psycopg s'y connecte ; cf. gotchas DEPLOY_AZURE.md.
+# (sslmode=require) — Azure REFUSE le non-SSL côté serveur. On le CÂBLE côté Onyx
+# (POSTGRES_PORT/POSTGRES_SSLMODE rendus dans la ConfigMap). Cf. gotchas §7 / DEPLOY_AZURE.md.
 postgresql:
   operator: { enabled: false }
   cluster:  { enabled: false }
   host: "<PG_FQDN>.postgres.database.azure.com"
+  port: "5432"
+  sslmode: "require"          # -> POSTGRES_SSLMODE (Azure impose le SSL)
 
 # --- Redis MANAGÉ : Azure Cache for Redis (Premium, persistance + zone) -------
-# Pas d'operator in-cluster. ⚠ Azure Cache = TLS sur 6380 + clé d'accès :
-# poser REDIS_SSL/REDIS_PORT côté Onyx (cf. gotchas). Corrige le SPOF Redis de l'audit.
+# Pas d'operator in-cluster. PIÈGE §7 : Azure Cache = TLS sur 6380 (6379 non-TLS
+# DÉSACTIVÉ) + noeviction. On câble REDIS_SSL/REDIS_PORT côté Onyx (base 0) ici ;
+# le mot de passe Redis vient du Secret (REDIS_PASSWORD). La GATEWAY (base 1) a sa
+# propre URL rediss://…:6380/1. Corrige le SPOF Redis de l'audit.
 redisOperator: { enabled: false }
 redis:
   enabled: false
   host: "<REDIS_FQDN>.redis.cache.windows.net"
+  ssl: true                   # -> REDIS_SSL=true (TLS obligatoire Azure)
+  port: "6380"                # -> REDIS_PORT (6379 non-TLS désactivé côté Azure)
 
 # --- OpenSearch IN-CLUSTER (aucun managé Azure équivalent) : 3 nœuds HA -------
 opensearch:
@@ -119,7 +128,13 @@ ollama:
     limits:   { cpu: "8", memory: 16Gi }   # 7b Q4 + contexte ; aligner au SKU node (ex: Standard_E8s_v5)
   # GPU plus tard : ajouter nodeSelector/tolerations vers un pool GPU + extraEnv.
 
-# --- Ingress + TLS (le chat est routé vers la passerelle native, cf. accessGateway) -
+# --- Ingress + TLS -----------------------------------------------------------
+# La route chat -> passerelle RBAC est TEMPLATISÉE mais laissée OFF par défaut :
+# le forward-auth oauth2-proxy + l'anti-usurpation (strip X-OIDC-Claims) ne sont PAS
+# garantis par le chart sur AKS (oauth2-proxy hors-chart + snippet propre au
+# contrôleur). Pour l'activer EN SÉCURITÉ, voir docs/DEPLOY_AZURE.md §Ingress :
+# poser ingress.chatViaGateway.enabled=true + chatViaGateway.annotations (auth-url
+# /auth-signin + configuration-snippet). Sinon le chat passerait sans identité vérifiée.
 ingress:
   enabled: true
   className: "webapprouting.kubernetes.io"   # addon AKS App Routing (ou "nginx" si ingress-nginx)
@@ -129,6 +144,14 @@ ingress:
   tls:
     enabled: true
     secretName: onix-tls
+  # chatViaGateway:
+  #   enabled: true                          # ⚠ N'activer qu'avec les annotations forward-auth/anti-spoofing ci-dessous
+  #   annotations:
+  #     nginx.ingress.kubernetes.io/auth-url: "https://$host/oauth2/auth"
+  #     nginx.ingress.kubernetes.io/auth-signin: "https://$host/oauth2/start?rd=$escaped_request_uri"
+  #     nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-Request-User,X-Auth-Request-Preferred-Username"
+  #     nginx.ingress.kubernetes.io/configuration-snippet: |
+  #       more_clear_input_headers "X-OIDC-Claims";
 
 # --- Passerelle RBAC : TEMPLATE NATIF du chart (accessGateway) — ACTIVÉE sur Azure ---
 # RBAC (cloisonnement + ACL par-doc FOSS) + cache RBAC-safe + streaming + /metrics.

@@ -73,6 +73,11 @@ ensure() { # ensure KEY GENERATOR [ARGS...]
 echo "Génération des secrets dans $ENV_FILE :"
 ensure SECRET                rand 48
 ensure USER_AUTH_SECRET      rand 48
+# Chiffrement AU REPOS des secrets connecteurs/LLM/OAuth stockés en base par Onyx.
+# CRITIQUE : sans clé NON VIDE, Onyx les écrit EN CLAIR dans Postgres SANS erreur au
+# boot (asymétrie : échoue sur USER_AUTH_SECRET vide, pas sur celle-ci). On la génère
+# ici comme les autres secrets pour fermer le footgun. Cf. SECURITY.md:33, ARCHITECTURE.md:67.
+ensure ENCRYPTION_KEY_SECRET rand 48
 ensure POSTGRES_PASSWORD     rand 32
 ensure DB_READONLY_PASSWORD  rand 32
 ensure OPENSEARCH_ADMIN_PASSWORD gen_os_pass

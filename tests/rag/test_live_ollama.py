@@ -46,6 +46,17 @@ _SKIP = pytest.mark.skipif(
 _CASES = lh.build_live_cases()
 
 
+def test_ollama_version_degrades_gracefully(monkeypatch):
+    """Hors-LLM : si Ollama est injoignable, `ollama_version()` ne lève jamais et
+    renvoie un libellé dégradé non vide (traçabilité du run sans dépendance)."""
+    def _boom(*_a, **_k):
+        raise OSError("connexion refusée")
+
+    monkeypatch.setattr(lh, "_http_request", _boom)
+    version = lh.ollama_version()
+    assert version == "(inconnue)"
+
+
 @_SKIP
 @pytest.mark.parametrize("case", _CASES, ids=[c.id for c in _CASES])
 def test_live_vector_behaves(case: lh.LiveCase):

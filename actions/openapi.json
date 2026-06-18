@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "onix-actions",
-    "description": "Couche applicative locale d onix (Onyx Custom Actions / Tools). 100 pourcent local, aucun cloud. Auth: en-tete X-API-Key (cle ONIX_ACTIONS_API_KEY). Endpoints gates par kill-switch admin.",
+    "description": "Couche applicative locale d'onix : audit, génération, tâches, notification, usage, coût, administration. 100 % local, sans cloud.",
     "version": "1.0.0"
   },
   "paths": {
@@ -19,6 +19,23 @@
                   "type": "object",
                   "title": "Response Health Health Get"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Metrics",
+        "description": "Expose les métriques au format texte Prometheus (cf. OBSERVABILITY.md §5).\n\nNon authentifié À DESSEIN (réseau interne, aucun port hôte — même posture que\n/health). Rafraîchit les jauges FinOps depuis usage_tracker/cost_tracker à la\nvolée : ce sont des AGRÉGATS (coût/budget), jamais de donnée personnelle.",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -60,6 +77,54 @@
                 }
               ],
               "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
             }
           }
         ],
@@ -135,6 +200,54 @@
               ],
               "title": "Authorization"
             }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
           }
         ],
         "requestBody": {
@@ -155,6 +268,249 @@
                 "schema": {
                   "type": "object",
                   "title": "Response Audit File Endpoint Audit File Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/file/async": {
+      "post": {
+        "summary": "Audit File Async Endpoint",
+        "description": "Met en file un audit OCR long (gros PDF / lot) et renvoie `202 Accepted` +\n`task_id`. L'API ne bloque pas : le pool `actions-worker` (Celery) traite la\ntâche et le résultat est récupérable via `GET /jobs/{task_id}`.\n\nActivé par `ONIX_QUEUE_ENABLED=true` (sinon `503`). Les mêmes garde-fous que\nl'audit synchrone s'appliquent (auth, kill-switch, validation d'upload).",
+        "operationId": "audit_file_async_endpoint_audit_file_async_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_audit_file_async_endpoint_audit_file_async_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Audit File Async Endpoint Audit File Async Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{task_id}": {
+      "get": {
+        "summary": "Job Status Endpoint",
+        "description": "Statut/résultat d'une tâche asynchrone (file Celery). États Celery :\nPENDING / STARTED / SUCCESS / FAILURE / RETRY. En SUCCESS, `result` porte le\nverdict d'audit. Gated par `ONIX_QUEUE_ENABLED`.",
+        "operationId": "job_status_endpoint_jobs__task_id__get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Job Status Endpoint Jobs  Task Id  Get"
                 }
               }
             }
@@ -208,6 +564,54 @@
               ],
               "title": "Authorization"
             }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
           }
         ],
         "requestBody": {
@@ -248,6 +652,7 @@
     "/download/{job_id}": {
       "get": {
         "summary": "Download Endpoint",
+        "description": "Télécharge le `.docx` d'un job. Lit depuis le backend actif (disque local\npar défaut, S3/MinIO si `ONIX_OBJECT_STORE=s3`) → fonctionne en multi-réplica\n(toute réplique sert le fichier, qu'elle l'ait généré ou non).",
         "operationId": "download_endpoint_download__job_id__get",
         "parameters": [
           {
@@ -289,6 +694,54 @@
                 }
               ],
               "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
             }
           }
         ],
@@ -349,6 +802,54 @@
                 }
               ],
               "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
             }
           }
         ],
@@ -437,6 +938,54 @@
               ],
               "title": "Authorization"
             }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
           }
         ],
         "responses": {
@@ -499,6 +1048,54 @@
                 }
               ],
               "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
             }
           }
         ],
@@ -573,6 +1170,54 @@
               ],
               "title": "Authorization"
             }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
           }
         ],
         "requestBody": {
@@ -646,6 +1291,54 @@
               ],
               "title": "Authorization"
             }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
           }
         ],
         "responses": {
@@ -709,6 +1402,54 @@
               ],
               "title": "Authorization"
             }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
           }
         ],
         "responses": {
@@ -771,6 +1512,54 @@
                 }
               ],
               "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
             }
           }
         ],
@@ -861,6 +1650,54 @@
               ],
               "title": "X-Admin-Key"
             }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
           }
         ],
         "requestBody": {
@@ -950,6 +1787,54 @@
               ],
               "title": "X-Admin-Key"
             }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
           }
         ],
         "responses": {
@@ -976,10 +1861,598 @@
           }
         }
       }
+    },
+    "/admin/audit/verify": {
+      "get": {
+        "summary": "Admin Audit Verify Endpoint",
+        "description": "WS2 — vérifie l'intégrité du journal d'audit CHAÎNÉ (tamper-evident).\n`ok=false` + `broken_at` si une ligne a été modifiée/supprimée/réordonnée.",
+        "operationId": "admin_audit_verify_endpoint_admin_audit_verify_get",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Admin-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Admin Audit Verify Endpoint Admin Audit Verify Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/access/log": {
+      "post": {
+        "summary": "Access Log Endpoint",
+        "description": "Émet un événement d'accès (`document_accessed` / `rag_search_executed`).\nIdentité et identifiants HASHÉS ; la requête RAG n'est jamais stockée en clair.",
+        "operationId": "access_log_endpoint_access_log_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessLogRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Access Log Endpoint Access Log Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/retention/purge": {
+      "post": {
+        "summary": "Retention Purge Endpoint",
+        "description": "Purge par âge (TTL) : usage_events, tâches terminées, .docx expirés.",
+        "operationId": "retention_purge_endpoint_admin_retention_purge_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Admin-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetentionPurgeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Retention Purge Endpoint Admin Retention Purge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/retention/erase": {
+      "post": {
+        "summary": "Retention Erase Endpoint",
+        "description": "Effacement ciblé d'un sujet (droit à l'effacement, art. 17). Le sujet est\ndésigné par son identifiant en clair (hashé ici) OU par son hash.",
+        "operationId": "retention_erase_endpoint_admin_retention_erase_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Admin-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          },
+          {
+            "name": "X-Onix-Caller",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Caller"
+            }
+          },
+          {
+            "name": "X-Onix-Timestamp",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Timestamp"
+            }
+          },
+          {
+            "name": "X-Onix-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Onix-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubjectErasureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Retention Erase Endpoint Admin Retention Erase Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AccessLogRequest": {
+        "properties": {
+          "event": {
+            "type": "string",
+            "title": "Event",
+            "description": "document_accessed | rag_search_executed"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id",
+            "description": "UPN (hashé avant stockage)."
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id",
+            "description": "ID document (hashé)."
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query",
+            "description": "Requête RAG (NON stockée en clair)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "event"
+        ],
+        "title": "AccessLogRequest",
+        "description": "Journalisation d'accès (UPN hashés) : `document_accessed` /\n`rag_search_executed`. Aucun identifiant ni requête en clair n'est persisté."
+      },
       "AdminControlRequest": {
         "properties": {
           "admin_id": {
@@ -1106,11 +2579,58 @@
         "type": "object",
         "title": "AuditRequest"
       },
+      "Body_audit_file_async_endpoint_audit_file_async_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "client_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Key"
+          },
+          "caller_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caller Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_audit_file_async_endpoint_audit_file_async_post"
+      },
       "Body_audit_file_endpoint_audit_file_post": {
         "properties": {
           "file": {
             "type": "string",
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File"
           },
           "reference": {
@@ -1348,6 +2868,67 @@
         ],
         "title": "NotifyRequest"
       },
+      "RetentionPurgeRequest": {
+        "properties": {
+          "days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days",
+            "description": "TTL en jours (défaut ONIX_RETENTION_DAYS)."
+          },
+          "purge_files": {
+            "type": "boolean",
+            "title": "Purge Files",
+            "description": "Purger aussi les .docx expirés.",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "RetentionPurgeRequest"
+      },
+      "SubjectErasureRequest": {
+        "properties": {
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id",
+            "description": "Identifiant en clair (hashé ici)."
+          },
+          "subject_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Hash",
+            "description": "Hash du sujet (alternative)."
+          },
+          "erase_files": {
+            "type": "boolean",
+            "title": "Erase Files",
+            "description": "Effacer aussi les .docx du sujet.",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "SubjectErasureRequest",
+        "description": "Effacement ciblé d'un sujet (RGPD art. 17)."
+      },
       "TaskRequest": {
         "properties": {
           "title": {
@@ -1484,6 +3065,11 @@
             "type": "number",
             "title": "Estimated Cost Eur",
             "default": 0.0
+          },
+          "measured": {
+            "type": "boolean",
+            "title": "Measured",
+            "default": false
           }
         },
         "type": "object",
@@ -1515,6 +3101,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",
@@ -1525,24 +3118,6 @@
         ],
         "title": "ValidationError"
       }
-    },
-    "securitySchemes": {
-      "ApiKeyAuth": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-API-Key"
-      }
     }
-  },
-  "servers": [
-    {
-      "url": "http://actions:8100",
-      "description": "onix-actions (reseau interne onix-net ; aucun port hote)"
-    }
-  ],
-  "security": [
-    {
-      "ApiKeyAuth": []
-    }
-  ]
+  }
 }

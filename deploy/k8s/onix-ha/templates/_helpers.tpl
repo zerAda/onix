@@ -130,8 +130,34 @@ affinity:
 {{- end -}}
 
 {{/*
+securityContext au niveau POD — durcissement généralisé (A5 fiabilité).
+Stratégie PRUDENTE (cf. audit-onyx/30-security : images Onyx & Ollama tournent en
+ROOT par défaut ; images onix actions/gateway en non-root UID 10001/10002) :
+  * seccompProfile RuntimeDefault : appliqué PARTOUT (n'exige PAS le non-root,
+    restreint juste les syscalls au profil par défaut du runtime). Aucun risque.
+  * runAsNonRoot/runAsUser : appliqué UNIQUEMENT là où l'IMAGE le supporte
+    (actions/worker). Le forcer sur Onyx/Ollama (root) ferait ÉCHOUER le pod →
+    régression : on l'omet et on documente le rebuild USER comme suite (HA_SCALING).
+On part du défaut global (.Values.podSecurityContext.default = seccomp seul) puis on
+fusionne l'override de composant si fourni (.cfg). readOnlyRootFilesystem JAMAIS posé
+ici (Ollama écrit les modèles, actions écrit des temps OCR/docx) — cf. doc.
+Usage: {{ include "onix.podSecurityContext" (dict "ctx" . "cfg" .Values.actions.securityContext) | nindent 6 }}
+*/}}
+{{- define "onix.podSecurityContext" -}}
+{{- $base := .ctx.Values.podSecurityContext.default | default dict -}}
+{{- $merged := mergeOverwrite (deepCopy $base) (.cfg | default dict) -}}
+{{- if $merged }}
+securityContext:
+  {{- toYaml $merged | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Variables d'environnement SECRÈTES data-tier, injectées depuis le Secret K8s.
 Noms de clés FIXES (cf. values.secrets). Réutilisé par api/background/actions/...
+Inclut ENCRYPTION_KEY_SECRET : SANS clé NON VIDE, Onyx écrit les secrets connecteurs/
+LLM/OAuth EN CLAIR dans Postgres SANS erreur au boot (asymétrie : échoue sur
+USER_AUTH_SECRET vide, PAS sur celle-ci). Cf. docs/audit-onyx/30-security.md:109-111.
 Usage: env:\n{{ include "onix.dataTierSecretEnv" . | nindent 12 }}
 */}}
 {{- define "onix.dataTierSecretEnv" -}}
@@ -150,6 +176,26 @@ Usage: env:\n{{ include "onix.dataTierSecretEnv" . | nindent 12 }}
   valueFrom: { secretKeyRef: { name: {{ $secret }}, key: SECRET } }
 - name: USER_AUTH_SECRET
   valueFrom: { secretKeyRef: { name: {{ $secret }}, key: USER_AUTH_SECRET } }
+- name: ENCRYPTION_KEY_SECRET
+  valueFrom: { secretKeyRef: { name: {{ $secret }}, key: ENCRYPTION_KEY_SECRET } }
+{{- end -}}
+
+{{/*
+Variables d'environnement SECRÈTES de onix-actions (WS2), injectées depuis le
+Secret K8s. Noms de clés FIXES, lus par le code (security.py / audit_log.py /
+caller_identity.py). Sans ces clés en HA : /admin/* tombe en 403 fail-closed et
+la chaîne d'audit retombe en SHA-256 au lieu du HMAC promis. Les VALEURS viennent
+du Secret (existingSecret ou secrets.create) — JAMAIS du repo.
+Usage: env:\n{{ include "onix.actionsSecretEnv" . | nindent 12 }}
+*/}}
+{{- define "onix.actionsSecretEnv" -}}
+{{- $secret := include "onix.secretName" . -}}
+- name: ONIX_ACTIONS_ADMIN_KEY
+  valueFrom: { secretKeyRef: { name: {{ $secret }}, key: ONIX_ACTIONS_ADMIN_KEY } }
+- name: ONIX_ACTIONS_AUDIT_HMAC_KEY
+  valueFrom: { secretKeyRef: { name: {{ $secret }}, key: ONIX_ACTIONS_AUDIT_HMAC_KEY } }
+- name: ONIX_ACTIONS_CALLER_HMAC_SECRET
+  valueFrom: { secretKeyRef: { name: {{ $secret }}, key: ONIX_ACTIONS_CALLER_HMAC_SECRET } }
 {{- end -}}
 
 {{/*

@@ -91,10 +91,29 @@ casse si effondrement), la dérive fine étant attrapée par l'anti-régression.
 
 - **Fichier** : `tests/rag/ragas_eval/baseline_scores.json` (committé). Même schéma
   que la sortie `runner --json` (clé `aggregates`) → les deux sont interchangeables.
-- **Valeurs livrées** : ce sont une **graine de référence DÉTERMINISTE** produite
-  par le juge **scripté** (reproductible, documentée). ⚠️ Un vrai juge `1b` score
-  **différemment** : après le **premier run nightly sain**, **rafraîchir** la
-  baseline depuis un run réel.
+- **Valeurs livrées** (`0.75` / `0.875` / `1.0`) : ce sont une **graine de
+  référence DÉTERMINISTE**, **reproductible byte-level SANS aucun modèle live**.
+  Provenance **exacte et réexécutable** :
+  - **Oracle** : juge scripté `tests/rag/ragas_eval/scripted_judge.py` (faux LLM
+    déterministe : un claim est étayé si tous ses nombres figurent dans le
+    contexte ; un chunk est pertinent s'il recouvre les mots-clés de la question ;
+    relevancy = 4 si la réponse reprend un mot-clé). **Aucune valeur codée en dur
+    item par item** : la discrimination émerge des données du golden set.
+  - **Entrée** : `tests/rag/ragas_eval/golden_fr.json` (8 items, dont G07/G08
+    dégradés). **Pas de graine aléatoire** (le juge est déterministe → inutile).
+  - **Commande de (re)génération** (offline, depuis `tests/rag/`) :
+    ```bash
+    python -m ragas_eval.gen_baseline            # aperçu des agrégats
+    python -m ragas_eval.gen_baseline --write    # (ré)écrit baseline_scores.json
+    python -m ragas_eval.gen_baseline --check    # exit≠0 si périmé (intégrable CI)
+    ```
+  - **Garantie** : `test_baseline_is_reproducible_from_scripted_judge`
+    (`tests/rag/ragas_eval/test_ragas_eval.py`) **échoue** si le fichier committé
+    n'est plus byte-identique au rendu du générateur → la provenance ne peut pas
+    diverger silencieusement.
+  - ⚠️ C'est une **graine scriptée**, **pas** un run d'un vrai juge ≥ 7B. Un LLM
+    réel (`1b` ou `7b`) score **différemment** : après le **premier run nightly
+    sain**, **rafraîchir** la baseline depuis ce run réel (voir ci-dessous).
 - **Rafraîchir** (toujours après **revue du diff** — une baseline doit venir d'un
   run **sain**) :
 

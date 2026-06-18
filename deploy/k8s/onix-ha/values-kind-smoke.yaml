@@ -31,8 +31,15 @@ secrets:
     S3_AWS_SECRET_ACCESS_KEY: "minioadmin"
     SECRET: "devsecret"
     USER_AUTH_SECRET: "devauth"
+    # Chiffrement au repos des secrets Onyx (clé FACTICE de smoke ; en prod via
+    # existingSecret/Key Vault — JAMAIS en repo). Sans clé non vide => clair en base.
+    ENCRYPTION_KEY_SECRET: "devencryptionkey"
     ONIX_ACTIONS_API_KEY: "devapikey"
     BROKER_PASSWORD: "brokerpass"
+    # onix-actions WS2 (clés factices CI ; en prod via existingSecret/Key Vault).
+    ONIX_ACTIONS_ADMIN_KEY: "devadminkey"
+    ONIX_ACTIONS_AUDIT_HMAC_KEY: "devaudithmac"
+    ONIX_ACTIONS_CALLER_HMAC_SECRET: "devcallerhmac"
 
 # Anti-affinité en "soft" (cluster mono-nœud kind) : les 2 répliques restent
 # schedulables sur le même nœud (preferred, pas required).

@@ -30,6 +30,7 @@ spec:
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
+      {{- include "onix.podSecurityContext" (dict "ctx" . "cfg" dict) | nindent 6 }}
       containers:
         - name: rabbitmq
           image: "{{ .Values.actionsQueue.broker.image.repository }}:{{ .Values.actionsQueue.broker.image.tag }}"
@@ -109,6 +110,7 @@ spec:
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
       {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "actions-worker") | nindent 6 }}
+      {{- include "onix.podSecurityContext" (dict "ctx" . "cfg" .Values.actionsQueue.worker.securityContext) | nindent 6 }}
       containers:
         - name: worker
           image: "{{ .Values.actions.image.repository }}:{{ .Values.actions.image.tag }}"
@@ -124,6 +126,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "onix.secretName" . }}
                   key: ONIX_ACTIONS_API_KEY
+            {{- include "onix.actionsSecretEnv" . | nindent 12 }}
             - name: BROKER_PASSWORD
               valueFrom:
                 secretKeyRef:

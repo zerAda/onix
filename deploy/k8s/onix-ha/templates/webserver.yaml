@@ -21,6 +21,7 @@ spec:
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
       {{- include "onix.podAntiAffinity" (dict "ctx" . "component" "webserver") | nindent 6 }}
+      {{- include "onix.podSecurityContext" (dict "ctx" . "cfg" .Values.webserver.securityContext) | nindent 6 }}
       containers:
         - name: webserver
           image: {{ include "onix.image" (dict "image" .Values.webserver.image "root" .) | quote }}

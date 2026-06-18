@@ -55,16 +55,36 @@ Retirés du compose par rapport à la distribution Onyx standard :
 ## 5. Secrets
 
 Générés par `scripts/gen-secrets.sh` (idempotent) :
-`SECRET`, `USER_AUTH_SECRET`, `POSTGRES_PASSWORD`, `DB_READONLY_PASSWORD`,
-`OPENSEARCH_ADMIN_PASSWORD` (complexité garantie), `MINIO_ROOT_USER/PASSWORD`,
-`S3_AWS_ACCESS_KEY_ID/SECRET`, **`REDIS_PASSWORD`** (Redis lancé avec
-`--requirepass` ; honoré par Onyx via `REDIS_PASSWORD`).
+`SECRET`, `USER_AUTH_SECRET`, **`ENCRYPTION_KEY_SECRET`**, `POSTGRES_PASSWORD`,
+`DB_READONLY_PASSWORD`, `OPENSEARCH_ADMIN_PASSWORD` (complexité garantie),
+`MINIO_ROOT_USER/PASSWORD`, `S3_AWS_ACCESS_KEY_ID/SECRET`, **`REDIS_PASSWORD`**
+(Redis lancé avec `--requirepass` ; honoré par Onyx via `REDIS_PASSWORD`).
+
+- **`ENCRYPTION_KEY_SECRET` (chiffrement AU REPOS des secrets connecteurs/LLM/OAuth
+  stockés en base Onyx)** : généré par `gen-secrets.sh` (`scripts/gen-secrets.sh:80`)
+  et **imposé au boot** — `docker-compose.yml:59,118` l'injecte en `:?` (le démarrage
+  **échoue** si la variable est vide), `env.template:50` le réserve, et en HA le chart
+  l'exige via le Secret K8s (`deploy/k8s/onix-ha/templates/_helpers.tpl:179-180`,
+  `secret.yaml:9`). **Footgun fermé** : sans clé, Onyx FOSS écrirait les secrets EN
+  CLAIR en base **sans erreur** (asymétrie connue : il échoue sur `USER_AUTH_SECRET`
+  vide, pas sur celle-ci). Sur Azure, la clé vit dans Key Vault (CMK) — cf.
+  [`DEPLOY_AZURE.md`](DEPLOY_AZURE.md).
 
 - `.env` est **gitignoré** (`.gitignore` racine) et passé en `chmod 600`.
 - **Rotation** : modifier la valeur dans `.env` puis `make up` (certains secrets,
   ex. `OPENSEARCH_ADMIN_PASSWORD`, impliquent une réinitialisation du volume —
   voir RUNBOOK). Conservez les secrets dans un coffre (Key Vault, gestionnaire).
-- Le scan `gitleaks` du repo (pre-commit) protège contre un commit accidentel.
+- Le scan `gitleaks` protège contre un commit accidentel. Le contrôle
+  **effectif et bloquant** est le **gate CI** — `.github/workflows/ci.yml:57-61`
+  (`gitleaks detect --source . --config .gitleaks.toml --no-git --redact`,
+  gitleaks `v8.18.2`) — doublé localement par `make gitleaks` (même config).
+  **Fourni** : un [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) à la
+  racine pose le hook **pre-commit** `gitleaks` (repo `gitleaks/gitleaks`,
+  `rev: v8.18.2` — aligné sur la CI, config projet `.gitleaks.toml` réutilisée)
+  + des hooks d'hygiène (espaces, fin de fichier, conflits, JSON valide).
+  Activation côté développeur : `pre-commit install` (le 1er run télécharge les
+  hooks épinglés — réseau requis). Le filet de sécurité reste **doublé** par la CI
+  et `make gitleaks` même sans le hook local.
 
 ## 6. Durcissement pour un déploiement EXPOSÉ (au-delà du localhost)
 

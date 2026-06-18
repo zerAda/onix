@@ -588,3 +588,120 @@ def test_flag_valide_reste_ouvert(monkeypatch, tmp_path):
             "document": {"nom_client": "ACME"}, "reference": {"nom_client": "ACME"},
         })
         assert r.status_code == 200
+
+
+# ===========================================================================
+# 10. Effacement / purge RGPD en mode S3 (art. 17 exhaustif en HA)
+# ===========================================================================
+class _FakeS3Client:
+    """Client S3 minimal en mémoire (clé -> (corps, LastModified)). Implémente le
+    sous-ensemble boto3 utilisé par objstore (list_objects_v2 paginé simplifié +
+    delete_objects). Permet de PROUVER la suppression S3 sans MinIO réel."""
+
+    def __init__(self, objects):
+        # objects : dict {key: datetime|None}
+        self.store = dict(objects)
+
+    def list_objects_v2(self, Bucket, Prefix="", ContinuationToken=None):
+        contents = [
+            {"Key": k, "LastModified": lm}
+            for k, lm in self.store.items()
+            if k.startswith(Prefix)
+        ]
+        return {"Contents": contents, "IsTruncated": False}
+
+    def delete_objects(self, Bucket, Delete):
+        for obj in Delete.get("Objects", []):
+            self.store.pop(obj["Key"], None)
+        return {"Deleted": Delete.get("Objects", [])}
+
+
+def _import_retention(monkeypatch, tmp_path, fake_client):
+    """Recharge objstore+retention en mode S3 et injecte le faux client S3."""
+    monkeypatch.setenv("ONIX_OBJECT_STORE", "s3")
+    monkeypatch.setenv("ONIX_S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("ONIX_ACTIONS_DB", str(tmp_path / "db.sqlite"))
+    monkeypatch.setenv("ONIX_JOBS_DIR", str(tmp_path / "jobs"))
+
+    import app.objstore as objstore
+    import app.retention as retention
+
+    importlib.reload(objstore)
+    importlib.reload(retention)
+    # Court-circuite la fabrique de client boto3 par notre faux client en mémoire.
+    monkeypatch.setattr(objstore, "_client", lambda: fake_client)
+    return objstore, retention
+
+
+def test_objstore_delete_subject_docx_supprime_les_bons_objets(monkeypatch, tmp_path):
+    """delete_subject_docx supprime UNIQUEMENT les .docx du sujet visé."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    fake = _FakeS3Client({
+        "jobs/job-a/Fiche_RDV_Alice_Martin.docx": now,
+        "jobs/job-b/Fiche_RDV_Bob_Durand.docx": now,
+        "jobs/job-c/Fiche_RDV_Alice_Martin.docx": now,  # 2e fiche du même sujet
+    })
+    objstore, _ = _import_retention(monkeypatch, tmp_path, fake)
+
+    deleted = objstore.delete_subject_docx("alice_martin")
+    assert deleted == 2
+    # Les fiches d'Alice ont disparu ; celle de Bob est intacte.
+    assert "jobs/job-b/Fiche_RDV_Bob_Durand.docx" in fake.store
+    assert not any("Alice_Martin" in k for k in fake.store)
+
+
+def test_erase_subject_efface_les_objets_s3(monkeypatch, tmp_path):
+    """erase_subject (art. 17) BRANCHE bien la suppression S3 quand le store est
+    actif : l'objet S3 du sujet est supprimé et compté dans le résultat."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    fake = _FakeS3Client({
+        "jobs/job-1/Fiche_RDV_Alice_Martin.docx": now,
+        "jobs/job-2/Fiche_RDV_Bob_Durand.docx": now,
+    })
+    _, retention = _import_retention(monkeypatch, tmp_path, fake)
+
+    res = retention.erase_subject(subject_id="Alice Martin")
+    assert res["erased_s3_objects"] == 1
+    assert "jobs/job-1/Fiche_RDV_Alice_Martin.docx" not in fake.store
+    assert "jobs/job-2/Fiche_RDV_Bob_Durand.docx" in fake.store  # autre sujet préservé
+
+
+def test_purge_by_age_supprime_les_objets_s3_perimes(monkeypatch, tmp_path):
+    """purge_by_age (TTL) supprime les objets S3 plus vieux que la rétention et
+    conserve les récents."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=400)
+    fake = _FakeS3Client({
+        "jobs/job-old/Fiche_RDV_X.docx": old,
+        "jobs/job-new/Fiche_RDV_Y.docx": now,
+    })
+    _, retention = _import_retention(monkeypatch, tmp_path, fake)
+
+    res = retention.purge_by_age(days=365)
+    assert res["deleted_s3_objects"] == 1
+    assert "jobs/job-old/Fiche_RDV_X.docx" not in fake.store
+    assert "jobs/job-new/Fiche_RDV_Y.docx" in fake.store
+
+
+def test_erase_subject_local_ne_touche_pas_s3(monkeypatch, tmp_path):
+    """En mode local (défaut), erase_subject ne tente AUCUNE opération S3
+    (fail-safe : le compteur S3 reste à 0)."""
+    monkeypatch.delenv("ONIX_OBJECT_STORE", raising=False)
+    monkeypatch.setenv("ONIX_ACTIONS_DB", str(tmp_path / "db.sqlite"))
+    monkeypatch.setenv("ONIX_JOBS_DIR", str(tmp_path / "jobs"))
+
+    import app.objstore as objstore
+    import app.retention as retention
+
+    importlib.reload(objstore)
+    importlib.reload(retention)
+    assert objstore.is_s3() is False
+
+    res = retention.erase_subject(subject_id="alice@corp.fr")
+    assert res["erased_s3_objects"] == 0

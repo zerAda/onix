@@ -69,6 +69,17 @@
 | Effacement art.17 / rétention | ⚠️ cassé | ⚠️ | ✅ endpoints actions |
 | Télémétrie sortante | ON | ON (+domaine) | **OFF** |
 
+> **Preuves (colonne onix)** — chiffrement secrets : `ENCRYPTION_KEY_SECRET`
+> **généré** (`scripts/gen-secrets.sh:80`) et **imposé au boot** en `:?`
+> (`docker-compose.yml:59,118` → démarrage refusé si vide), réservé dans
+> `env.template:50`, exigé en HA via le Secret K8s
+> (`deploy/k8s/onix-ha/templates/_helpers.tpl:179-180`) — donc un **acquis réel**,
+> plus une simple action opérateur ; sur Azure, clé en Key Vault/CMK
+> (`deploy/azure/bicep/modules/keyvault.bicep`). Effacement art.17 / rétention :
+> `actions/app/retention.py:57-209` + endpoints `actions/app/main.py:924-931`.
+> Audit HMAC chaîné : `actions/app/audit_log.py:88-195`. RBAC par-doc (filtre de
+> sortie) : `access-gateway/app/doc_acl.py`.
+
 ## 5. État, scalabilité, HA
 Tier applicatif **stateless** (api/background/model-server/gateway/actions) → réplicas + HPA.
 Tier data = **état** → en prod : **managé HA** (Azure DB Postgres Flexible zone-redondant +

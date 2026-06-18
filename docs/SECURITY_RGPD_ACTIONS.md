@@ -109,10 +109,27 @@ donc pas un unique seau). Dépassement → **429** + `Retry-After`. Mettre à
 - **L'administration (`/admin/*`) N'EST PAS soumise au quota** : une action de
   sécurité (kill-switch, déblocage) ne doit jamais être bloquée en 429 par un pic
   d'abus. Elle reste protégée par la double clé (service + admin).
-- **Multi-instance** : la fenêtre est par-process. Pour un compteur partagé,
-  brancher un store **Redis** (via **slowapi**, dépendance déjà présente). En
-  l'état, le quota effectif est `N × instances` — à prendre en compte si
-  plusieurs réplicas du microservice tournent.
+
+> ### ⚠️ Limite connue (HA) : quota PAR-PROCESS — effectif `N × réplicas`
+>
+> L'enforcement réel est la **fenêtre glissante EN MÉMOIRE** d'`enforce_rate_limit`
+> ([`security.py:254-282`](../actions/app/security.py)), **locale à chaque process**.
+> **`slowapi` est déclaré en dépendance mais N'EST PAS utilisé pour l'enforcement** :
+> on l'importe seulement pour le diagnostic et le format de quota (`security.py:34-40`).
+> Il n'existe **aucun store partagé** (Redis) à ce stade.
+>
+> **Conséquence en HA / multi-réplica** : chaque réplica compte indépendamment, donc
+> le quota global observé par un appelant unique est **`ONIX_ACTIONS_RATE_LIMIT × nombre de réplicas`**.
+> Exemple : `60/minute` avec **4** réplicas derrière le Service K8s ⇒ jusqu'à
+> **240 req/min** réellement acceptées (si l'équilibrage répartit l'appelant). Le
+> rate-limit reste un garde-fou anti-abus correct **par-instance**, mais **ne
+> garantit PAS un plafond global strict** quand le microservice est répliqué.
+>
+> **Périmètre** : c'est une limite **assumée et honnête**, pas un bug — le défaut
+> mono-poste applique exactement `ONIX_ACTIONS_RATE_LIMIT`. **Aucune infra Redis
+> n'est livrée ce tour-ci.** *Correctif futur* (backlog) : compteur partagé Redis
+> (via `slowapi` + `RedisStorage`, ou un seau atomique `INCR`/`EXPIRE` maison) pour
+> obtenir un plafond global réellement strict en HA.
 
 ---
 
@@ -164,15 +181,20 @@ chaîne en aval → **détectable**.
 
 - **Purge par âge (TTL)** — `POST /admin/retention/purge` :
   supprime `usage_events`, tâches **terminées** et `.docx` générés au-delà de
-  `ONIX_RETENTION_DAYS` (défaut 365). Le **journal d'audit** n'est PAS purgé par
-  âge (obligation de traçabilité + intégrité de la chaîne).
+  `ONIX_RETENTION_DAYS` (défaut 365). En mode `ONIX_OBJECT_STORE=s3`, supprime
+  **aussi** les objets `jobs/…` périmés du bucket (`objstore.delete_jobs_older_than`)
+  → champ `deleted_s3_objects` dans la réponse. Le **journal d'audit** n'est PAS
+  purgé par âge (obligation de traçabilité + intégrité de la chaîne).
 - **Effacement ciblé par sujet** — `POST /admin/retention/erase` (art. 17) :
   supprime toutes les traces d'un sujet désigné par son **identifiant en clair**
   (hashé ici) **ou** son **hash**. Opère sur les colonnes hashées
   (`user_id_hash`, `client_id_hash`, `owner_hash`) + fichiers `.docx` du sujet.
+  En mode S3, supprime **aussi** les `.docx` du sujet dans le bucket
+  (`objstore.delete_subject_docx`) → champ `erased_s3_objects` dans la réponse.
   Le journal d'audit chaîné est **préservé** (il ne contient que des hash).
   > Note : le rapprochement des `.docx` se fait sur le nom de fichier sanitisé
-  > (best-effort) ; pour un effacement exhaustif, coupler à un index sujet→jobs.
+  > (best-effort, identique en local et S3) ; pour un effacement exhaustif au-delà
+  > du nom, coupler à un index sujet→jobs.
 
 ---
 
@@ -190,6 +212,14 @@ valeur de flag **inconnue** (`ON`, `tru`, typo…). Une coquille de configuratio
 `ONIX_ACTIONS_ADMIN_KEY`, `ONIX_ACTIONS_CALLER_HMAC_SECRET`,
 `ONIX_ACTIONS_AUDIT_HMAC_KEY`. `.env` reste **gitignoré** + `chmod 600`.
 Le scan **gitleaks** (CI/pre-commit) protège contre un commit accidentel.
+
+En **HA (Helm)**, ces trois clés sont injectées depuis le Secret K8s
+(`onix.actionsSecretEnv` → `secretKeyRef`) dans le Deployment `actions` **et** le
+worker Celery (cf. [`deploy/k8s/onix-ha`](../deploy/k8s/onix-ha/)). Sans elles :
+`/admin/*` répond **403 fail-closed** (kill-switch, `/admin/audit/verify`,
+purge/erase inaccessibles) et la chaîne d'audit retombe en **SHA-256**. Les
+**valeurs** viennent de `secrets.existingSecret` (prod / Key Vault) ou
+`secrets.create` (démo/CI) — **jamais du repo**.
 
 ---
 
@@ -231,7 +261,7 @@ Le scan **gitleaks** (CI/pre-commit) protège contre un commit accidentel.
 ```bash
 cd actions
 pip install -r requirements.txt pytest bandit
-pytest -q                 # 58 tests verts (dont test_security_rgpd.py)
+pytest -q                 # 90 tests collectés : 85 passed, 5 skipped (dont test_security_rgpd.py = 32)
 bandit -r app             # 0 High / 0 Medium
 # gitleaks detect --no-git --config ../.gitleaks.toml   # 0 fuite
 ```

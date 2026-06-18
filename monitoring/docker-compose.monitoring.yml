@@ -18,8 +18,8 @@
 #   2) docker compose -f monitoring/docker-compose.monitoring.yml up -d
 #   (ou bien : make monitor-up / make monitor-down — cf. Makefile bloc WS6).
 #
-# DÉPENDANCE WS2 : le job Prometheus `onix-actions` cible actions:8100/metrics.
-#   Tant que WS2 n'expose pas /metrics, ce job est `down` (les autres signaux —
+# Le job Prometheus `onix-actions` cible actions:8100/metrics (endpoint livré).
+#   Si le service actions est arrêté, ce job est `down` (les autres signaux —
 #   sonde blackbox /health, exporters infra — fonctionnent immédiatement).
 # =============================================================================
 
@@ -47,6 +47,10 @@ services:
     image: prom/prometheus:v3.1.0
     restart: unless-stopped
     user: "65534:65534"   # nobody : n'écrit que dans le volume (chown au 1er run via init).
+    # Durcissement : pas d'escalade de privilèges, aucune capability Linux.
+    # PAS de read_only : Prometheus écrit le TSDB dans le volume /prometheus.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -79,6 +83,10 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0
     restart: unless-stopped
+    # Durcissement : pas d'escalade, aucune capability. PAS de read_only :
+    # Alertmanager écrit son état (silences, nflog) dans le volume /alertmanager.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
@@ -107,13 +115,25 @@ services:
   grafana:
     image: grafana/grafana:11.4.0
     restart: unless-stopped
+    # Durcissement : pas d'escalade, aucune capability. PAS de read_only :
+    # Grafana écrit sa base SQLite + plugins dans le volume /var/lib/grafana.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     depends_on:
       - prometheus
       - loki
     environment:
-      # Mot de passe admin via .env (généré). À défaut : 'admin' (à changer).
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Identifiants admin via .env (généré par `make secrets` → gen-secrets.sh).
+      # GARDE-FOU : on NE retombe PLUS sur le défaut trivial 'admin/admin'. Le
+      # vrai garde-fou bloquant est dans le bloc `monitor-up` du Makefile, qui
+      # REFUSE de démarrer si GRAFANA_ADMIN_PASSWORD est absent ou faible (le
+      # `:?` n'est pas utilisé ici car il casserait `docker compose config`,
+      # .env étant facultatif). La valeur de repli ci-dessous est délibérément
+      # NON triviale et NON secrète : elle empêche seulement un défaut connu
+      # ('admin') si quelqu'un lance le compose à la main sans .env ; elle ne
+      # remplace pas le mot de passe fort, qui DOIT venir de .env.
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-onix-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-CHANGEME-set-GRAFANA_ADMIN_PASSWORD-in-.env}
       # Souveraineté : pas d'appels sortants (analytics, gravatar, news, MAJ).
       - GF_ANALYTICS_REPORTING_ENABLED=false
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
@@ -152,6 +172,10 @@ services:
   loki:
     image: grafana/loki:3.3.0
     restart: unless-stopped
+    # Durcissement : pas d'escalade, aucune capability. PAS de read_only :
+    # Loki écrit l'index + les chunks dans le volume /loki.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     command: ["-config.file=/etc/loki/loki-config.yml"]
     volumes:
       - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
@@ -177,6 +201,15 @@ services:
     restart: unless-stopped
     depends_on:
       - loki
+    # Durcissement : pas d'escalade, aucune capability. read_only sûr car le
+    # seul état écrit (positions.yaml) va dans /tmp (cf. promtail-config.yml:13),
+    # fourni en tmpfs. La lecture du socket Docker (monté :ro) ne requiert
+    # AUCUNE capability Linux (accès fichier/groupe, pas d'escalade).
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /tmp
     command: ["-config.file=/etc/promtail/promtail-config.yml"]
     volumes:
       - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
@@ -195,6 +228,13 @@ services:
   node-exporter:
     image: prom/node-exporter:v1.8.2
     restart: unless-stopped
+    # Durcissement : pas d'escalade, aucune capability. PRUDENCE : ce service a
+    # `pid: host` + montage hôte `/:/host:ro` (lecture des métriques système).
+    # On NE met PAS read_only agressivement pour ne pas risquer de casser la
+    # collecte ; le montage hôte est déjà :ro et aucune capability n'est requise
+    # pour lire /proc, /sys et /host.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     command:
       - "--path.rootfs=/host"
     pid: host
@@ -214,6 +254,12 @@ services:
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:v0.16.0
     restart: unless-stopped
+    # Durcissement complet : exporter sans état disque -> read_only + tmpfs /tmp.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
       - DATA_SOURCE_NAME=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@relational_db:5432/postgres?sslmode=disable
     env_file:
@@ -232,6 +278,12 @@ services:
   redis-exporter:
     image: oliver006/redis_exporter:v1.67.0
     restart: unless-stopped
+    # Durcissement complet : exporter sans état disque -> read_only + tmpfs /tmp.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
       - REDIS_ADDR=redis://cache:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
@@ -252,6 +304,12 @@ services:
   opensearch-exporter:
     image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.7.0
     restart: unless-stopped
+    # Durcissement complet : exporter sans état disque -> read_only + tmpfs /tmp.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /tmp
     command:
       - "--es.uri=https://admin:${OPENSEARCH_ADMIN_PASSWORD:-admin}@opensearch:9200"
       - "--es.ssl-skip-verify"
@@ -272,6 +330,14 @@ services:
   blackbox-exporter:
     image: prom/blackbox-exporter:v0.25.0
     restart: unless-stopped
+    # Durcissement complet : sonde sans état disque -> read_only + tmpfs /tmp.
+    # NB : les sondes ICMP nécessiteraient CAP_NET_RAW, mais ici seul le module
+    # http_2xx est utilisé (cf. blackbox/blackbox.yml) -> aucune capability.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /tmp
     command:
       - "--config.file=/etc/blackbox/blackbox.yml"
     volumes:
