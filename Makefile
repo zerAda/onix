@@ -383,18 +383,23 @@ logs-local-prod:
 # Pré-requis make test : python3 + pip, docker, gitleaks (téléchargé si absent).
 MONITORING_COMPOSE := docker compose -f monitoring/docker-compose.monitoring.yml
 
-.PHONY: test lint pytest bandit pip-audit trivy gitleaks compose-validate sbom \
+.PHONY: test lint docs-check pytest bandit pip-audit trivy gitleaks compose-validate sbom \
         monitor-up monitor-down monitor-config monitor-logs
 
 # Barrière unique : tout ce que la CI vérifie, en local, dans l'ordre.
 test: lint compose-validate pytest bandit pip-audit gitleaks trivy
 	@echo "✓ WS6 : toutes les barrières qualité/sécurité/supply-chain sont VERTES."
 
-lint:
+lint: docs-check
 	@command -v yamllint >/dev/null 2>&1 || pip install --quiet yamllint
 	@yamllint -d "{extends: relaxed, rules: {line-length: disable}}" \
 	  .github/workflows monitoring
 	@echo "✓ YAML valide (workflows + monitoring)."
+
+# Valide l'infra de doc pour agents : 1 dossier par scope (docs/scopes/), 0 lien
+# de navigation mort (CLAUDE.md/AGENTS.md/DOCS_INDEX/scopes), signale les orphelins.
+docs-check:
+	@python3 scripts/check-docs-map.py
 
 compose-validate:
 	@docker compose -f docker-compose.yml config -q

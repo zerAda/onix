@@ -89,6 +89,9 @@ Suites pytest : `actions/tests`, `access-gateway/tests`, `tests/rag` (offline) ;
    est gratuite (cf. l'audit). Le RBAC par-doc retenu ici = **gateway FOSS** (filtre de sortie).
 
 ## 6. Où vit chaque scope (liens)
+> **Navigation agent** : commence par le **dossier de scope** [`docs/scopes/`](docs/scopes/README.md)
+> (un fichier par scope : code, commandes, tests, invariants, observabilité, docs, journal),
+> puis suis ses liens. Routeur sujet→doc : [`CLAUDE.md`](CLAUDE.md) § « Carte de navigation ».
 - **RAG / qualité / Ollama** : [`docs/RAG_OPTIMIZATION.md`](docs/RAG_OPTIMIZATION.md) · [`docs/PLAYBOOK_ONYX_RAG.md`](docs/PLAYBOOK_ONYX_RAG.md) · [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) · [`docs/RAG_EVAL.md`](docs/RAG_EVAL.md)
 - **RBAC / cache / streaming** : [`docs/RBAC.md`](docs/RBAC.md) · [`docs/DECISION_RBAC.md`](docs/DECISION_RBAC.md) · [`docs/CACHE.md`](docs/CACHE.md) · [`docs/STREAMING.md`](docs/STREAMING.md)
 - **Fonctions applicatives** : [`docs/ACTIONS.md`](docs/ACTIONS.md) · [`docs/FINOPS.md`](docs/FINOPS.md) · [`docs/AGENT_COMMERCIAL.md`](docs/AGENT_COMMERCIAL.md)
