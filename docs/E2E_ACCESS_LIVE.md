@@ -218,3 +218,75 @@ make tune && make secrets && make up && make verify   # démarre + contrôle e2e
 Voir aussi : [`connectors/FABRIC.md`](connectors/FABRIC.md) ·
 [`connectors/SHAREPOINT.md`](connectors/SHAREPOINT.md) · [`RBAC.md`](RBAC.md) ·
 [`DECISION_RBAC.md`](DECISION_RBAC.md).
+
+---
+
+## Annexe — Cloisonnement PAR-CLIENT (POC « Assistant Client 360 »)
+
+Scénario réel GEREP : le site SharePoint `dev-assistant-client-360` contient
+`Dossiers_Clients_POC/` avec un dossier **par client** (Alpha, Beta, Gamma…).
+Objectif : **chaque gestionnaire ne voit que SES dossiers clients**, un **manager**
+voit tout — prouvé à **deux niveaux** à travers le code déployé.
+
+### Modèle d'accès — groupes Entra (pas siteGroups)
+
+| Principal | Type | Portée |
+|---|---|---|
+| `SG …-CLIENT-ALPHA` (1 par client) | **groupe de sécurité Entra** | dossier du client |
+| `SG …-MANAGERS-READALL` | **groupe de sécurité Entra** | tous les dossiers |
+
+> **Pourquoi Entra et NON les SharePoint siteGroups.** La passerelle résout
+> l'appartenance via Microsoft Graph `transitiveMemberOf` → des **GUID Entra**.
+> Les **siteGroups** SharePoint ont des **ids entiers** (`17`, `11`…) : `graph_acl`
+> les capte (`siteGroup.id`) mais ils ne **matchent jamais** un GUID Entra. Partager
+> les dossiers via des **groupes de sécurité Entra** (ajoutés *directement* aux
+> permissions de l'item → `grantedToV2.group.id`) rend le RBAC **résoluble** par
+> onix. Cf. [`DECISION_RBAC.md`](DECISION_RBAC.md).
+
+### Niveau 1 — RBAC par-document (SharePoint / Graph)
+
+`graph_acl.fetch_item_principals` lit l'ACL réelle de chaque document ; un user est
+autorisé si son `oid` est cité OU si l'un de ses groupes Entra transitifs ∩ les
+groupes de l'item. Résultat attendu (matrice user × dossier) : **diagonale** pour
+les clients, **ligne pleine** pour le manager.
+
+### Niveau 2 — Cloisonnement au CHAT (Document Set forcé)
+
+La passerelle dérive du **mapping groupe Entra → Document Set** la liste des sets
+autorisés et **force** ce filtre dans `retrieval_options` avant de relayer à Onyx —
+un user d'un autre périmètre ne peut pas élargir la recherche. Mapping
+(`GATEWAY_MAPPING_PATH`, cf. [`RBAC.md`](RBAC.md)) :
+
+```json
+{
+  "version": 1,
+  "default_document_sets": [],
+  "groups": {
+    "<GUID groupe Entra CLIENT-ALPHA>": {"document_sets": ["clients-alpha"]},
+    "<GUID groupe Entra CLIENT-BETA>":  {"document_sets": ["clients-beta"]},
+    "<GUID groupe Entra CLIENT-GAMMA>": {"document_sets": ["clients-gamma"]},
+    "<GUID groupe Entra MANAGERS>":     {"document_sets": ["clients-alpha","clients-beta","clients-gamma"]}
+  }
+}
+```
+
+### Rejouer sur le poste
+
+1. **Partager** chaque dossier client avec son groupe Entra (lecture) + le groupe
+   manager (lecture) — *en direct*, pour un grant `group.id` résoluble.
+2. **Indexer** le site dans Onyx (connecteur SharePoint) puis **créer un Document
+   Set par client** (`clients-alpha`…) regroupant le dossier correspondant.
+   > FOSS : Onyx indexe le contenu mais **ne synchronise pas** les ACL SharePoint
+   > (permission-sync = EE). C'est **onix** qui cloisonne (filtre `document_set` +
+   > ACL par-document à la réponse). Cf. [`RBAC.md`](RBAC.md), [`connectors/SHAREPOINT.md`](connectors/SHAREPOINT.md) §6.
+3. **Pointer** `GATEWAY_MAPPING_PATH` sur le mapping ci-dessus, puis lancer le chat
+   **en tant que** chaque utilisateur (SSO) : vérifier qu'il ne récupère/cite que
+   les documents de son périmètre.
+
+### Mockable ?
+
+| Étape | Mockable ? |
+|---|---|
+| RBAC par-document & matrice (Graph live) | ❌ vrai tenant (groupes Entra + items partagés) |
+| Forçage `document_set` au chat (logique passerelle) | ✅ **prouvable hors-Onyx** (claims + mapping, amont moqué) |
+| Indexation + retrieval réels honorant le filtre | ❌ stack Onyx montée (poste) |
