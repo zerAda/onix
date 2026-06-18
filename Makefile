@@ -479,3 +479,34 @@ monitor-config:
 
 monitor-logs:
 	@$(MONITORING_COMPOSE) logs -f --tail=200
+
+# =============================================================================
+# --- NETTOYAGE (release) -----------------------------------------------------
+# `make clean`      : retire les artefacts/caches/temporaires RÉGÉNÉRABLES.
+#                     CONSERVE le pertinent : code source, **doc (dont
+#                     docs/scopes/)**, configs, .env (secrets), backups/. C'est le
+#                     « clean release » : l'arbre reste fonctionnel, seul le
+#                     jetable disparaît. Idempotent, sûr (ne touche jamais .git).
+# `make clean-deep` : clean + venvs Python locaux (actions/.venv, access-gateway/.venv).
+# (Pour DÉTRUIRE la stack Docker + volumes : `make destroy`.)
+# =============================================================================
+.PHONY: clean clean-deep
+
+clean:
+	@echo "→ Nettoyage release (artefacts/caches/temporaires régénérables)…"
+	@find . -path ./.git -prune -o -type d -name '__pycache__'   -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type d -name '.mypy_cache'   -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type d -name '.ruff_cache'   -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type d -name '*.egg-info'    -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type f -name '*.py[co]'      -exec rm -f  {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type f \( -name '.DS_Store' -o -name 'Thumbs.db' -o -name '*.swp' \) -exec rm -f {} + 2>/dev/null || true
+	@rm -rf .coverage coverage.xml htmlcov dist build
+	@rm -f sbom*.json sbom*.spdx.json sbom*.xml
+	@rm -f deploy/azure/bicep/main.json
+	@echo "✓ clean : jetable retiré. Conservés : code, docs (docs/scopes/…), configs, .env, backups/."
+
+clean-deep: clean
+	@echo "→ Nettoyage profond (venvs Python locaux)…"
+	@rm -rf actions/.venv access-gateway/.venv
+	@echo "✓ clean-deep : venvs retirés (recréez-les via vos commandes d'install)."

@@ -43,6 +43,9 @@ make secrets-prod && make up-prod
 make k8s-lint && make k8s-template   # (helm lint + template)
 # Validation IaC (incluse dans make test)
 make compose-validate                # tous les compose
+# Nettoyage RELEASE (retire le jetable, garde code+docs+configs+.env+backups)
+make clean                           # caches/artefacts/temporaires régénérables
+make clean-deep                      # clean + venvs Python locaux
 ```
 
 ## 4. Tests & preuves
