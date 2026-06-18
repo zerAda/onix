@@ -57,6 +57,8 @@
 | Doc | Contenu |
 |---|---|
 | [`connectors/SHAREPOINT.md`](connectors/SHAREPOINT.md) | Connexion SharePoint (Entra/Graph), perm-sync (EE) vs ACL (FOSS) |
+| [`connectors/FABRIC.md`](connectors/FABRIC.md) | Accès Microsoft Fabric / OneLake / Power BI (SPN, audiences, RBAC fail-closed, FOSS vs EE) |
+| [`E2E_ACCESS_LIVE.md`](E2E_ACCESS_LIVE.md) | **Runbook e2e LIVE** : prouver l'accès SharePoint + Fabric sur votre tenant (app Entra, `ONIX_E2E_*`, codes 0/1/2) |
 
 ## 🧪 Audit Onyx & parité
 | Doc | Contenu |

@@ -455,3 +455,20 @@ ordre de fréquence :
   périmètre qui n'est pas le sien (cf. tests `access-gateway/tests`).
 - (Mode B / EE) un utilisateur **sans accès** à un dossier n'obtient **rien**
   dessus, **par document**.
+
+### 8.1 e2e d'accès **live** (preuve contre un vrai tenant)
+
+Pour **prouver** sur votre poste que l'accès Graph + le RBAC par-document
+fonctionnent réellement (auth, listing d'un drive, un utilisateur autorisé
+accordé, un non-autorisé refusé **fail-closed**), utilisez le harnais LIVE-only
+[`../../access-gateway/tests/e2e/run_access_e2e.py`](../../access-gateway/tests/e2e/run_access_e2e.py)
+(bloc **A** = SharePoint ; bloc **B** = Microsoft Fabric). Il **réutilise** le
+code de service (`graph_client`/`graph_acl`) — aucune réimplémentation.
+
+```bash
+python access-gateway/tests/e2e/run_access_e2e.py --list-vars   # variables attendues
+```
+
+Runbook complet (prérequis Entra, variables `ONIX_E2E_*`, codes 0/1/2) :
+[`../E2E_ACCESS_LIVE.md`](../E2E_ACCESS_LIVE.md). Pour l'accès **Fabric/OneLake/
+Power BI** du même SPN : [`FABRIC.md`](FABRIC.md).
