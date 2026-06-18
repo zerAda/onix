@@ -9,6 +9,7 @@
 | D2 | P1 | TLS Redis/PG Onyx non livrés (`values-azure.yaml`, `configmap.yaml`) | A3 | ✅ |
 | D3 | P1 | `scripts/backup.sh` ignore la surcouche prod (`-f deploy/prod/...`) | A5/A6 | ✅ |
 | D4 | P2 | Durcissement Helm partiel (non-root/seccomp seulement gateway) | A5 | ✅ (seccomp partout ; non-root où l'image le permet) |
+| D4b | P2 | Durcissement Helm restant : NetworkPolicy OPT-IN + readOnlyRootFS OPT-IN | A3/A5 | ✅ (itér. 2 ; OPT-IN défaut OFF, rendu inchangé) |
 | D5 | P2 | RUNBOOK §7 : `inference_` vs `indexing_model_server` | A1 | ✅ |
 
 ## Journal
@@ -20,6 +21,8 @@
 | 1 | 2026-06-18 | D4 | helper onix.podSecurityContext : seccomp partout ; non-root actions/worker (UID 10001) ; pas de régression Onyx/Ollama root | lint/tpl×3 OK ; rendu vérifié par workload | 8951309 |
 | 1 | 2026-06-18 | D5 | RUNBOOK §7 → indexing_model_server (make up PERF=1) | doc | df5e8bf |
 | 1 | 2026-06-18 | D1 | ingress chat→gateway OPT-IN (route Exact gated) ; forward-auth/anti-spoofing = TODO documenté | lint/tpl×3 OK ; route gated (gw+chat) ; pas de route orpheline ; gitleaks 0 | 326da5e |
+| 2 | 2026-06-18 | D4b | NetworkPolicy OPT-IN (`templates/networkpolicy.yaml`, default-deny ingress + allow par composant) ; `networkPolicy.enabled=false` défaut | lint OK ; tpl×3 défaut → NetworkPolicy=0 ; `--set …enabled=true` → 8 (9 si gateway) ; docs défaut=36 inchangé ; gitleaks 0 | 58ba627 |
+| 2 | 2026-06-18 | D4b | readOnlyRootFS OPT-IN access-gateway (rootfs RO + emptyDir /tmp) ; `accessGateway.readOnlyRootFilesystem=false` défaut ; PAS sur Onyx/Ollama/actions | lint OK ; OFF→rendu inchangé ; ON→securityContext+emptyDir rendus | 58ba627 |
 
 ## Questions bloquantes / décisions structurantes
 - **D1 (ingress AKS)** : le forward-auth oauth2-proxy + l'anti-usurpation (strip

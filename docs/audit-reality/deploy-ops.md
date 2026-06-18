@@ -93,7 +93,7 @@ fichier/cible inexistant.
 | Postgres CNPG `kind: Cluster` `instances: 3` + `ScheduledBackup` (cron 6 champs) | ✅ | `templates/postgres-cluster.yaml:11-12,18,67-68` ; `values.yaml:495,511` (`"0 0 2 * * *"`) | Format CNPG 6 champs confirmé. |
 | Anti-affinité soft par défaut, `topologyKey kubernetes.io/hostname` | ✅ | `_helpers.tpl:110-129` ; `values.yaml:58-61` | passable en `hard`. |
 | `requests`/`limits` sur TOUS les conteneurs | ✅ | `values.yaml` (api `:78-84`, web `:102-108`, background `:124-130`, model-servers `:147-176`, actions `:199-205`, worker `:265-271`, broker `:292-298`, ollama `:453-459`) | Aucune section vide. Tableau §3 cohérent. |
-| `runAsNonRoot` partout (« requests/limits + runAsNonRoot » §1/intro) | ⚠️ | Présent UNIQUEMENT sur access-gateway `values.yaml:335-339` (+ template `access-gateway.yaml`) ; **absent** des Deployments Onyx/actions/ollama/worker | Pas de `securityContext runAsNonRoot`/`readOnlyRootFilesystem` sur le reste. Durcissement HA **partiel** vs l'esprit affiché. |
+| `runAsNonRoot` partout (« requests/limits + runAsNonRoot » §1/intro) | ✅ (nuancé) | Helper `onix.podSecurityContext` : seccomp RuntimeDefault PARTOUT ; non-root où l'image le supporte (actions/worker/gateway). `readOnlyRootFilesystem` OPT-IN gateway (`values.yaml:403`). NetworkPolicy OPT-IN (`networkpolicy.yaml`, `values.yaml:97`) | Onyx/Ollama restent root (images amont) — documenté `HA_SCALING.md` §5bis (rebuild = suite). Durcissement « gratuit » généralisé ; reste opt-in validé statiquement. |
 | File async Celery : worker (Deploy+HPA+PDB) + broker RabbitMQ StatefulSet ; cmd `-A app.celery_app.celery worker` | ✅ | `templates/actions-queue.yaml` ; `values.yaml:258-264,283-286` | Worker scale 2→12. |
 | Hook code `onix-actions` (celery_app.py, endpoints async, ONIX_DB_BACKEND=postgres) « à intégrer par l'intégrateur » | 🕳️ (assumé) | `HA_SCALING.md §7` | Doc explicite : chart prêt, **code applicatif non fourni ici** ; honnête (« ne modifie pas actions/app »). Statelessness prouvée par ailleurs (cf. HA_ACCEPTANCE). |
 | CronJobs continuité : snapshot OpenSearch + miroir MinIO (`batch/v1`) ; PITR Postgres natif CNPG (pas de CronJob) | ✅ | `templates/cronjob-opensearch-snapshot.yaml:11`, `cronjob-minio-mirror.yaml:8` ; `values.yaml:573-590` | Schedules 6/5-champs respectifs. |
@@ -199,13 +199,26 @@ correctement la porte ; cache HMAC et `VALID_EMAIL_DOMAINS` sont `:?` (fail si v
    `RUNBOOK.md` §5.
 
 ### P2 (durcissement / hygiène)
-4. **Durcissement Helm partiel** — ✅ **résolu** (itér. 1) sans régression.
-   Helper `onix.podSecurityContext` : `seccompProfile RuntimeDefault` appliqué à TOUS
-   les pods ; `runAsNonRoot`/`runAsUser` seulement où l'image le supporte (actions/worker
-   UID 10001 ; gateway 10002). **NON posé** sur Onyx/Ollama (images root amont — le
-   forcer casserait le boot). `readOnlyRootFilesystem` volontairement absent (Ollama
-   modèles, actions temp). Suite documentée (`HA_SCALING.md` §5bis) : non-root Onyx/Ollama
-   = rebuild image USER ; NetworkPolicy = recette.
+4. **Durcissement Helm partiel** — ✅ **résolu** (itér. 1 + itér. 2) sans régression.
+   - **itér. 1** : helper `onix.podSecurityContext` — `seccompProfile RuntimeDefault`
+     appliqué à TOUS les pods ; `runAsNonRoot`/`runAsUser` seulement où l'image le
+     supporte (actions/worker UID 10001 ; gateway 10002). **NON posé** sur Onyx/Ollama
+     (images root amont — le forcer casserait le boot).
+   - **itér. 2 (NetworkPolicy OPT-IN)** : `templates/networkpolicy.yaml` gardé par
+     `networkPolicy.enabled` (défaut `false` `values.yaml:97`). Modèle **ingress-only**
+     (default-deny ingress ciblant `part-of: onix` SANS toucher le data-tier ; aucun
+     egress restreint → DNS/data-tier/Graph jamais coupés) + allow explicites par
+     composant (api/web/model-servers/actions/broker/ollama, +gateway si activée).
+     Validé : défaut ⇒ **0** NetworkPolicy (×3 jeux de values) ; `--set
+     networkPolicy.enabled=true` ⇒ **8** (9 avec gateway), YAML re-parsé OK.
+   - **itér. 2 (readOnlyRootFilesystem OPT-IN)** : flag
+     `accessGateway.readOnlyRootFilesystem` (défaut `false` `values.yaml:403`) →
+     rootfs RO + emptyDir `/tmp` UNIQUEMENT sur l'access-gateway (stateless, sûr).
+     **PAS** sur Onyx/Ollama/actions (écrivent sur disque) → documenté.
+   - Défaut OFF des deux flags ⇒ **rendu inchangé** (36 docs par défaut, 0 NetworkPolicy).
+     **Reste** : NetworkPolicy *egress* (allowlist sortante) + non-root Onyx/Ollama
+     (rebuild image USER) — documenté `HA_SCALING.md` §5bis « Suite ». Comportement
+     runtime (CNI/AKS) à vérifier sur cluster réel.
 5. **Imprécision RUNBOOK §7** — ✅ **résolu** (itér. 1) : `indexing_model_server`
    (profil `make up PERF=1`, `docker-compose.performance.yml`).
 6. **Code-sans-doc** (🔇) : HTTP/3 QUIC (Caddy `:443/udp`) et tier sémantique du cache

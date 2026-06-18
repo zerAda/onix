@@ -181,12 +181,82 @@ tournent en **root** par défaut) :
   sur le PVC, et `onix-actions` écrit des fichiers temporaires (OCR, `.docx`) sur le
   système de fichiers du conteneur. L'activer ici casserait ces écritures.
 
+### readOnlyRootFilesystem — durcissement conteneur (OPT-IN STRICT, défaut OFF)
+
+Flag `accessGateway.readOnlyRootFilesystem` (défaut `false`). Quand activé, le
+conteneur **access-gateway** monte son rootfs en **lecture seule** (champ
+container-level `securityContext.readOnlyRootFilesystem: true`) et un **emptyDir**
+est monté sur `/tmp` pour les écritures transitoires (tempfile Python/uvicorn).
+
+| Composant | `readOnlyRootFilesystem` activable ? | Raison |
+|---|:---:|---|
+| access-gateway | ✅ (OPT-IN) | stateless, sûr ; seules écritures = `/tmp` (emptyDir) |
+| onix-actions, actions-worker | ❌ | écrit des temporaires OCR / `.docx` sur le rootfs |
+| Ollama | ❌ | écrit/lit les modèles (PVC + extractions sur rootfs) |
+| Onyx api/web/background/model-servers | ❌ | écritures runtime amont non auditées (cache HF en emptyDir, supervisord, etc.) |
+
+- Défaut OFF ⇒ **rendu inchangé** (aucun `securityContext` conteneur ni volume
+  `/tmp` rendu). Activable : `--set accessGateway.readOnlyRootFilesystem=true`.
+- **Pourquoi seulement la gateway** : c'est le seul workload du chart à la fois
+  stateless ET dont l'image (non-root, UID 10002) n'écrit pas sur disque hors
+  `/tmp`. L'imposer aux autres casserait leur boot/fonctionnement (cf. tableau).
+- **Validé statiquement** (`helm template`) : rendu correct quand activé (rootfs RO
+  + emptyDir `/tmp`, pod-securityContext non-root inchangé). Comportement runtime
+  (la gateway n'écrit nulle part ailleurs que `/tmp`) **à vérifier sur AKS**.
+
+### NetworkPolicy — micro-segmentation EST-OUEST (OPT-IN STRICT, défaut OFF)
+
+Template `templates/networkpolicy.yaml`, gardé par `networkPolicy.enabled` (défaut
+`false`). **Pourquoi OPT-IN** : une NetworkPolicy n'a d'effet que si le **CNI** du
+cluster l'implémente (Calico, Cilium, Azure NPM) ; sur un CNI sans support, l'objet
+est *accepté mais ignoré* (faux sentiment de sécurité), et un default-deny mal
+calibré *coupe le trafic légitime*. Non testable hors cluster ⇒ **désactivé par
+défaut** (aucun objet rendu, rendu par défaut inchangé), à activer ET **valider en
+recette AKS**.
+
+**Modèle — INGRESS-ONLY (jamais d'egress restreint)** :
+- Un **default-deny *ingress*** qui ne sélectionne QUE les pods onix
+  (`app.kubernetes.io/part-of: onix` + `instance`) ⇒ **n'affecte PAS le data-tier**
+  (Postgres/Redis/OpenSearch/MinIO des sous-charts, labels différents).
+- **Aucun egress restreint** (pas de `policyType: Egress`) : l'egress reste ouvert
+  → DNS (kube-dns), data-tier in-cluster, endpoints **managés Azure** (Postgres/
+  Redis FQDN) et **Microsoft Graph** (gateway) ne sont **jamais coupés**. L'egress
+  est volontairement laissé à une recette dédiée.
+- Des policies ingress **rouvrent explicitement** le trafic service-à-service réel
+  (additif), une règle commentée par flux :
+
+| NetworkPolicy | Pod ciblé (ingress) | Sources autorisées | Port |
+|---|---|---|---|
+| `*-allow-api` | api | ingress-controller (ns), webserver, access-gateway | `api.port` |
+| `*-allow-webserver` | webserver | ingress-controller (ns) | `webserver.port` |
+| `*-allow-inference-model-server` | inférence | api, background | `inferenceModelServer.port` |
+| `*-allow-index-model-server` | indexation | background, api | `indexModelServer.port` |
+| `*-allow-actions` | onix-actions | api (+ monitoring ns si posé) | `actions.port` |
+| `*-allow-actions-broker` | RabbitMQ | actions, actions-worker | `broker.port` |
+| `*-allow-access-gateway` *(si `accessGateway.enabled`)* | gateway | ingress-controller (ns) (+ monitoring ns) | `accessGateway.port` |
+| `*-allow-ollama` *(si `ollama.enabled`)* | Ollama | actions, actions-worker, access-gateway | `ollama.port` |
+
+Réglages : `networkPolicy.ingressControllerNamespaceLabels` (labels du ns du
+contrôleur, ex. `{kubernetes.io/metadata.name: ingress-nginx}` ; vide ⇒ entrée
+publique depuis *tout* ns, à resserrer) et `networkPolicy.monitoringNamespaceLabels`
+(ns Prometheus pour autoriser le scrape `/metrics` ; vide ⇒ pas de règle de scrape).
+
+- **Validé statiquement** : défaut ⇒ **0 NetworkPolicy** rendue (`helm template …
+  | grep -c NetworkPolicy` = 0, y compris `-f values-azure.yaml` et
+  `-f values-kind-smoke.yaml`) ; `--set networkPolicy.enabled=true` ⇒ **8**
+  policies (9 avec `accessGateway.enabled=true`), YAML re-parsé sans erreur,
+  sélecteurs/ports cohérents avec les templates. **Comportement runtime
+  (application effective par le CNI) à vérifier sur AKS** (Azure NPM ou Calico).
+
 ### Suite (hors de cette vague — nécessite un changement d'image ou de runtime)
 - **Non-root pour Onyx/Ollama** : exige de rebuild les images amont avec un
   `USER onyx`/`USER ollama` (et des permissions PVC adaptées). Tant que les images
   publiées tournent en root, le manifeste ne peut pas l'imposer sans casser le boot.
-- **NetworkPolicy** : aucune `NetworkPolicy` n'est livrée dans le chart (cloisonnement
-  réseau est-ouest à câbler selon le CNI du cluster). À ajouter en recette.
+- **NetworkPolicy egress** : le cloisonnement *sortant* (allowlist egress par
+  composant : DNS + data-tier + endpoints managés) reste à câbler en recette,
+  CNI-dépendant et risqué sans cluster pour le valider.
+- **readOnlyRootFS Onyx/Ollama/actions** : exige soit des emptyDir sur tous les
+  chemins d'écriture (à inventorier image par image), soit un rebuild ; hors vague.
 
 ---
 
@@ -352,6 +422,13 @@ helm upgrade --install onix deploy/k8s/onix-ha -n onix \
   - **47 documents** data-tier activé **+ sous-charts officiels réels** (CNPG,
     OpenSearch, MinIO StatefulSet, Redis operator se rendent réellement).
   HPA `minReplicas: 2` sur les 7 services stateless ; **8 PodDisruptionBudgets**.
+- **Durcissement OPT-IN** (défaut OFF ⇒ rendu inchangé), validé par rendu :
+  - `networkPolicy.enabled=true` ⇒ **8** NetworkPolicy (9 avec `accessGateway.enabled`) ;
+    défaut ⇒ **0** (y compris `-f values-azure.yaml` / `-f values-kind-smoke.yaml`).
+  - `accessGateway.readOnlyRootFilesystem=true` ⇒ rootfs RO + emptyDir `/tmp` rendus ;
+    défaut ⇒ ni `securityContext` conteneur ni volume `/tmp`.
+  - **Effet RUNTIME (CNI applique la policy ; rootfs RO sans écriture hors `/tmp`)
+    À VÉRIFIER SUR AKS** — non testable hors cluster.
 - `gitleaks` → **0 secret** (aucune valeur sensible dans le chart : tout en Secret K8s).
 
 ### Exige un **cluster réel** (NON couvert ici — à valider en recette)
@@ -397,6 +474,7 @@ deploy/k8s/onix-ha/
     migrations-job.yaml       # Alembic en Job (hook Helm pre-install/upgrade)
     postgres-cluster.yaml     # CRD CloudNativePG Cluster + ScheduledBackup (PITR)
     ingress.yaml              # Ingress + TLS (cert-manager)
+    networkpolicy.yaml        # micro-segmentation EST-OUEST (OPT-IN, défaut OFF — §5bis)
     cronjob-opensearch-snapshot.yaml  # snapshot OS à chaud (S3/MinIO)
     cronjob-minio-mirror.yaml         # miroir MinIO à chaud
     NOTES.txt
