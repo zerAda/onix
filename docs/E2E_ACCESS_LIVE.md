@@ -14,13 +14,44 @@ votre vrai tenant Entra**, que onix accède réellement à **SharePoint**
 > `graph_client.py`, `graph_acl.py`, `config.py`.
 > Référence harnais : [`../access-gateway/tests/e2e/README_ACCESS_E2E.md`](../access-gateway/tests/e2e/README_ACCESS_E2E.md).
 
+## (a0) Choisir le mode d'authentification
+
+Le harnais accepte **deux modes** (variable `ONIX_E2E_AUTH`) ; l'accès Fabric est
+**LECTURE SEULE, tables GOLD uniquement** dans les deux cas (cf.
+[`connectors/FABRIC.md`](connectors/FABRIC.md) §1 bis).
+
+| Mode | `ONIX_E2E_AUTH` | Identité | Secret en repo |
+|---|---|---|---|
+| **Azure CLI** (recommandé poste dev ; défaut si `az` présent) | `azcli` | `az login` | **aucun** |
+| **Client secret** | `clientsecret` | SPN client credentials | `ONIX_E2E_CLIENT_SECRET` (hors-repo) |
+
+### Procédure `az login` (mode azcli — zéro secret)
+
+```bash
+az login                                   # connecte votre identité Entra
+az account show --query tenantId -o tsv    # vérifie le tenant courant
+export ONIX_E2E_AUTH=azcli                 # explicite (sinon auto si `az` présent)
+export ONIX_E2E_TENANT_ID=<votre-tenant>   # requis ; le reste vient de az login
+```
+
+Le harnais acquiert alors **tous** les jetons (Fabric, OneLake/storage, Power BI,
+Graph) via `az account get-access-token` : **aucun `ONIX_E2E_CLIENT_ID` /
+`ONIX_E2E_CLIENT_SECRET` n'est requis**. Votre identité `az login` doit avoir
+les rôles/permissions ciblés (rôle de workspace Fabric, `Sites.Read.All` côté
+Graph si vous testez aussi SharePoint). Le jeton n'est jamais journalisé.
+
 ## (a) Prérequis — à faire AVANT de lancer
 
 À exécuter **sur votre poste az-connecté** (pas dans le conteneur). Détails de
 scope Fabric : [`connectors/FABRIC.md`](connectors/FABRIC.md) ; SharePoint :
 [`connectors/SHAREPOINT.md`](connectors/SHAREPOINT.md).
 
-1. **App Entra (SPN) + permissions Graph + secret.** Lancez le script idempotent
+> En mode **azcli**, l'étape 1 ci-dessous (création du SPN + secret) est
+> **facultative** : l'identité provient de `az login`. Elle reste utile en mode
+> **clientsecret** ou pour un déploiement en service.
+
+1. **App Entra (SPN) + permissions Graph + secret** (mode clientsecret / service).
+   Lancez le script idempotent
    [`../scripts/setup-fabric-app.sh`](../scripts/setup-fabric-app.sh) :
    ```bash
    TENANT_ID=<votre-tenant> bash scripts/setup-fabric-app.sh
@@ -50,13 +81,19 @@ Le harnais ne contient **aucun secret** : tout vient de l'environnement. Un bloc
 ne s'exécute que si **toutes** ses variables requises sont présentes ; sinon il
 est **SKIP** (le reste tourne). Aucun jeton/secret n'est jamais journalisé.
 
+### Mode d'auth (optionnel)
+
+| Variable | Défaut | Sens |
+|---|---|---|
+| `ONIX_E2E_AUTH` | `azcli` si `az` présent, sinon `clientsecret` | mode d'auth ∈ {`azcli`, `clientsecret`} |
+
 ### Communes — REQUISES pour tout bloc
 
-| Variable | Sens |
-|---|---|
-| `ONIX_E2E_TENANT_ID` | GUID du tenant Entra |
-| `ONIX_E2E_CLIENT_ID` | appId du SPN (client credentials) |
-| `ONIX_E2E_CLIENT_SECRET` | secret du SPN (**jamais journalisé**) |
+| Variable | Requis | Sens |
+|---|---|---|
+| `ONIX_E2E_TENANT_ID` | ✅ (tous modes) | GUID du tenant Entra (en azcli, déductible de `az account show`) |
+| `ONIX_E2E_CLIENT_ID` | clientsecret | appId du SPN (client credentials) |
+| `ONIX_E2E_CLIENT_SECRET` | clientsecret | secret du SPN (**jamais journalisé**) |
 
 ### Bloc A — SharePoint (toutes requises)
 
@@ -68,16 +105,22 @@ est **SKIP** (le reste tourne). Aucun jeton/secret n'est jamais journalisé.
 | `ONIX_E2E_SP_USER_OK` | utilisateur **attendu autorisé** (oid ou UPN) |
 | `ONIX_E2E_SP_USER_DENIED` | utilisateur **attendu refusé** (oid ou UPN) |
 
-### Bloc B — Fabric (requises + optionnelles)
+### Bloc B — Fabric (requises + optionnelles) — **GOLD-ONLY, lecture seule**
+
+Le harnais câble le workspace/item ci-dessous en `GATEWAY_FABRIC_GOLD_*` : seules
+les **tables gold** du lakehouse ciblé sont lisibles (cf.
+[`connectors/FABRIC.md`](connectors/FABRIC.md) §1 bis). Un `ONIX_E2E_ONELAKE_PATH`
+hors préfixe gold est **refusé** (fail-closed).
 
 | Variable | Requis | Sens |
 |---|---|---|
-| `ONIX_E2E_FABRIC_WORKSPACE_ID` | ✅ | id du workspace Fabric |
-| `ONIX_E2E_FABRIC_ITEM_ID` | ✅ | id de l'item (lakehouse…) |
+| `ONIX_E2E_FABRIC_WORKSPACE_ID` | ✅ | id du workspace **GOLD** |
+| `ONIX_E2E_FABRIC_ITEM_ID` | ✅ | id du **lakehouse gold** |
 | `ONIX_E2E_FABRIC_ITEM_TYPE` | ✅ | type d'item (ex. `Lakehouse`) |
 | `ONIX_E2E_FABRIC_PRINCIPAL_OK` | ✅ | principal **attendu autorisé** (oid) |
 | `ONIX_E2E_FABRIC_PRINCIPAL_DENIED` | ✅ | principal **attendu refusé** (oid) |
-| `ONIX_E2E_ONELAKE_PATH` | optionnel | chemin OneLake à lire (sinon listing seul) |
+| `ONIX_E2E_ONELAKE_PATH` | optionnel | chemin à lire — **DOIT** être sous les tables gold |
+| `ONIX_E2E_FABRIC_GOLD_TABLES_PREFIX` | optionnel | préfixe tables gold (défaut `Tables`) |
 | `ONIX_E2E_PBI_WORKSPACE_ID` | optionnel | workspace Power BI à lister (active B3) |
 
 ### Réglages réseau (optionnels)
@@ -90,15 +133,24 @@ est **SKIP** (le reste tourne). Aucun jeton/secret n'est jamais journalisé.
 
 > Le harnais mappe `ONIX_E2E_TENANT_ID`/`_CLIENT_ID`/`_CLIENT_SECRET` vers les
 > `GATEWAY_GRAPH_*` lus par `app.config` ; Fabric **hérite du même SPN** par
-> défaut (cf. [`connectors/FABRIC.md`](connectors/FABRIC.md) §4).
+> défaut (cf. [`connectors/FABRIC.md`](connectors/FABRIC.md) §4). En mode
+> **azcli**, il pose `GATEWAY_FABRIC_USE_AZCLI=true` (jetons via `az`, sans
+> secret) et câble les `GATEWAY_FABRIC_GOLD_*` à partir des cibles Fabric.
 
 ## (c) Lancer + interpréter
 
 ```bash
-# Rappel des variables, sans rien exécuter :
+# Rappel des variables, sans rien exécuter (affiche aussi le mode d'auth actif) :
 python access-gateway/tests/e2e/run_access_e2e.py --list-vars
 
-# Exécution (exemple bloc Fabric + commun ; ajoutez les ONIX_E2E_SP_* pour A) :
+# Exemple A — mode azcli (zéro secret ; après `az login`) :
+ONIX_E2E_AUTH=azcli ONIX_E2E_TENANT_ID=... \
+ONIX_E2E_FABRIC_WORKSPACE_ID=... ONIX_E2E_FABRIC_ITEM_ID=... ONIX_E2E_FABRIC_ITEM_TYPE=Lakehouse \
+ONIX_E2E_FABRIC_PRINCIPAL_OK=... ONIX_E2E_FABRIC_PRINCIPAL_DENIED=... \
+    python access-gateway/tests/e2e/run_access_e2e.py
+
+# Exemple B — mode clientsecret (SPN ; secret hors-repo) :
+ONIX_E2E_AUTH=clientsecret \
 ONIX_E2E_TENANT_ID=...        ONIX_E2E_CLIENT_ID=...   ONIX_E2E_CLIENT_SECRET=... \
 ONIX_E2E_FABRIC_WORKSPACE_ID=... ONIX_E2E_FABRIC_ITEM_ID=... ONIX_E2E_FABRIC_ITEM_TYPE=Lakehouse \
 ONIX_E2E_FABRIC_PRINCIPAL_OK=... ONIX_E2E_FABRIC_PRINCIPAL_DENIED=... \
@@ -123,7 +175,9 @@ Dépannage rapide des FAIL :
   « Service principals can use Fabric APIs » non activé / pas de rôle workspace),
   ou ids erronés.
 - **B2 = FAIL** → rôle **données** insuffisant (Viewer ne lit pas OneLake : il
-  faut **Member**/Contributor), ou `ONIX_E2E_FABRIC_ITEM_TYPE` / chemin faux.
+  faut **Member**/Contributor), ou `ONIX_E2E_FABRIC_ITEM_TYPE` / chemin faux, ou
+  **chemin hors périmètre gold** (`ONIX_E2E_ONELAKE_PATH` doit viser une table
+  sous le préfixe gold, défaut `Tables` — cf. `is_gold_path`).
 - **A3 / B5 = FAIL** → **FUITE** : un non-autorisé a été accordé (alerte dure ;
   vérifiez les roleAssignments / permissions de l'item).
 - **A2 / B4 = FAIL** → un autorisé a été refusé : vérifiez le rôle/permission du
@@ -155,8 +209,9 @@ make tune && make secrets && make up && make verify   # démarre + contrôle e2e
 
 | Étape | Mockable ? |
 |---|---|
-| Tests unitaires `fabric_client`/`fabric_acl` (offline) | ✅ provider de jeton injecté (`access-gateway/tests`) |
-| `run_access_e2e.py` (A1..B5) | ❌ **vrai tenant** (jeton réel, vrais ids, vrais rôles) |
+| Tests unitaires `fabric_client`/`fabric_acl` (offline) | ✅ provider de jeton injecté + `runner` az simulé (`access-gateway/tests`) |
+| Validation `is_gold_path` / ACL gold-only (offline) | ✅ tests dédiés (autorise gold, refuse hors-gold) |
+| `run_access_e2e.py` (A1..B5) | ❌ **vrai tenant** (jeton réel via `az login` ou SPN, vrais ids/rôles) |
 | Réglages tenant Fabric / rôles workspace | ❌ Admin portal, votre tenant |
 | Garde-fous `run_e2e.py` (21 vecteurs) | ❌ Ollama réel (LLM local), stack montée |
 

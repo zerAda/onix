@@ -13,6 +13,28 @@ script autonome qui imprime un rapport et renvoie un code de sortie.
 > Zéro secret en repo : tout vient de variables d'environnement. Aucun jeton ni
 > secret n'est jamais journalisé.
 
+## Mode d'authentification (`ONIX_E2E_AUTH`)
+
+Deux modes — l'**accès Fabric d'onix est LECTURE SEULE, restreint aux tables
+GOLD** dans les deux cas (cf. plus bas) :
+
+| Mode | `ONIX_E2E_AUTH` | Identité | Secret requis ? |
+|---|---|---|---|
+| **Azure CLI** (défaut si `az` présent) | `azcli` | `az login` (utilisateur / identité managée) | ❌ **non** — jetons réels via `az account get-access-token` |
+| **Client secret** | `clientsecret` | SPN (client credentials) | ✅ `ONIX_E2E_CLIENT_SECRET` |
+
+En mode `azcli` : faites `az login` au préalable ; seul `ONIX_E2E_TENANT_ID` est
+exigé (le tenant peut être déduit de `az account show`). `ONIX_E2E_CLIENT_ID` /
+`ONIX_E2E_CLIENT_SECRET` ne sont **pas** nécessaires. Le harnais acquiert les
+jetons (Fabric, OneLake/storage, Power BI, Graph) via `az` — **zéro secret en
+repo**.
+
+```bash
+az login                                  # connecte votre identité
+export ONIX_E2E_AUTH=azcli                # explicite (sinon auto si `az` présent)
+export ONIX_E2E_TENANT_ID=<votre-tenant>  # requis ; le reste vient de az login
+```
+
 ## Scénarios
 
 | Code | Bloc | Vérifie |
@@ -29,11 +51,22 @@ script autonome qui imprime un rapport et renvoie un code de sortie.
 Un bloc (A ou B) ne s'exécute que si **toutes** ses variables requises sont
 présentes ; sinon il est marqué **SKIP** (le reste tourne).
 
+> **Fabric = LECTURE SEULE, tables GOLD uniquement.** Le bloc B mappe
+> automatiquement le workspace/lakehouse ciblés en `GATEWAY_FABRIC_GOLD_*` : le
+> client OneLake **refuse** (fail-closed) tout chemin hors
+> `{lakehouse}.Lakehouse/{préfixe gold}/...`, et `can_principal_read` n'accorde
+> **que** pour le lakehouse gold. `ONIX_E2E_ONELAKE_PATH` doit donc viser une
+> table gold (sous le préfixe, défaut `Tables`).
+
 ## Variables d'environnement
 
 ```bash
+# Mode d'auth (optionnel ; défaut azcli si `az` présent)
+export ONIX_E2E_AUTH=azcli              # ou clientsecret
+
 # Communes (REQUISES pour tout bloc)
-export ONIX_E2E_TENANT_ID=...           # GUID du tenant Entra
+export ONIX_E2E_TENANT_ID=...           # GUID du tenant Entra (requis)
+# Mode clientsecret UNIQUEMENT :
 export ONIX_E2E_CLIENT_ID=...           # appId du SPN (client credentials)
 export ONIX_E2E_CLIENT_SECRET=...       # secret du SPN (jamais journalisé)
 
@@ -44,15 +77,16 @@ export ONIX_E2E_SP_ITEM_ID=...          # id du driveItem servant à la preuve R
 export ONIX_E2E_SP_USER_OK=...          # utilisateur attendu autorisé (oid ou UPN)
 export ONIX_E2E_SP_USER_DENIED=...      # utilisateur attendu refusé (oid ou UPN)
 
-# Bloc B — Fabric (requises)
-export ONIX_E2E_FABRIC_WORKSPACE_ID=...
-export ONIX_E2E_FABRIC_ITEM_ID=...
+# Bloc B — Fabric (requises ; GOLD-ONLY, lecture seule)
+export ONIX_E2E_FABRIC_WORKSPACE_ID=...      # workspace GOLD
+export ONIX_E2E_FABRIC_ITEM_ID=...           # lakehouse GOLD
 export ONIX_E2E_FABRIC_ITEM_TYPE=Lakehouse
 export ONIX_E2E_FABRIC_PRINCIPAL_OK=...      # oid attendu autorisé
 export ONIX_E2E_FABRIC_PRINCIPAL_DENIED=...  # oid attendu refusé
 # Bloc B — optionnelles
-export ONIX_E2E_ONELAKE_PATH=...        # chemin OneLake à lire
-export ONIX_E2E_PBI_WORKSPACE_ID=...    # workspace Power BI à lister
+export ONIX_E2E_ONELAKE_PATH=...             # chemin à lire (DOIT être sous les tables gold)
+export ONIX_E2E_FABRIC_GOLD_TABLES_PREFIX=Tables  # préfixe gold (défaut Tables)
+export ONIX_E2E_PBI_WORKSPACE_ID=...         # workspace Power BI à lister
 
 # Réglages réseau (optionnels)
 export ONIX_E2E_HTTP_TIMEOUT=20         # timeout HTTP (s)

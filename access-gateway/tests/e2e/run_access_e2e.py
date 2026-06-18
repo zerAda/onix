@@ -33,10 +33,18 @@ B) Fabric (via fabric_client / fabric_acl, app-only par audience)
 ────────────────────────────────────────────────────────────────────────────
 VARIABLES D'ENVIRONNEMENT
 ────────────────────────────────────────────────────────────────────────────
+Mode d'authentification (ONIX_E2E_AUTH) :
+  azcli         (DÉFAUT si `az` présent) — jetons réels via Azure CLI
+                (`az account get-access-token`). L'identité vient de `az login` ;
+                ONIX_E2E_CLIENT_SECRET n'est PAS requis. Le tenant est requis
+                (ONIX_E2E_TENANT_ID) OU déduit de `az account show`.
+  clientsecret  — SPN en client credentials (exige ONIX_E2E_CLIENT_SECRET).
+
 Communes (REQUISES pour tout bloc) :
-  ONIX_E2E_TENANT_ID         GUID du tenant Entra
-  ONIX_E2E_CLIENT_ID         appId du SPN (client credentials)
-  ONIX_E2E_CLIENT_SECRET     secret du SPN  (JAMAIS journalisé)
+  ONIX_E2E_TENANT_ID         GUID du tenant Entra (requis ; en azcli, déduit de
+                             `az account show` s'il est absent)
+  ONIX_E2E_CLIENT_ID         appId du SPN (mode clientsecret uniquement)
+  ONIX_E2E_CLIENT_SECRET     secret du SPN (mode clientsecret uniquement ; JAMAIS journalisé)
 
 SharePoint (bloc A — exécuté si TOUTES présentes) :
   ONIX_E2E_SP_SITE_ID        id du site SharePoint (host,siteGuid,webGuid)
@@ -45,14 +53,19 @@ SharePoint (bloc A — exécuté si TOUTES présentes) :
   ONIX_E2E_SP_USER_OK        utilisateur ATTENDU autorisé (oid ou UPN)
   ONIX_E2E_SP_USER_DENIED    utilisateur ATTENDU refusé   (oid ou UPN)
 
-Fabric (bloc B — exécuté si les REQUISES présentes) :
-  ONIX_E2E_FABRIC_WORKSPACE_ID     id du workspace Fabric            (requis)
-  ONIX_E2E_FABRIC_ITEM_ID          id de l'item (lakehouse…)         (requis)
+Fabric (bloc B — exécuté si les REQUISES présentes ; GOLD-ONLY, lecture seule) :
+  ONIX_E2E_FABRIC_WORKSPACE_ID     id du workspace GOLD              (requis)
+  ONIX_E2E_FABRIC_ITEM_ID          id du lakehouse GOLD              (requis)
   ONIX_E2E_FABRIC_ITEM_TYPE        type d'item (ex. Lakehouse)       (requis)
   ONIX_E2E_FABRIC_PRINCIPAL_OK     principal ATTENDU autorisé (oid)  (requis)
   ONIX_E2E_FABRIC_PRINCIPAL_DENIED principal ATTENDU refusé   (oid)  (requis)
-  ONIX_E2E_ONELAKE_PATH            chemin OneLake à lire (optionnel)
+  ONIX_E2E_ONELAKE_PATH            chemin OneLake à lire — DOIT être sous le
+                                   préfixe des tables gold (optionnel)
+  ONIX_E2E_FABRIC_GOLD_TABLES_PREFIX  préfixe tables gold (optionnel ; défaut Tables)
   ONIX_E2E_PBI_WORKSPACE_ID        workspace Power BI à lister (optionnel)
+
+Le bloc B câble automatiquement le périmètre GOLD : le workspace/item ci-dessus
+sont posés comme GATEWAY_FABRIC_GOLD_* → seules les tables gold sont lisibles.
 
 Réglages réseau (optionnels) :
   ONIX_E2E_HTTP_TIMEOUT      timeout HTTP en secondes (défaut 20)
@@ -79,6 +92,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -152,20 +166,59 @@ def _missing(names: list[str]) -> list[str]:
     return [n for n in names if not _env(n)]
 
 
+def _az_available() -> bool:
+    """`True` si l'exécutable `az` (Azure CLI) est sur le PATH."""
+    return shutil.which("az") is not None
+
+
+def auth_mode() -> str:
+    """Mode d'authentification effectif : `azcli` (défaut si `az` présent) ou
+    `clientsecret`. Surchargé par ONIX_E2E_AUTH ∈ {azcli, clientsecret}."""
+    raw = _env("ONIX_E2E_AUTH").lower()
+    if raw in {"azcli", "clientsecret"}:
+        return raw
+    # Auto : az si la CLI est dispo, sinon client secret.
+    return "azcli" if _az_available() else "clientsecret"
+
+
 def _build_settings():
     """Construit un `Settings` à partir des ONIX_E2E_* communs + des hôtes.
 
     On mappe les identifiants e2e vers les variables GATEWAY_* lues par
     ``app.config.get_settings`` (source unique de vérité), puis on réinitialise
     le cache LRU pour relire l'environnement. AUCUN secret n'est imprimé.
+
+    Mode `azcli` : l'identité vient de `az login` ; on active GATEWAY_FABRIC_USE_AZCLI
+    et on ne pose PAS de client_secret. On câble aussi le périmètre GOLD à partir
+    des cibles Fabric (workspace/item) → lecture restreinte aux tables gold.
     """
     import app.config as gw_config
 
     os.environ["GATEWAY_GRAPH_TENANT_ID"] = _env("ONIX_E2E_TENANT_ID")
     os.environ["GATEWAY_GRAPH_CLIENT_ID"] = _env("ONIX_E2E_CLIENT_ID")
-    os.environ["GATEWAY_GRAPH_CLIENT_SECRET"] = _env("ONIX_E2E_CLIENT_SECRET")
-    # Fabric hérite par défaut du SPN Graph (même Entra) — cf. config.py. On ne
-    # pose pas les GATEWAY_FABRIC_* dédiés : le repli suffit pour le harnais.
+
+    mode = auth_mode()
+    if mode == "azcli":
+        # Pas de secret : l'identité vient de `az login`. On active le provider az.
+        os.environ["GATEWAY_GRAPH_CLIENT_SECRET"] = ""
+        os.environ["GATEWAY_FABRIC_USE_AZCLI"] = "true"
+    else:
+        os.environ["GATEWAY_GRAPH_CLIENT_SECRET"] = _env("ONIX_E2E_CLIENT_SECRET")
+        os.environ["GATEWAY_FABRIC_USE_AZCLI"] = "false"
+
+    # Périmètre GOLD : on mappe les cibles Fabric e2e vers les GATEWAY_FABRIC_GOLD_*
+    # → seules les tables gold du lakehouse ciblé sont lisibles (cf. config.py).
+    if _env("ONIX_E2E_FABRIC_WORKSPACE_ID"):
+        os.environ["GATEWAY_FABRIC_GOLD_WORKSPACE_ID"] = _env("ONIX_E2E_FABRIC_WORKSPACE_ID")
+    if _env("ONIX_E2E_FABRIC_ITEM_ID"):
+        os.environ["GATEWAY_FABRIC_GOLD_LAKEHOUSE_ID"] = _env("ONIX_E2E_FABRIC_ITEM_ID")
+    if _env("ONIX_E2E_FABRIC_ITEM_TYPE"):
+        os.environ["GATEWAY_FABRIC_GOLD_LAKEHOUSE_TYPE"] = _env("ONIX_E2E_FABRIC_ITEM_TYPE")
+    if _env("ONIX_E2E_FABRIC_GOLD_TABLES_PREFIX"):
+        os.environ["GATEWAY_FABRIC_GOLD_TABLES_PREFIX"] = _env(
+            "ONIX_E2E_FABRIC_GOLD_TABLES_PREFIX"
+        )
+
     gw_config.reset_settings_cache()
     return gw_config.get_settings()
 
@@ -203,10 +256,17 @@ async def run_sharepoint(settings, report: Report, timeout: float) -> None:
     print("BLOC A — SharePoint (Microsoft Graph, app-only)")
     print("─" * 78)
 
+    # En mode azcli, le jeton Graph vient de `az` (zéro secret) ; sinon client
+    # credentials via acquire_app_token (provider par défaut).
+    graph_provider = _graph_token_provider(settings)
+
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
         # ── A1 : connectivité (jeton + listing du drive) ──────────────────
         try:
-            token = await acquire_app_token(settings, client)
+            token = (
+                await graph_provider() if graph_provider
+                else await acquire_app_token(settings, client)
+            )
             # Preuve de lecture : lister les enfants de la racine du drive.
             url = (
                 f"{settings.graph_host}/v1.0/sites/{site_id}"
@@ -249,7 +309,9 @@ async def run_sharepoint(settings, report: Report, timeout: float) -> None:
         # ── ACL VIVANTE de l'item de test (réutilise build_graph_acl) ──────
         # Mapping minimal : un doc_id factice ↔ l'item SharePoint réel.
         doc_id = "e2e-sp-item"
-        session = GraphSession(client=client, settings=settings)
+        session = GraphSession(
+            client=client, settings=settings, token_provider=graph_provider
+        )
         try:
             acl = await build_graph_acl(
                 session,
@@ -274,7 +336,7 @@ async def run_sharepoint(settings, report: Report, timeout: float) -> None:
 
         # ── A2 : utilisateur AUTORISÉ doit être ACCORDÉ ───────────────────
         ok_principal, ok_note = await _resolve_principal(
-            user_ok, settings, client, fetch_transitive_group_ids
+            user_ok, settings, client, fetch_transitive_group_ids, graph_provider
         )
         if item_listed:
             granted_ok = acl.is_authorized(doc_id, ok_principal)
@@ -289,7 +351,7 @@ async def run_sharepoint(settings, report: Report, timeout: float) -> None:
 
         # ── A3 : utilisateur NON-AUTORISÉ doit être REFUSÉ (fail-closed) ──
         denied_principal, denied_note = await _resolve_principal(
-            user_denied, settings, client, fetch_transitive_group_ids
+            user_denied, settings, client, fetch_transitive_group_ids, graph_provider
         )
         if item_listed:
             granted_denied = acl.is_authorized(doc_id, denied_principal)
@@ -304,21 +366,24 @@ async def run_sharepoint(settings, report: Report, timeout: float) -> None:
             )
 
 
-async def _resolve_principal(user, settings, client, fetch_groups):
+async def _resolve_principal(user, settings, client, fetch_groups, token_provider=None):
     """Construit un `Principal` + une note, avec ses groupes transitifs
     (best-effort). Renvoie ``(principal, note)``.
 
     Si la résolution des groupes échoue (droits Graph insuffisants), on retombe
     sur une liste vide : la décision RBAC reste valide (fail-closed) et la note
     le mentionne. On accepte oid OU UPN comme identifiant (les deux sont testés
-    par GraphDocACL : override user gagne, sinon appartenance de groupe)."""
+    par GraphDocACL : override user gagne, sinon appartenance de groupe).
+    `token_provider` (mode azcli) fournit le jeton Graph via `az` (zéro secret)."""
     from app.identity import Principal
     from app.graph_client import GraphError
 
     groups: list[str] = []
     note = ""
     try:
-        groups = await fetch_groups(user, settings, client=client)
+        groups = await fetch_groups(
+            user, settings, client=client, token_provider=token_provider
+        )
     except GraphError as exc:
         note = f" (groupes non résolus : {exc})"
     upn = user if "@" in user else None
@@ -364,10 +429,14 @@ _FABRIC_VARS = [
 
 
 async def run_fabric(settings, report: Report, timeout: float) -> None:
-    """Exécute B1..B5 (connectivité contrôle/OneLake/Power BI + RBAC par-item)."""
+    """Exécute B1..B5 (connectivité contrôle/OneLake/Power BI + RBAC par-item).
+
+    GOLD-ONLY : le workspace/item ciblés ont été câblés en GATEWAY_FABRIC_GOLD_*
+    (cf. _build_settings) → OneLake ne lit que les tables gold ; can_principal_read
+    refuse tout item hors gold."""
     import httpx
 
-    from app.fabric_client import FabricClient, FabricError
+    from app.fabric_client import FabricClient, FabricError, make_azcli_token_provider
     from app.fabric_acl import can_principal_read
     from app.graph_client import GraphError, fetch_transitive_group_ids
 
@@ -384,7 +453,12 @@ async def run_fabric(settings, report: Report, timeout: float) -> None:
     print("─" * 78)
 
     http = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
-    fabric = FabricClient(settings, client=http)
+    # En mode azcli, le client Fabric acquiert ses jetons via `az` (zéro secret) ;
+    # en clientsecret, on laisse le provider par défaut (client credentials).
+    token_provider = (
+        make_azcli_token_provider(settings) if settings.fabric_use_azcli else None
+    )
+    fabric = FabricClient(settings, client=http, token_provider=token_provider)
     try:
         # ── B1 : connectivité contrôle Fabric (workspaces + items) ────────
         try:
@@ -443,9 +517,12 @@ async def run_fabric(settings, report: Report, timeout: float) -> None:
             )
 
         # ── Groupes transitifs des principals (best-effort, via Graph) ────
-        groups_ok = await _fabric_groups(principal_ok, settings, http, fetch_transitive_group_ids)
+        graph_provider = _graph_token_provider(settings)
+        groups_ok = await _fabric_groups(
+            principal_ok, settings, http, fetch_transitive_group_ids, graph_provider
+        )
         groups_denied = await _fabric_groups(
-            principal_denied, settings, http, fetch_transitive_group_ids
+            principal_denied, settings, http, fetch_transitive_group_ids, graph_provider
         )
 
         # ── B4 : principal AUTORISÉ doit être ACCORDÉ ─────────────────────
@@ -489,16 +566,35 @@ async def run_fabric(settings, report: Report, timeout: float) -> None:
         await fabric.aclose()
 
 
-async def _fabric_groups(principal, settings, client, fetch_groups) -> list[str]:
+async def _fabric_groups(principal, settings, client, fetch_groups, token_provider=None) -> list[str]:
     """Résout les groupes Entra transitifs d'un principal (best-effort). Un SPN
     n'est pas un utilisateur Graph ; en cas d'échec on retourne [] (la décision
-    par roleAssignment direct reste valide)."""
+    par roleAssignment direct reste valide). En mode azcli, `token_provider`
+    fournit le jeton Graph via `az` (zéro secret)."""
     from app.graph_client import GraphError
 
     try:
-        return await fetch_groups(principal, settings, client=client)
+        return await fetch_groups(
+            principal, settings, client=client, token_provider=token_provider
+        )
     except GraphError:
         return []
+
+
+def _graph_token_provider(settings):
+    """Construit un fournisseur de jeton GRAPH (sans argument, signature attendue
+    par graph_client) via `az` en mode azcli ; sinon None (provider par défaut =
+    client credentials de graph_client)."""
+    if not settings.fabric_use_azcli:
+        return None
+    from app.fabric_client import AUDIENCE_GRAPH, acquire_token_via_azcli
+
+    tenant = settings.graph_tenant_id or None
+
+    async def _provider() -> str:
+        return acquire_token_via_azcli(AUDIENCE_GRAPH, tenant=tenant)
+
+    return _provider
 
 
 def _fabric_rbac_proof(principal, granted, n_groups, *, expected: bool) -> str:
@@ -515,28 +611,45 @@ def _fabric_rbac_proof(principal, granted, n_groups, *, expected: bool) -> str:
 # ───────────────────────────────────────────────────────────────────────────
 # Orchestration.
 # ───────────────────────────────────────────────────────────────────────────
-_COMMON_VARS = ["ONIX_E2E_TENANT_ID", "ONIX_E2E_CLIENT_ID", "ONIX_E2E_CLIENT_SECRET"]
+def _common_vars() -> list[str]:
+    """Variables communes REQUISES selon le mode d'auth.
+
+    * clientsecret : tenant + client id + secret (SPN client credentials).
+    * azcli        : tenant uniquement (l'identité vient de `az login` ; le secret
+                     n'est PAS requis). Le tenant peut même être déduit de
+                     `az account show`, mais on l'exige ici pour rester explicite.
+    """
+    if auth_mode() == "azcli":
+        return ["ONIX_E2E_TENANT_ID"]
+    return ["ONIX_E2E_TENANT_ID", "ONIX_E2E_CLIENT_ID", "ONIX_E2E_CLIENT_SECRET"]
 
 
 def _print_skip_total() -> None:
     """Message clair quand AUCUN bloc n'a ses variables (skip total → exit 2)."""
+    mode = auth_mode()
     print("═" * 78)
     print("ACCESS E2E — SKIP TOTAL : aucune cible configurée.")
     print("═" * 78)
     print(
         "\nCe harnais est LIVE-ONLY : il s'exécute contre un vrai tenant Entra.\n"
+        f"Mode d'auth actif : {mode} "
+        f"({'jetons via az login — zéro secret' if mode == 'azcli' else 'SPN client secret'}).\n"
+        "Surcharge possible via ONIX_E2E_AUTH ∈ {azcli, clientsecret}.\n"
         "Pour exécuter un bloc, définis ses variables d'environnement :\n"
     )
-    print("  Communes (REQUISES pour tout bloc) :")
-    for v in _COMMON_VARS:
+    print(f"  Communes (REQUISES pour tout bloc, mode {mode}) :")
+    for v in _common_vars():
         print(f"    - {v}")
     print("\n  Bloc A (SharePoint) — toutes requises :")
     for v in _SP_VARS:
         print(f"    - {v}")
-    print("\n  Bloc B (Fabric) — toutes requises :")
+    print("\n  Bloc B (Fabric) — toutes requises (GOLD-ONLY, lecture seule) :")
     for v in _FABRIC_VARS:
         print(f"    - {v}")
-    print("    Optionnelles : ONIX_E2E_ONELAKE_PATH, ONIX_E2E_PBI_WORKSPACE_ID")
+    print(
+        "    Optionnelles : ONIX_E2E_ONELAKE_PATH (sous tables gold), "
+        "ONIX_E2E_FABRIC_GOLD_TABLES_PREFIX, ONIX_E2E_PBI_WORKSPACE_ID"
+    )
     print("\n  Voir --help pour le détail. Sortie : code 2 (skip total).")
 
 
@@ -544,9 +657,10 @@ async def _amain(args: argparse.Namespace) -> int:
     timeout = float(os.environ.get("ONIX_E2E_HTTP_TIMEOUT", "20"))
 
     # Quelles cibles sont configurées ? (communes + spécifiques de chaque bloc)
-    common_missing = _missing(_COMMON_VARS)
-    sp_missing = _missing(_COMMON_VARS + _SP_VARS)
-    fabric_missing = _missing(_COMMON_VARS + _FABRIC_VARS)
+    common_vars = _common_vars()
+    common_missing = _missing(common_vars)
+    sp_missing = _missing(common_vars + _SP_VARS)
+    fabric_missing = _missing(common_vars + _FABRIC_VARS)
     want_sp = not sp_missing
     want_fabric = not fabric_missing
 
@@ -559,9 +673,12 @@ async def _amain(args: argparse.Namespace) -> int:
 
     print("═" * 78)
     print("ACCESS E2E (LIVE) — preuve SharePoint + Fabric à travers les modules onix")
+    print(f"  mode d'auth  : {auth_mode()}"
+          f"{' (jetons via az login)' if settings.fabric_use_azcli else ' (SPN client secret)'}")
     print(f"  hôte Graph   : {settings.graph_host}")
     print(f"  hôte Fabric  : {settings.fabric_api_host}")
     print(f"  hôte OneLake : {settings.onelake_host}")
+    print(f"  Fabric gold  : {'configuré' if settings.fabric_gold_configured else 'NON configuré'}")
     print(f"  timeout HTTP : {timeout:.0f}s")
     print("═" * 78)
 
