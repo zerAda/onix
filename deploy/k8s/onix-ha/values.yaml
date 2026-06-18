@@ -82,6 +82,27 @@ podSecurityContext:
     seccompProfile:
       type: RuntimeDefault
 
+# -----------------------------------------------------------------------------
+# NetworkPolicy — micro-segmentation réseau EST-OUEST (OPT-IN STRICT, défaut OFF).
+# Rend templates/networkpolicy.yaml SEULEMENT si enabled=true. Par défaut OFF =>
+# AUCUN objet NetworkPolicy rendu (rendu par défaut INCHANGÉ).
+# POURQUOI OPT-IN : une NetworkPolicy n'a d'effet que si le CNI du cluster
+# l'implémente (Calico/Cilium/Azure NPM) ; un default-deny mal calibré coupe le
+# trafic légitime. Non testable hors cluster ⇒ à activer ET valider en recette AKS.
+# Modèle : DEFAULT-DENY *ingress* (ne cible QUE les pods onix, pas le data-tier) +
+# autorisations ingress explicites du trafic service-à-service. AUCUN egress
+# restreint (l'absence de policyType Egress laisse DNS/data-tier/Graph ouverts).
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: false              # true => rend le default-deny ingress + les allow par composant
+  # Labels du NAMESPACE de l'ingress-controller (il vit généralement hors du ns onix).
+  # Ex. ingress-nginx : { kubernetes.io/metadata.name: ingress-nginx }. Vide =>
+  # l'entrée publique est autorisée depuis TOUT namespace (à RESSERRER en recette).
+  ingressControllerNamespaceLabels: {}
+  # Labels du NAMESPACE de Prometheus/monitoring (pour autoriser le scrape /metrics
+  # de actions/gateway). Vide => aucune règle de scrape inter-namespace ajoutée.
+  monitoringNamespaceLabels: {}
+
 # =============================================================================
 # 1) SERVICES STATELESS ONYX — replicas>=2 + HPA + PDB
 #    (noms alignés sur le chart officiel : api, webserver, background,
@@ -369,6 +390,17 @@ accessGateway:
     runAsUser: 10001
     seccompProfile:
       type: RuntimeDefault
+  # ---------------------------------------------------------------------------
+  # readOnlyRootFilesystem — durcissement CONTENEUR (OPT-IN STRICT, défaut OFF).
+  # Quand true, le conteneur access-gateway monte son rootfs en LECTURE SEULE
+  # (empêche l'écriture de webshells/binaires, durcit contre l'exfiltration).
+  # access-gateway est STATELESS et clairement sûr (aucune écriture disque
+  # nécessaire hors fichiers temporaires). On monte un emptyDir sur /tmp pour les
+  # écritures transitoires (Python/uvicorn, tempfile). Défaut OFF => rootfs RW
+  # (comportement INCHANGÉ). N'EST PAS appliqué à Onyx/Ollama/actions : Ollama écrit
+  # les modèles sur PVC, onix-actions écrit des temporaires OCR/.docx → un rootfs RO
+  # casserait leur boot/fonctionnement (cf. docs/HA_SCALING.md §5bis).
+  readOnlyRootFilesystem: false   # true => rootfs RO + emptyDir monté sur /tmp
   # ConfigMap (optionnelle) contenant doc_acl.json / mapping SharePoint, montée en
   # lecture seule sous /config. Générée hors-chart par le CronJob de sync Graph→ACL.
   # Vide => <fullname>-doc-acl (montage `optional: true`, absente = ACL vide).

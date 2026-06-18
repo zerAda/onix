@@ -1,0 +1,324 @@
+{{- /*
+NetworkPolicy — cloisonnement réseau EST-OUEST (micro-segmentation), OPT-IN STRICT.
+
+POURQUOI OPT-IN (défaut OFF) : une NetworkPolicy n'a d'EFFET que si le CNI du
+cluster l'implémente (Calico, Cilium, Azure NPM…). Sur un CNI qui ne la supporte
+pas, l'objet est ACCEPTÉ mais IGNORÉ → faux sentiment de sécurité. Et un
+default-deny mal calibré COUPE le trafic légitime (régression dure à diagnostiquer).
+On ne peut PAS valider ce comportement runtime sans cluster ici ⇒ ce template est
+DÉSACTIVÉ par défaut (`networkPolicy.enabled=false`) : aucun objet rendu, rendu
+par défaut INCHANGÉ. À activer + VALIDER en recette sur AKS (cf. docs/HA_SCALING.md §5bis).
+
+STRATÉGIE — INGRESS-ONLY (jamais d'egress restrictif) :
+  * On pose un DEFAULT-DENY *ingress* qui ne cible QUE les pods onix
+    (`app.kubernetes.io/part-of: onix`) — surtout PAS le data-tier (Postgres/Redis/
+    OpenSearch/MinIO déployés par les sous-charts officiels, labels différents).
+  * On n'impose AUCUNE règle EGRESS : l'absence de policyType Egress = tout egress
+    reste autorisé. C'est VOLONTAIRE — restreindre l'egress couperait le DNS
+    (kube-dns), l'accès au data-tier in-cluster ET aux endpoints managés Azure
+    (Postgres/Redis FQDN externes) et Microsoft Graph (gateway) → trop fragile sans
+    cluster pour le tester. L'egress est laissé à une recette dédiée.
+  * Chaque autre policy AUTORISE explicitement le trafic service-à-service réellement
+    observé dans les templates (flux commenté règle par règle). Les NetworkPolicy
+    sont ADDITIVES (union des `from` autorisés), elles affinent le default-deny.
+
+PORTÉE NAMESPACE : les sélecteurs `from` ciblent des pods du MÊME namespace que la
+release (podSelector seul = même ns). L'ingress-controller vit en général dans un
+AUTRE namespace ⇒ on l'autorise via `ingressControllerNamespaceLabels` (label de ns
+du contrôleur, ex. {kubernetes.io/metadata.name: ingress-nginx}). Si vide, on
+autorise tout namespace (podSelector {} + namespaceSelector {}) pour ne pas casser
+l'entrée publique — à RESSERRER en recette.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+{{- $fullname := include "onix.fullname" . -}}
+{{- $ns := .Values.networkPolicy.ingressControllerNamespaceLabels | default dict -}}
+# =============================================================================
+# 0) DEFAULT-DENY INGRESS — socle : tout pod onix refuse le trafic entrant non
+#    explicitement autorisé par les policies ci-dessous (modèle fail-closed).
+#    Ne sélectionne QUE les pods onix (part-of: onix) → n'affecte PAS le data-tier.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-default-deny-ingress
+  labels:
+    {{- include "onix.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: onix
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  # Aucune règle `ingress:` ⇒ tout ingress est REFUSÉ par défaut. Les policies
+  # suivantes rouvrent UNIQUEMENT les flux légitimes (union additive).
+---
+# =============================================================================
+# 1) API Onyx ← ingress (public) + webserver (INTERNAL_URL) + access-gateway (proxy)
+#    L'API est la cible du chat (gateway), du front (web→api) et de l'entrée publique.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-api
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "api") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Entrée publique : ingress-controller (autre namespace) — strip/auth gérés
+        # par l'ingress lui-même (cf. ingress.yaml). ns vide => tout ns autorisé.
+        {{- if $ns }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $ns | nindent 14 }}
+        {{- else }}
+        - namespaceSelector: {}
+        {{- end }}
+        # webserver Next.js : appelle l'API via INTERNAL_URL (webserver.yaml:34).
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "webserver") | nindent 14 }}
+        # access-gateway : proxy RBAC devant l'API (GATEWAY_ONYX_BASE_URL → api).
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "access-gateway") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.port }}
+---
+# =============================================================================
+# 2) WEBSERVER (front Next.js) ← ingress (public). Sert l'UI ; route `/` (ingress.yaml).
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-webserver
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "webserver") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "webserver") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if $ns }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $ns | nindent 14 }}
+        {{- else }}
+        - namespaceSelector: {}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.webserver.port }}
+---
+# =============================================================================
+# 3) MODEL SERVERS (inférence + indexation) ← api + background.
+#    L'API (requête) interroge l'inférence ; background (indexation) interroge
+#    l'index. On autorise les DEUX appelants vers les DEUX serveurs (simplicité ;
+#    surface réduite vs default-deny). Ports identiques (9000).
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-inference-model-server
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "inference-model-server") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "inference-model-server") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # api (chemin REQUÊTE) — embeddings/rerank à la requête (MODEL_SERVER_HOST).
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "api") | nindent 14 }}
+        # background (indexation) — peut aussi solliciter l'inférence selon la tâche.
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "background") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.inferenceModelServer.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-index-model-server
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "index-model-server") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "index-model-server") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # background (indexation) — embeddings à l'ingestion (INDEXING_MODEL_SERVER_HOST).
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "background") | nindent 14 }}
+        # api — fallback selon configuration Onyx.
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "api") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.indexModelServer.port }}
+---
+# =============================================================================
+# 4) onix-actions ← api (déclenche les actions) + (si scrappé) monitoring.
+#    Le default-deny couvre déjà l'isolement ; on rouvre l'appelant interne (api).
+#    NB : actions N'EST PAS routé par l'Ingress du chart → pas d'entrée publique.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-actions
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "actions") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "actions") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # api Onyx : appelle onix-actions (audit OCR, docgen…) sur le réseau interne.
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "api") | nindent 14 }}
+        {{- with .Values.networkPolicy.monitoringNamespaceLabels }}
+        # monitoring (Prometheus) : scrape /metrics si déployé hors du namespace onix.
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.actions.port }}
+{{- if .Values.actionsQueue.enabled }}
+---
+# =============================================================================
+# 5) actions-broker (RabbitMQ) ← actions + actions-worker (AMQP). File asynchrone.
+# =============================================================================
+{{- if .Values.actionsQueue.broker.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-actions-broker
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "actions-broker") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "actions-broker") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # producteurs (actions) ET consommateurs (worker Celery) de la file AMQP.
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "actions") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "actions-worker") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.actionsQueue.broker.port }}
+{{- end }}
+{{- end }}
+{{- if .Values.accessGateway.enabled }}
+---
+# =============================================================================
+# 6) access-gateway ← ingress (route chat OPT-IN). Proxy RBAC identity-aware.
+#    Rendu UNIQUEMENT si accessGateway.enabled (sinon le pod n'existe pas).
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-access-gateway
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "access-gateway") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "access-gateway") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Entrée publique (route chat → gateway via ingress.chatViaGateway).
+        {{- if $ns }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $ns | nindent 14 }}
+        {{- else }}
+        - namespaceSelector: {}
+        {{- end }}
+        {{- with .Values.networkPolicy.monitoringNamespaceLabels }}
+        # monitoring : scrape GET /metrics (GATEWAY_METRICS_ENABLED).
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.accessGateway.port }}
+{{- end }}
+{{- if .Values.ollama.enabled }}
+---
+# =============================================================================
+# 7) Ollama (LLM) ← actions + actions-worker (ONIX_OLLAMA_URL) + access-gateway
+#    (embeddings du tier sémantique du cache). api/background passent par les
+#    model-servers Onyx, PAS par Ollama → non autorisés ici (surface réduite).
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-allow-ollama
+  labels:
+    {{- include "onix.componentLabels" (dict "ctx" . "component" "ollama") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "onix.componentSelector" (dict "ctx" . "component" "ollama") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # onix-actions : génération/résumé LLM (ONIX_OLLAMA_URL).
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "actions") | nindent 14 }}
+        {{- if .Values.actionsQueue.enabled }}
+        # actions-worker : tâches LLM asynchrones (même image/URL Ollama).
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "actions-worker") | nindent 14 }}
+        {{- end }}
+        {{- if .Values.accessGateway.enabled }}
+        # access-gateway : embeddings du cache sémantique (GATEWAY_SEMANTIC_EMBED_URL).
+        - podSelector:
+            matchLabels:
+              {{- include "onix.componentSelector" (dict "ctx" . "component" "access-gateway") | nindent 14 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.ollama.port }}
+{{- end }}
+{{- end }}
