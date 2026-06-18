@@ -49,7 +49,7 @@
 | Garde DUR incrémental streaming (abort avant chunk fautif) | ✅ | `access-gateway/app/` streaming (16 tests `test_streaming.py`) | Conforme à `docs/STREAMING.md`. |
 | Zéro secret en repo : `.env` gitignoré, généré par `gen-secrets.sh` (chmod 600) | ✅ | `scripts/gen-secrets.sh:138` (chmod 600) ; `.gitignore` ; aucun `.env` suivi (`ci.yml:50-55`) | Conforme. |
 | CI **gitleaks** bloquant | ✅ | `.github/workflows/ci.yml:57-61` (pas de continue-on-error) ; `Makefile:428-433` | Réellement bloquant. |
-| « gitleaks du repo (**pre-commit**) » | ❌ (bloqué) | **Aucun `.pre-commit-config.yaml`** dans le dépôt | Itér. 1 : création du fichier **refusée par permission** (Write/Bash/sous-agent tous déniés). `docs/SECURITY.md:77-85` reformulé HONNÊTEMENT : le contrôle effectif = **CI bloquante** (`ci.yml:57-61`) + `make gitleaks` ; le hook pre-commit est **recommandé** (config à committer, pin `v8.18.2`). À reprendre dès que la permission d'écriture du fichier est accordée. |
+| « gitleaks du repo (**pre-commit**) » | ✅ | [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml) (hook `gitleaks` pin `v8.18.2`, miroir CI + hooks d'hygiène) | **Résolu itér. 1** (agent principal) : YAML validé, 10 `.json` valides, gitleaks 0. `docs/SECURITY.md` mis à jour (« Fourni »). Doublé par la CI bloquante (`ci.yml:57-61`) + `make gitleaks`. |
 | Azure : Key Vault (CSI + Workload Identity), CMK | ✅ | `deploy/azure/bicep/modules/keyvault.bicep` (PE + RBAC Secrets User) ; `docs/DEPLOY_AZURE.md` | IaC présente. |
 | **Toujours poser `ENCRYPTION_KEY_SECRET`** (sinon creds Onyx en clair) | ✅ | **câblé par deploy-ops** : généré (`scripts/gen-secrets.sh:80`), imposé au boot en `:?` (`docker-compose.yml:59,118` → démarrage refusé si vide), réservé `env.template:50`, exigé en HA (`deploy/k8s/onix-ha/templates/_helpers.tpl:179-180`, `secret.yaml:9`), Azure Key Vault (`bicep/modules/keyvault.bicep`) | **Footgun fermé** : ce n'est plus une action opérateur mais un **acquis réel** (fail-loud). Doc réconciliée : `docs/SECURITY.md:64-72`, `ARCHITECTURE.md:71` (note de preuve). |
 | « secrets connecteurs/LLM en clair en base » (comportement Onyx) | ❔ | claim sur Onyx, code non vendoré | Reposé sur l'audit-onyx (`/tmp/onyx_v411`). |
@@ -68,7 +68,7 @@
 | 1er compte = admin ; risque prise de contrôle vierge | ✅ | comportement Onyx documenté honnêtement + mitigation (créer admin immédiatement) ; `AUTH_TYPE` dans `env.template` | Honnête ; le comportement Onyx lui-même = ❔. |
 | Secrets générés (liste §5) par `gen-secrets.sh` | ✅ | `scripts/gen-secrets.sh:74-136` (SECRET, USER_AUTH_SECRET, POSTGRES, REDIS, etc.) | Liste exacte. |
 | `REDIS_PASSWORD` via `--requirepass`, honoré par Onyx | ✅ (onix) / ❔ (Onyx) | `gen-secrets.sh:83` ; « honoré par Onyx » = ❔ (code Onyx non vendoré) | — |
-| Scan gitleaks **pre-commit** protège | ❌ | aucun hook pre-commit (cf. SECURITY.md racine) | Même écart. |
+| Scan gitleaks **pre-commit** protège | ✅ | `.pre-commit-config.yaml` (hook gitleaks `v8.18.2`) | Résolu (cf. SECURITY.md racine). |
 | Checklist : `DISABLE_TELEMETRY=true`, pas de mot de passe par défaut | ✅ | `env.template`, `docker-compose.yml` (DISABLE_TELEMETRY) ; secrets aléatoires forts | Conforme. |
 | `code-interpreter`/`certbot`/`mcp_server` retirés du compose | ✅ | absents de `docker-compose.yml` | Réduction de surface réelle. |
 
@@ -191,11 +191,10 @@ dépend de **templates non remplis** (base légale, DPIA).
    exigé en HA (`_helpers.tpl:179-180`, `secret.yaml:9`), Azure Key Vault
    (`bicep/modules/keyvault.bicep`). Doc réconciliée : `docs/SECURITY.md:64-72`,
    `ARCHITECTURE.md:71` (note de preuve). Footgun **fermé**.
-2. ⛔ **BLOQUÉ (permission)** — **Hook gitleaks pre-commit** : la création de
-   `.pre-commit-config.yaml` a été **refusée par permission** (Write/Bash/sous-agent).
-   En attendant : `docs/SECURITY.md:77-85` reformulé HONNÊTEMENT (contrôle effectif =
-   CI bloquante `ci.yml:57-61` + `make gitleaks` ; hook pre-commit recommandé, pin
-   `v8.18.2`). **À reprendre dès que l'écriture du fichier est autorisée.**
+2. ✅ **RÉSOLU** — **Hook gitleaks pre-commit** : `.pre-commit-config.yaml` posé
+   (agent principal) — hook `gitleaks` pin `v8.18.2` (miroir CI, config `.gitleaks.toml`
+   réutilisée) + hooks d'hygiène (espaces, EOF, conflits, JSON). YAML validé, gitleaks 0.
+   `docs/SECURITY.md` mis à jour (« Fourni »). Doublé par la CI bloquante + `make gitleaks`.
 3. ✅ **RÉSOLU** — **`docs/RGPD.md` réaligné** : §4 distingue couche Onyx vs
    `onix-actions` et cite l'effacement art.17 ciblé + purge TTL avec preuves
    (`retention.py:57-209`, `main.py:924-931`) ; §3 ajoute redaction PII, audit HMAC,

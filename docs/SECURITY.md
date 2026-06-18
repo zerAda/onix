@@ -78,11 +78,13 @@ Générés par `scripts/gen-secrets.sh` (idempotent) :
   **effectif et bloquant** est le **gate CI** — `.github/workflows/ci.yml:57-61`
   (`gitleaks detect --source . --config .gitleaks.toml --no-git --redact`,
   gitleaks `v8.18.2`) — doublé localement par `make gitleaks` (même config).
-  **Recommandé en complément** : activer le hook **pre-commit** côté développeur
-  (repo `gitleaks/gitleaks`, `rev: v8.18.2` pour rester aligné sur la CI) via un
-  `.pre-commit-config.yaml` + `pre-commit install` ; le 1er run télécharge les
-  hooks épinglés (réseau requis). Tant que ce hook n'est pas posé, le filet de
-  sécurité reste la CI et `make gitleaks`.
+  **Fourni** : un [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) à la
+  racine pose le hook **pre-commit** `gitleaks` (repo `gitleaks/gitleaks`,
+  `rev: v8.18.2` — aligné sur la CI, config projet `.gitleaks.toml` réutilisée)
+  + des hooks d'hygiène (espaces, fin de fichier, conflits, JSON valide).
+  Activation côté développeur : `pre-commit install` (le 1er run télécharge les
+  hooks épinglés — réseau requis). Le filet de sécurité reste **doublé** par la CI
+  et `make gitleaks` même sans le hook local.
 
 ## 6. Durcissement pour un déploiement EXPOSÉ (au-delà du localhost)
 

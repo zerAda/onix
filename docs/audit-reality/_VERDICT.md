@@ -38,7 +38,7 @@ conformité non archivées**.
 | **Mono-poste / POC** (`make up`) | ✅ Oui | Aucun bloquant fonctionnel. Corriger la doc fausse monitoring (honnêteté). |
 | **Prod machine-unique** (`up-local-prod`) | ✅ Oui | Pièce la plus aboutie ; appliquer P1 honnêteté + garde-fou Grafana. |
 | **Prod exposée** (`deploy/prod`) | ✅ Oui | Anti-spoofing/fail-closed câblés ; corriger `backup.sh` (surcouche prod). |
-| **HA Kubernetes / Azure AKS** | ⏳ **En cours** | ~~3 P0 actions~~ **✅ résolus** (secrets WS2, `ONIX_OBJECT_STORE`, erase S3) ; **restent** 2 trous Azure (ingress RBAC, TLS Redis/PG Onyx) + `ENCRYPTION_KEY_SECRET` (P1). |
+| **HA Kubernetes / Azure AKS** | ⏳ **Quasi prêt** | P0 ✅ + P1 ✅ (secrets WS2, object-store, erase S3, `ENCRYPTION_KEY_SECRET`, TLS Redis/PG Azure, securityContext généralisé). **Reste** : forward-auth/anti-spoofing ingress AKS = TODO recette documenté (route chat→gateway templatisée OPT-IN) ; durcissement P2 (`readOnlyRootFS`/`NetworkPolicy`). |
 
 ## 4. Backlog consolidé priorisé (vers production-ready entreprise)
 ### P0 — bloquants HA _(tous résolus — boucles Ralph)_
@@ -47,21 +47,22 @@ conformité non archivées**.
 3. ✅ **RÉSOLU [actions]** Effacement RGPD S3 branché (`delete_subject_docx`/`delete_jobs_older_than` dans `retention`) + 4 tests. *(`bc7f9a6`)*
 4. ✅ **RÉSOLU [monitoring]** Doc « `/metrics` actions n'existe pas » corrigée (6 fichiers). *(`961978f`)*
 
-### P1 — exactitude, sécurité, conformité
-- **[access-gateway]** `explicit_admin_bypass` inerte ; contradiction fail-loud/fail-safe du cache ; `_READ_ROLES` partiel.
-- **[deploy-ops]** Ingress Azure chat→gateway + anti-spoofing non templatisé ; TLS Redis/PG Onyx non livrés ; `backup.sh` ignore la surcouche prod.
-- **[security-gov]** `ENCRYPTION_KEY_SECRET` jamais posé ; hook gitleaks pre-commit inexistant ; `RGPD.md` périmé ; `securityContext` actions absent.
-- **[monitoring]** Dashboard+alertes gateway absents ; pas de SLO/SLI ; garde-fou anti `admin/admin`.
-- **[rag-prompts]** Transcripts live non archivés ; baseline RAGAS non reproductible ; red-team mono-langue.
+### P1 — exactitude, sécurité, conformité _(tous traités — boucles Ralph)_
+- ✅ **[access-gateway]** `explicit_admin_bypass`/fail-loud-vs-fail-safe/`_READ_ROLES` réconciliés au réel (doc). *(`e886648`)*
+- ✅ **[deploy-ops]** TLS Redis/PG Onyx (Azure) + `backup.sh` prod-aware livrés ; ingress chat→gateway templatisé OPT-IN (forward-auth = TODO recette documenté). *(`dfb7891`)*
+- ✅ **[security-gov]** `ENCRYPTION_KEY_SECRET` câblé (compose+Helm) ; hook gitleaks pre-commit posé ; `RGPD.md` réaligné ; `securityContext` généralisé. *(`09a19a0` + `.pre-commit-config.yaml`)*
+- ✅ **[monitoring]** Dashboard `onix-gateway` + alertes + SLO/recording rules + garde-fou anti `admin/admin`. *(`4b70d32`)*
+- ✅ **[rag-prompts]** Résultats live encadrés « indicatif » + baseline RAGAS reproductible byte-level. *(`878de86`)*
 
 ### P2 — dette documentaire & durcissement
-- Compteurs de tests faux (gateway 52→267, actions 58/71→86, rag 20/21).
-- « SSE » vs NDJSON (gateway) ; `inference_`/`indexing_model_server` (RUNBOOK).
-- Durcissement Helm généralisé (non-root/seccomp/readOnlyRootFS/NetworkPolicy) ; durcissement stack monitoring.
-- DPIA/registre à remplir ; avertissement de provenance sur `audit-onyx/*`.
+- ✅ Compteurs de tests réconciliés (gateway 52→267, actions →90/85/5, rag 21 cas).
+- ✅ « SSE »→NDJSON (gateway + monitoring) ; ✅ RUNBOOK `indexing_model_server`.
+- ✅ `securityContext` généralisé (seccomp partout, non-root où l'image le permet) ; ✅ DPIA/registre squelette factuel ; ✅ provenance `audit-onyx/*`.
+- ⬜ **Restant** (non bloquant) : `readOnlyRootFilesystem`/`NetworkPolicy` Helm (suite documentée) ; durcissement stack monitoring (M5) ; extension red-team multi-langue (R3) ; forward-auth oauth2-proxy ingress AKS.
 
-## 5. Suite — boucles Ralph
-Le backlog ci-dessus alimente les **boucles Ralph** par scope (`ralph/scopes/*.md`,
-runner `ralph/loop.sh`, état `ralph/state/*.md`). Critère de fin par scope = grille A1–A7
-de [`ralph/ORCHESTRATION.md`](../../ralph/ORCHESTRATION.md). Ordre recommandé :
-**actions (P0) → monitoring (doc fausse) → deploy-ops (Azure) → security-gov → access-gateway → rag-prompts.**
+## 5. État des boucles Ralph
+Les 6 boucles ont exécuté leurs itérations **P0 + doc-truth/P1** (gates verts, poussées) :
+**actions** (P0 HA + P1) · **monitoring** (P0 doc + P1 dashboards/SLO) · **access-gateway** (P1/P2) ·
+**rag-prompts** (P1/P2) · **deploy-ops** (P1 Helm/Azure) · **security-gov** (P1/P2). Restent les
+**P2/suite** ci-dessus (non bloquants). Runner `ralph/loop.sh`, prompts `ralph/scopes/*.md`, journaux
+`ralph/state/*.md` ; critère de fin = grille A1–A7 de [`ralph/ORCHESTRATION.md`](../../ralph/ORCHESTRATION.md).
