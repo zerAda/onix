@@ -59,11 +59,13 @@
 | Backend `ragas` optionnel, import paresseux, dégrade proprement | ✅ | `runner.py:117-149` (lève `RagasUnavailable`, jamais câblé) | Honnête : la doc dit « non câblé », le code le confirme (`runner.py:141-145`). |
 | Sur set complet le gate échoue volontairement (seuils défaut) | ✅ | seuils défaut 0.90 vs G07/G08 dégradés ; cf. tests offline | Cohérent ; aligné `README.md:100-104`. |
 
-**Note 🔇 baseline** : `baseline_scores.json` est committé mais aucun fichier de
-provenance/run ne l'accompagne. La doc l'assume (« graine de référence
-déterministe », `RAG_EVAL.md:92-97`) — c'est honnête, mais un relecteur ne peut pas
-reproduire ces 3 valeurs exactes sans le script générateur (non présent au repo).
-Classé CODE-SANS-DOC sur la *provenance exacte*, pas sur l'existence.
+**Note 🔇 baseline — ✅ RÉSOLU (itération 1)** : la provenance est désormais au
+repo et **reproductible byte-level sans modèle live**. Générateur déterministe
+`tests/rag/ragas_eval/gen_baseline.py` (oracle `scripted_judge.py`) régénère
+`baseline_scores.json` (0.75/0.875/1.0) à l'octet près ; garde-fou
+`test_baseline_is_reproducible_from_scripted_judge`. Un relecteur reproduit les 3
+valeurs via `python -m ragas_eval.gen_baseline --write`. Documenté
+`RAG_EVAL.md:90-116`.
 
 ---
 
@@ -182,26 +184,41 @@ Classé CODE-SANS-DOC sur la *provenance exacte*, pas sur l'existence.
   résiduel majeur (RBAC par-doc) est correctement renvoyé à EE/cadrage client.
 
 ### P1 (à traiter avant exposition client sensible)
-1. **`LIVE_GUARDRAILS_RESULTS.md` sans preuve archivée** : les chiffres « 76.2% /
-   100% / 86.7% » ne sont accompagnés d'**aucun transcript brut** (≠ E2E gateway).
-   Committer le `RUN_TRANSCRIPT` du run + modèle/hash pour rendre la preuve
-   reproductible et datée au-delà de l'en-tête. (`LIVE_GUARDRAILS_RESULTS.md:1-16`)
-2. **Dérive de modèle / déterminisme de l'éval** : la baseline RAGAS
-   (`baseline_scores.json`, 0.75/0.875/1.0) est une « graine déterministe » dont
-   le **script générateur n'est pas au repo** → non reproductible. Documenter ou
-   committer le générateur, et exiger un 1er run nightly sain avant de s'y fier
-   (la doc le dit déjà `RAG_EVAL.md:92-97`, mais le geste reste manuel/non outillé).
+1. **✅ TRAITÉ (présentation fiabilisée)** — **`LIVE_GUARDRAILS_RESULTS.md`** : un
+   **encadré « chiffres INDICATIFS, non reproductibles byte-level »** est désormais
+   généré par `run_live.py:188-207` (write_markdown) ET présent dans le doc
+   committé (`LIVE_GUARDRAILS_RESULTS.md:18-39`) : date, modèle, **version Ollama**
+   (capturée via `live_harness.ollama_version()`), température, **commande exacte de
+   régénération**, et renvoi au transcript E2E. Anti-régression :
+   `test_runner_plumbing.py:96-103`. Le transcript brut reste à committer lors d'un
+   futur run avec Ollama (le harnais le permet ; pas de modèle live ici).
+2. **✅ TRAITÉ — Baseline RAGAS reproductible byte-level (sans modèle live)** :
+   provenance désormais **explicite et réexécutable**. Oracle extrait dans
+   `tests/rag/ragas_eval/scripted_judge.py` ; générateur déterministe
+   `tests/rag/ragas_eval/gen_baseline.py` (`--write`/`--check`) régénère
+   `baseline_scores.json` (0.75/0.875/1.0) **à l'octet près sans Ollama**.
+   Garanti par `test_baseline_is_reproducible_from_scripted_judge`
+   (`test_ragas_eval.py`). Documenté `RAG_EVAL.md:90-116`. ⚠️ Reste une **graine
+   scriptée** (à rafraîchir depuis un vrai run ≥ 7B après 1er nightly sain — limite
+   assumée, hors modèle live).
 3. **Couverture red-team limitée à 20 vecteurs / 1 langue / T=0** : pas de
    jailbreaks avancés (encodage multi-couches, leetspeak, multi-tours), pas de
    variation de température. Le doc le reconnaît (`LIVE_GUARDRAILS_RESULTS.md:131`).
-   À étendre pour un corpus sensible.
+   À étendre pour un corpus sensible. **(non traité cette itération — nécessite
+   idéalement un run live pour valider l'extension)**
 
 ### P2 (qualité/cohérence documentaire)
-4. **Incohérence de comptage « 21 vecteurs red-team »** : NOM01 est nominal, pas
-   une attaque (20 red-team + 1 nominal = 21 cas). Corriger E2E_GUARDRAILS
-   (`:8,211,253`) et harmoniser QA_GUARDRAILS « 20+ » vs « 20 » (`:123` vs `:141`).
-5. **Transcripts E2E non datés** : `RUN_TRANSCRIPT.txt` / `RESULTS.md` ne portent
-   pas de timestamp → ajouter date + version Ollama pour la traçabilité d'audit.
+4. **✅ TRAITÉ — Comptage cohérent** : les formulations « 21 vecteurs red-team »
+   sont remplacées par « 21 cas (20 red-team RT01–RT20 + 1 nominal NOM01) » dans
+   `E2E_GUARDRAILS.md` (en-tête, §4.2, §5, §6) et un encadré « Comptage » ajouté à
+   `LIVE_GUARDRAILS_RESULTS.md:46-51` (+ `run_live.py`). `QA_GUARDRAILS.md:123`
+   « 20+ » → « 20 » (aligné `:141` et `test_red_team.py:42-132` = 20 vecteurs).
+   Source de vérité : `access-gateway/tests/e2e/vectors.py:12` (« 20 + 1 = 21 »).
+5. **✅ TRAITÉ (côté doc autorisée)** : note de **traçabilité** ajoutée à
+   `E2E_GUARDRAILS.md:167-178` (transcript brut, modèle, date d'audit, mention
+   honnête que timestamp/version Ollama ne sont pas dans le transcript actuel +
+   comment les consigner au prochain run). `RUN_TRANSCRIPT.txt`/`RESULTS.md` sont
+   hors périmètre de propriété de ce scope (sous `access-gateway/`) → non modifiés.
 6. **`num_ctx` runtime non vérifiable au repo** : le câblage `OLLAMA_CONTEXT_LENGTH`
    est prouvé (compose/Helm/tune/Modelfile) mais l'effet réel (« 4096 tronque ») et
    les mesures tok/s reposent sur Onyx/Ollama non bootés → ❔ inévitable, à valider
