@@ -177,7 +177,7 @@ sinon `/admin/*` retombe en 403 et l'audit en SHA-256.
 
 ### 6.1 Mode par défaut (mono-poste) — **inchangé**
 ```bash
-pytest actions/tests -q        # 71 passed, 4 skipped (PG/S3 skip hors env dédié)
+pytest actions/tests -q        # 90 collectés : 85 passed, 5 skipped (PG/S3 + aiosmtpd skip hors env dédié)
 ```
 La suite historique reste **verte**. Les nouveaux tests Postgres/S3
 (`test_stateless_backends.py`) **skippent** proprement sans conteneur.

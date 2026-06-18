@@ -261,7 +261,7 @@ purge/erase inaccessibles) et la chaîne d'audit retombe en **SHA-256**. Les
 ```bash
 cd actions
 pip install -r requirements.txt pytest bandit
-pytest -q                 # 58 tests verts (dont test_security_rgpd.py)
+pytest -q                 # 90 tests collectés : 85 passed, 5 skipped (dont test_security_rgpd.py = 32)
 bandit -r app             # 0 High / 0 Medium
 # gitleaks detect --no-git --config ../.gitleaks.toml   # 0 fuite
 ```
