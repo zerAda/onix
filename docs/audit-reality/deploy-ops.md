@@ -178,34 +178,47 @@ fichier/cible inexistant. Le garde-fou défaut-sûr (`preflight-prod.sh`) ferme
 correctement la porte ; cache HMAC et `VALID_EMAIL_DOMAINS` sont `:?` (fail si vide).
 
 ### P1 (à corriger avant exploitation entreprise)
-1. **Ingress Azure « anti-spoofing + chat→gateway » décrit mais non templatisé** (🕳️).
-   `DEPLOY_AZURE.md:97-101` affirme un routage `/api/chat/send-message → access-gateway`
-   + oauth2-proxy forward-auth + strip `X-OIDC-Claims` « porté en annotations
-   d'ingress » ; le template `ingress.yaml` route `/api` générique vers `api:8080`
-   et n'a **aucune** de ces annotations. Sur AKS, le cloisonnement RBAC du chat
-   n'est donc **pas** câblé par le chart tel quel (contrairement au compose `deploy/prod`
-   qui, lui, le réalise). À implémenter (annotations/2e ingress) ou requalifier la doc.
-2. **Redis/Postgres managés Azure : TLS/SSL côté Onyx non câblé automatiquement** (⚠️).
-   `values-azure.yaml` pose seulement `redis.host`/`postgresql.host` ; la ConfigMap
-   (`configmap.yaml:13-16`) ne pose ni `REDIS_SSL`/`REDIS_PORT` (6380) ni `sslmode=require`
-   pour **Onyx** (base 0). La doc dit « poser REDIS_SSL/REDIS_PORT côté Onyx » : c'est
-   une consigne manuelle, pas un override livré → risque de connexion Onyx→Redis Azure
-   en échec si l'intégrateur oublie. (La **gateway** a bien son URL `rediss://…:6380/1`.)
-3. **`scripts/backup.sh` ne connaît pas la surcouche prod** (⚠️).
-   Il exécute `docker compose stop` (projet `onix`) sans `-f deploy/prod/...` ni
-   `--env-file` : les volumes data sont corrects, mais Caddy/oauth2-proxy/gateway ne
-   sont pas inclus dans l'arrêt cohérent en déploiement `deploy/prod`. À aligner pour
-   une vraie prod exposée.
+1. **Ingress Azure « anti-spoofing + chat→gateway »** — ✅ **partiellement résolu**
+   (itér. 1). La route EXACTE `/api/chat/send-message → access-gateway:8200` est
+   désormais **templatisée** (`ingress.yaml`, gated `ingress.chatViaGateway.enabled`
+   ET `accessGateway.enabled`, OFF par défaut, validée par `helm template` : route
+   prioritaire sur `/api`). **TODO recette explicite** (documenté `DEPLOY_AZURE.md`
+   §Ingress + `values.yaml` chatViaGateway) : forward-auth oauth2-proxy (hors-chart) +
+   anti-usurpation `strip X-OIDC-Claims` (snippet propre au contrôleur). Honnête :
+   « validé statiquement ; runtime AKS à vérifier ». `deploy/prod` reste l'alternative
+   pleinement câblée E2E.
+2. **Redis/Postgres managés Azure : TLS/SSL côté Onyx** — ✅ **résolu** (itér. 1).
+   `configmap.yaml` rend `REDIS_SSL`/`REDIS_PORT` + `POSTGRES_PORT`/`POSTGRES_SSLMODE`
+   UNIQUEMENT si posés en values (in-cluster non-TLS inchangé) ; `values-azure.yaml`
+   pose `redis.ssl=true`/`port=6380` + `postgresql.sslmode=require`/`port=5432`. Vérifié
+   au rendu Azure. Piège §7 respecté (gateway base 1 garde `rediss://…:6380/1`).
+3. **`scripts/backup.sh` ne connaît pas la surcouche prod** — ✅ **résolu** (itér. 1).
+   `backup.sh`/`restore.sh` acceptent `PROFILE=base|prod|local-prod` (+ `ENV`) et
+   empilent le même jeu compose que le Makefile (Caddy/oauth2-proxy/gateway inclus en
+   profil prod). Projet forcé `-p onix` (volumes inchangés). Doc : `DEPLOY_PROD.md`,
+   `RUNBOOK.md` §5.
 
 ### P2 (durcissement / hygiène)
-4. **Durcissement Helm partiel** (⚠️) : `runAsNonRoot`/`seccomp` seulement sur
-   `access-gateway` ; absents des Deployments Onyx/actions/ollama/worker. Pas de
-   `readOnlyRootFilesystem` ni de `NetworkPolicy` dans le chart. L'intro HA suggère
-   un durcissement plus large que la réalité des templates.
-5. **Imprécision RUNBOOK §7** (⚠️) : « second `inference_model_server` » alors que le
-   service PERF s'appelle `indexing_model_server` — corriger la prose.
+4. **Durcissement Helm partiel** — ✅ **résolu** (itér. 1) sans régression.
+   Helper `onix.podSecurityContext` : `seccompProfile RuntimeDefault` appliqué à TOUS
+   les pods ; `runAsNonRoot`/`runAsUser` seulement où l'image le supporte (actions/worker
+   UID 10001 ; gateway 10002). **NON posé** sur Onyx/Ollama (images root amont — le
+   forcer casserait le boot). `readOnlyRootFilesystem` volontairement absent (Ollama
+   modèles, actions temp). Suite documentée (`HA_SCALING.md` §5bis) : non-root Onyx/Ollama
+   = rebuild image USER ; NetworkPolicy = recette.
+5. **Imprécision RUNBOOK §7** — ✅ **résolu** (itér. 1) : `indexing_model_server`
+   (profil `make up PERF=1`, `docker-compose.performance.yml`).
 6. **Code-sans-doc** (🔇) : HTTP/3 QUIC (Caddy `:443/udp`) et tier sémantique du cache
-   (`values.yaml:393-397`) non documentés dans ce scope.
+   (`values.yaml`) non documentés dans ce scope. **Reste** (hygiène mineure).
+
+### Hors backlog initial — traité cette vague
+7. **`ENCRYPTION_KEY_SECRET` jamais posé** (footgun critique, vendu acquis
+   `ARCHITECTURE.md:67`) — ✅ **résolu** (itér. 1). Câblé partout : Helm
+   (`onix.dataTierSecretEnv` → api/background/migrations/actions ; `secret.yaml`/
+   `values.yaml` documentent la clé ; placeholder factice `values-kind-smoke.yaml`),
+   compose base (api_server+background, hérité par `deploy/prod`), `gen-secrets.sh`
+   (génère `rand 48`), `env.template` + `env.prod.template`, `DEPLOY_AZURE.md`. Vérifié :
+   rendu 11× (smoke), `compose config -q` OK, `gen-secrets` non-vide, gitleaks 0.
 
 ---
 
@@ -215,10 +228,14 @@ correctement la porte ; cache HMAC et `VALID_EMAIL_DOMAINS` sont `:?` (fail si v
    au byte près ; **0 écart majeur**, **0 cible/fichier Make inexistant**, secrets et
    fail-closed conformes aux règles de jeu. Le mono-nœud exposé (`deploy/prod`) est
    la pièce la plus aboutie (Caddy/oauth2-proxy/gateway/anti-usurpation réellement câblés).
-2. **Production-ready** : OUI pour mono-nœud durci (`prod-local`) et exposé (`deploy/prod`),
-   modulo P1.3 (backup) ; le **chart HA** est valide « by-design » mais le déploiement
-   **Azure** a deux trous de câblage réels (P1.1 ingress chat→gateway/anti-spoofing,
-   P1.2 TLS Redis/Postgres côté Onyx) que la doc présente comme acquis.
-3. **À traiter** : templatiser l'ingress RBAC/anti-spoofing AKS, câbler `REDIS_SSL`/
-   `sslmode` côté Onyx dans `values-azure`, rendre `backup.sh` conscient de la surcouche
-   prod, et étendre `runAsNonRoot` au-delà de la gateway.
+2. **Production-ready** : OUI pour mono-nœud durci (`prod-local`) et exposé (`deploy/prod`).
+   Le **chart HA** est valide « by-design » ; le déploiement **Azure** a vu ses deux
+   trous de câblage **traités** (itér. 1) : TLS Redis/Postgres côté Onyx **câblé**, et
+   route chat→gateway **templatisée (OPT-IN)** + forward-auth/anti-spoofing **documenté
+   en TODO recette honnête** (oauth2-proxy hors-chart + snippet contrôleur).
+3. **Traité (itér. 1)** : `ENCRYPTION_KEY_SECRET` câblé partout (footgun fermé) ;
+   `REDIS_SSL`/`sslmode` côté Onyx dans `values-azure` ; `backup.sh`/`restore.sh`
+   conscients de la surcouche prod ; durcissement `securityContext` généralisé
+   (seccomp partout, non-root où l'image le permet) ; RUNBOOK §7 corrigé ; route
+   ingress chat→gateway templatisée. **Reste** : forward-auth/anti-spoofing AKS
+   (recette, dépend du contrôleur), code-sans-doc mineur (HTTP/3, tier sémantique).
