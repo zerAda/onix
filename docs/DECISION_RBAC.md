@@ -300,9 +300,12 @@ synchronisé depuis la source, renforce le rendu. »*
 5. **Anti-élargissement** : intersection des `document_set` demandés avec les
    autorisés ; `search_doc_ids` **neutralisé** (non vérifiable par fichier en FOSS).
 
-**Tests dédiés (52 au total) :** utilisateur **sans groupe** → deny ; **multi-
-groupes** → **union des Document Sets autorisés uniquement** (ni plus, ni moins) ;
-fail-closed sur groupes irrésolvables ; non-fuite d'identité/contenu dans l'audit.
+**Tests dédiés (267 au total, suite `access-gateway/tests`) :** utilisateur **sans
+groupe** → deny ; **multi-groupes** → **union des Document Sets autorisés
+uniquement** (ni plus, ni moins) ; fail-closed sur groupes irrésolvables ;
+non-fuite d'identité/contenu dans l'audit ; isolation cache par périmètre, ACL
+par-document, tier sémantique, streaming, sync ACL Graph. Comptage vérifié via
+`pytest access-gateway/tests --collect-only` (267 fonctions) le 2026-06-18.
 Lancer : `pytest access-gateway/tests -q`.
 
 ---
@@ -323,7 +326,7 @@ Lancer : `pytest access-gateway/tests -q`.
 - **Décision documentée** : matrice multi-axes + recommandation par scénario
   (§2, §7), **chiffrée et datée** (§3), avec risque résiduel **quantifié** (§4).
 - **Passerelle durcie et testée** (§6) : seul point d'entrée, fail-closed, audit
-  haché, anti-élargissement, **52 tests verts**.
+  haché, anti-élargissement, **267 tests verts** (suite `access-gateway/tests`).
 - **Limite assumée, non masquée** : le **par-document strict** et la **propagation
   automatique des révocations** **restent Enterprise Edition / Cloud** (§5, preuves
   de 1er rang datées). La voie FOSS **ne les reproduit pas** ; elle **borne** le
