@@ -128,7 +128,13 @@ ollama:
     limits:   { cpu: "8", memory: 16Gi }   # 7b Q4 + contexte ; aligner au SKU node (ex: Standard_E8s_v5)
   # GPU plus tard : ajouter nodeSelector/tolerations vers un pool GPU + extraEnv.
 
-# --- Ingress + TLS (le chat est routé vers la passerelle native, cf. accessGateway) -
+# --- Ingress + TLS -----------------------------------------------------------
+# La route chat -> passerelle RBAC est TEMPLATISÉE mais laissée OFF par défaut :
+# le forward-auth oauth2-proxy + l'anti-usurpation (strip X-OIDC-Claims) ne sont PAS
+# garantis par le chart sur AKS (oauth2-proxy hors-chart + snippet propre au
+# contrôleur). Pour l'activer EN SÉCURITÉ, voir docs/DEPLOY_AZURE.md §Ingress :
+# poser ingress.chatViaGateway.enabled=true + chatViaGateway.annotations (auth-url
+# /auth-signin + configuration-snippet). Sinon le chat passerait sans identité vérifiée.
 ingress:
   enabled: true
   className: "webapprouting.kubernetes.io"   # addon AKS App Routing (ou "nginx" si ingress-nginx)
@@ -138,6 +144,14 @@ ingress:
   tls:
     enabled: true
     secretName: onix-tls
+  # chatViaGateway:
+  #   enabled: true                          # ⚠ N'activer qu'avec les annotations forward-auth/anti-spoofing ci-dessous
+  #   annotations:
+  #     nginx.ingress.kubernetes.io/auth-url: "https://$host/oauth2/auth"
+  #     nginx.ingress.kubernetes.io/auth-signin: "https://$host/oauth2/start?rd=$escaped_request_uri"
+  #     nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-Request-User,X-Auth-Request-Preferred-Username"
+  #     nginx.ingress.kubernetes.io/configuration-snippet: |
+  #       more_clear_input_headers "X-OIDC-Claims";
 
 # --- Passerelle RBAC : TEMPLATE NATIF du chart (accessGateway) — ACTIVÉE sur Azure ---
 # RBAC (cloisonnement + ACL par-doc FOSS) + cache RBAC-safe + streaming + /metrics.

@@ -103,11 +103,27 @@ helm install $NS deploy/k8s/onix-ha -n $NS -f deploy/azure/values-azure.yaml
 # La passerelle RBAC est un TEMPLATE NATIF du chart (accessGateway.enabled=true dans
 # values-azure.yaml) → déployée par le `helm install` ci-dessus. Rien d'autre à appliquer.
 ```
-**Ingress + OIDC (anti-spoofing)** : déployer **oauth2-proxy** (forward-auth) + une
-règle d'ingress qui route **uniquement `/api/chat/send-message` → `<RELEASE>-access-gateway:8200`** (service du chart)
-(le reste → Onyx natif), en **strippant tout `X-OIDC-Claims` entrant** à l'edge et en
-le posant depuis l'identité vérifiée. Schéma identique à `deploy/prod/` (Caddy/nginx)
-porté en annotations d'ingress AKS.
+**Ingress + OIDC (anti-spoofing)** — état réel du chart vs ce qui reste à câbler :
+
+- ✅ **Route chat → passerelle (templatisée, OPT-IN)** : le chart sait router la route
+  EXACTE `/api/chat/send-message` vers `<RELEASE>-access-gateway:8200` (le reste → Onyx
+  natif) via `ingress.chatViaGateway.enabled=true` (rendu seulement si
+  `accessGateway.enabled`). **Validé statiquement** (`helm template` : route Exact
+  prioritaire sur `/api`) ; **comportement runtime à vérifier sur AKS**.
+- 🚧 **TODO recette (NON livré par le chart, à câbler par l'opérateur)** : le
+  **forward-auth oauth2-proxy** et l'**anti-usurpation** (`strip X-OIDC-Claims` entrant
+  + (re)pose depuis l'identité vérifiée) — schéma de `deploy/prod/` (Caddy/nginx).
+  Raisons : (1) oauth2-proxy **n'est pas un template** de ce chart ; il faut le déployer
+  hors-chart ; (2) le strip d'en-tête exige un **snippet propre au contrôleur**
+  (ex. ingress-nginx `configuration-snippet` / `more_clear_input_headers`), souvent
+  **désactivé par défaut** (`allow-snippet-annotations=false`). Fournir ces
+  comportements via `ingress.chatViaGateway.annotations` (auth-url/auth-signin +
+  snippet). **Tant que ce n'est pas fait, n'activez PAS `chatViaGateway` en prod
+  régulée** : le chat traverserait la passerelle SANS identité vérifiée.
+
+> Alternative pleinement câblée aujourd'hui : le **mono-nœud exposé `deploy/prod/`**
+> (Caddy + oauth2-proxy + nginx) réalise déjà forward-auth + anti-usurpation de bout
+> en bout. L'équivalent AKS « tout-en-annotations » dépend du contrôleur d'ingress.
 
 ## P4 — Intégration RAG
 1. **Ollama** : `kubectl exec` → `ollama pull qwen2.5:7b-instruct` (+ `nomic-embed-text`),

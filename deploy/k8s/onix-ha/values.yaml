@@ -508,6 +508,28 @@ ingress:
   tls:
     enabled: true
     secretName: onix-tls           # Secret TLS (géré par cert-manager ou fourni)
+  # ---------------------------------------------------------------------------
+  # CHAT -> PASSERELLE RBAC (OPT-IN). Si enabled (ET accessGateway.enabled), une
+  # route EXACTE `/api/chat/send-message` est rendue vers le Service access-gateway
+  # AVANT la règle `/api` générique → le chat traverse le cloisonnement RBAC FOSS.
+  # ⚠ LIMITE : ce chart NE déploie PAS oauth2-proxy (forward-auth) et NE peut pas
+  # garantir l'anti-usurpation (strip X-OIDC-Claims) sans snippet propre au
+  # contrôleur. FOURNISSEZ ces comportements via `annotations` ci-dessous (auth-url
+  # /auth-signin oauth2-proxy + configuration-snippet) AVANT toute activation en
+  # prod régulée. Sinon le chat traverserait la gateway SANS identité vérifiée.
+  # Validé statiquement (helm template) ; runtime à valider sur AKS. Cf. ingress.yaml.
+  chatViaGateway:
+    enabled: false                 # true => route chat -> access-gateway:8200
+    path: "/api/chat/send-message" # chemin exact intercepté
+    # Annotations SUPPLÉMENTAIRES (fusionnées par-dessus ingress.annotations) pour
+    # forward-auth + anti-spoofing — À RENSEIGNER selon le contrôleur (ex. ingress-
+    # nginx) ET un oauth2-proxy déployé hors-chart. Exemple ingress-nginx (indicatif) :
+    #   nginx.ingress.kubernetes.io/auth-url: "https://$host/oauth2/auth"
+    #   nginx.ingress.kubernetes.io/auth-signin: "https://$host/oauth2/start?rd=$escaped_request_uri"
+    #   nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-Request-User,X-Auth-Request-Preferred-Username"
+    #   nginx.ingress.kubernetes.io/configuration-snippet: |
+    #     more_clear_input_headers "X-OIDC-Claims";   # anti-usurpation (snippet doit être autorisé)
+    annotations: {}
 
 # =============================================================================
 # SOCLE DE DONNÉES HA — sous-charts OFFICIELS (mêmes que le chart Onyx amont).

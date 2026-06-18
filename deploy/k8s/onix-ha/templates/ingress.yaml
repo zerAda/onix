@@ -2,6 +2,26 @@
 Ingress + TLS — point d'entrée unique chiffré.
 Route :  /api, /openapi.json -> api ;  / -> webserver  (comme nginx/onyx.conf).
 TLS via cert-manager (annotations) ou Secret TLS fourni.
+
+CHAT -> PASSERELLE RBAC (OPT-IN) : si .Values.ingress.chatViaGateway.enabled, on
+ajoute une route EXACTE `/api/chat/send-message` vers le Service access-gateway
+(cloisonnement RBAC + ACL par-doc FOSS), AVANT la règle `/api` générique. Cette
+route est rendue UNIQUEMENT si accessGateway.enabled (sinon le Service n'existe pas).
+
+LIMITE HONNÊTE (cf. docs/DEPLOY_AZURE.md & audit deploy-ops) — ce que le chart NE
+fait PAS tout seul, et qui reste à câbler en recette AKS :
+  * forward-auth oauth2-proxy : oauth2-proxy n'est PAS un template de ce chart
+    (seul deploy/prod le déploie). Les annotations auth-url/auth-signin sont donc
+    laissées à l'opérateur via .Values.ingress.chatViaGateway.annotations.
+  * anti-usurpation (strip X-OIDC-Claims entrant + (re)pose depuis l'identité
+    vérifiée) : exige un snippet de config propre au contrôleur (ex. ingress-nginx
+    `configuration-snippet` avec `more_clear_input_headers`), souvent DÉSACTIVÉ par
+    défaut (allow-snippet-annotations=false). À fournir via les mêmes annotations.
+  * réécriture /api/chat/send-message -> /v1/chat/send-message : la gateway accepte
+    les deux chemins selon sa config ; sinon ajouter une annotation rewrite-target.
+Validé STATIQUEMENT (helm template) ; comportement runtime (auth/anti-spoofing) À
+VÉRIFIER SUR AKS. Tant que ces annotations ne sont pas fournies, NE PAS activer en
+prod régulée : le chemin chat traverserait la gateway SANS identité vérifiée.
 */ -}}
 {{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
@@ -10,7 +30,15 @@ metadata:
   name: {{ include "onix.fullname" . }}
   labels:
     {{- include "onix.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- $chat := .Values.ingress.chatViaGateway | default dict }}
+  {{- $chatOn := and $chat.enabled .Values.accessGateway.enabled }}
+  {{- $ann := .Values.ingress.annotations | default dict }}
+  {{- if $chatOn }}
+  {{- /* Fusion : annotations globales + annotations spécifiques au chat (forward-auth
+         oauth2-proxy, snippet anti-spoofing) fournies par l'opérateur selon son CNI. */}}
+  {{- $ann = mergeOverwrite (deepCopy $ann) ($chat.annotations | default dict) }}
+  {{- end }}
+  {{- with $ann }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -26,6 +54,16 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
+          {{- if $chatOn }}
+          {{- /* Route EXACTE prioritaire : le chat passe par la passerelle RBAC. */}}
+          - path: {{ $chat.path | default "/api/chat/send-message" }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "onix.fullname" . }}-access-gateway
+                port:
+                  number: {{ .Values.accessGateway.port }}
+          {{- end }}
           - path: /api
             pathType: Prefix
             backend:
