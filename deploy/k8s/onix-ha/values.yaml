@@ -517,6 +517,12 @@ postgresql:
         enabled: true
         schedule: "0 0 2 * * *"   # tous les jours 02:00 (format CNPG, 6 champs)
   host: ""                    # vide => <fullname>-postgresql-rw (service CNPG)
+  # --- TLS/SSL côté ONYX (base 0) pour un Postgres MANAGÉ externe (ex: Azure DB) -
+  # In-cluster (CNPG) : laisser VIDES (rien n'est rendu, défaut psycopg conservé).
+  # Managé Azure : sslmode=require est IMPOSÉ côté serveur — le poser ici le câble
+  # explicitement dans la ConfigMap (POSTGRES_PORT/POSTGRES_SSLMODE). Cf. §7 AGENTS.
+  port: ""                    # vide => défaut (5432) non rendu ; managé : "5432"
+  sslmode: ""                 # vide => non rendu ; managé Azure : "require"
 
 # --- OpenSearch >=3 noeuds (sous-chart officiel opensearch) -------------------
 opensearch:
@@ -553,6 +559,13 @@ redis:
     enabled: true
     size: 5Gi
   host: ""                    # vide => <fullname>-redis
+  # --- TLS côté ONYX (base 0) pour un Redis MANAGÉ externe (ex: Azure Cache) -----
+  # PIÈGE §7 : Azure Cache for Redis = TLS sur 6380 (port non-TLS 6379 désactivé)
+  # + noeviction. In-cluster (operator) : laisser ssl=false / port vide (rien rendu,
+  # 6379 en clair sur le réseau du cluster). Managé Azure : ssl=true + port=6380.
+  # Onyx lit REDIS_SSL/REDIS_PORT depuis l'env (REDIS_SSL opt-in, app_configs.py:526).
+  ssl: false                  # true => REDIS_SSL=true rendu (TLS rediss://)
+  port: ""                    # vide => non rendu (6379 défaut) ; managé Azure : "6380"
 
 # --- MinIO distribué (sous-chart officiel minio) -----------------------------
 minio:

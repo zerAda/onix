@@ -25,8 +25,10 @@ global:
 
 # Secret applicatif créé depuis Azure Key Vault via le Secret Store CSI Driver
 # (clés : POSTGRES_PASSWORD, OPENSEARCH_ADMIN_PASSWORD, REDIS_PASSWORD, SECRET,
-#  USER_AUTH_SECRET, S3_AWS_ACCESS_KEY_ID, S3_AWS_SECRET_ACCESS_KEY,
-#  ONIX_ACTIONS_API_KEY, BROKER_PASSWORD). Cf. DEPLOY_AZURE.md §Secrets.
+#  USER_AUTH_SECRET, ENCRYPTION_KEY_SECRET, S3_AWS_ACCESS_KEY_ID,
+#  S3_AWS_SECRET_ACCESS_KEY, ONIX_ACTIONS_API_KEY, BROKER_PASSWORD).
+#  ENCRYPTION_KEY_SECRET : SINON les secrets connecteurs Onyx sont EN CLAIR en base.
+#  Cf. DEPLOY_AZURE.md §Secrets.
 secrets:
   existingSecret: "onix-secrets"
 
@@ -68,19 +70,26 @@ actionsQueue:
 
 # --- Postgres MANAGÉ : Azure DB for PostgreSQL Flexible (HA zone-redondant) ---
 # On DÉSACTIVE le CNPG in-cluster et on pointe le FQDN managé. SSL requis
-# (sslmode=require) — Onyx/psycopg s'y connecte ; cf. gotchas DEPLOY_AZURE.md.
+# (sslmode=require) — Azure REFUSE le non-SSL côté serveur. On le CÂBLE côté Onyx
+# (POSTGRES_PORT/POSTGRES_SSLMODE rendus dans la ConfigMap). Cf. gotchas §7 / DEPLOY_AZURE.md.
 postgresql:
   operator: { enabled: false }
   cluster:  { enabled: false }
   host: "<PG_FQDN>.postgres.database.azure.com"
+  port: "5432"
+  sslmode: "require"          # -> POSTGRES_SSLMODE (Azure impose le SSL)
 
 # --- Redis MANAGÉ : Azure Cache for Redis (Premium, persistance + zone) -------
-# Pas d'operator in-cluster. ⚠ Azure Cache = TLS sur 6380 + clé d'accès :
-# poser REDIS_SSL/REDIS_PORT côté Onyx (cf. gotchas). Corrige le SPOF Redis de l'audit.
+# Pas d'operator in-cluster. PIÈGE §7 : Azure Cache = TLS sur 6380 (6379 non-TLS
+# DÉSACTIVÉ) + noeviction. On câble REDIS_SSL/REDIS_PORT côté Onyx (base 0) ici ;
+# le mot de passe Redis vient du Secret (REDIS_PASSWORD). La GATEWAY (base 1) a sa
+# propre URL rediss://…:6380/1. Corrige le SPOF Redis de l'audit.
 redisOperator: { enabled: false }
 redis:
   enabled: false
   host: "<REDIS_FQDN>.redis.cache.windows.net"
+  ssl: true                   # -> REDIS_SSL=true (TLS obligatoire Azure)
+  port: "6380"                # -> REDIS_PORT (6379 non-TLS désactivé côté Azure)
 
 # --- OpenSearch IN-CLUSTER (aucun managé Azure équivalent) : 3 nœuds HA -------
 opensearch:
