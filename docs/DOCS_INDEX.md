@@ -53,10 +53,17 @@
 | [`DEPLOY_AZURE.md`](DEPLOY_AZURE.md) | **Azure/AKS** : runbook az+helm, IaC `deploy/azure/bicep/`, gotchas |
 | [`OBSERVABILITY.md`](OBSERVABILITY.md) | Métriques/logs/alertes (Onyx + gateway + actions) |
 
+## 🎨 UI · branding
+| Doc | Contenu |
+|---|---|
+| [`BRANDING_GEREP.md`](BRANDING_GEREP.md) | Surcouche de marque GEREP (thème CSS injecté via nginx `sub_filter`, palette/rôles, whitelabel admin, accessibilité AA, réglage live) |
+
 ## 🔌 Connecteurs
 | Doc | Contenu |
 |---|---|
 | [`connectors/SHAREPOINT.md`](connectors/SHAREPOINT.md) | Connexion SharePoint (Entra/Graph), perm-sync (EE) vs ACL (FOSS) |
+| [`connectors/FABRIC.md`](connectors/FABRIC.md) | Accès Microsoft Fabric / OneLake / Power BI (SPN, audiences, RBAC fail-closed, FOSS vs EE) |
+| [`E2E_ACCESS_LIVE.md`](E2E_ACCESS_LIVE.md) | **Runbook e2e LIVE** : prouver l'accès SharePoint + Fabric sur votre tenant (app Entra, `ONIX_E2E_*`, codes 0/1/2) |
 
 ## 🧪 Audit Onyx & parité
 | Doc | Contenu |

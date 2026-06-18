@@ -1,0 +1,15 @@
+{
+  "_comment": "Exemple de mapping doc Onyx -> item Microsoft Fabric, consommé par le module d'acces Fabric (app/fabric_client.py + app/fabric_acl.py). Aucun secret ici : uniquement des identifiants de workspace/item Fabric. Les identifiants Entra (tenant/client/secret du SPN) viennent EXCLUSIVEMENT de l'environnement (GATEWAY_FABRIC_* ou repli GATEWAY_GRAPH_*).",
+  "_version": 1,
+  "_format": "{ doc_id: { workspace_id, item_id, item_type } } — workspace_id/item_id acceptent NOM ou GUID ; item_type ex. Lakehouse, Warehouse (vide si GUID d'item).",
+  "doc-ventes-nord": {
+    "workspace_id": "00000000-0000-0000-0000-0000000000aa",
+    "item_id": "00000000-0000-0000-0000-0000000000b1",
+    "item_type": "Lakehouse"
+  },
+  "doc-ventes-sud": {
+    "workspace_id": "Espace Ventes",
+    "item_id": "Entrepot Sud",
+    "item_type": "Warehouse"
+  }
+}
