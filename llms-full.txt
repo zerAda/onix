@@ -832,7 +832,7 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 | [`../RGPD.md`](../RGPD.md) · [`../REGISTRE_TRAITEMENTS.md`](../REGISTRE_TRAITEMENTS.md) · [`../DPIA_TEMPLATE.md`](../DPIA_TEMPLATE.md) | Conformité : droits, registre des traitements, DPIA. |
 | [`../audit-onyx/`](../audit-onyx/) | **Audit byte-level d'Onyx** (7 dimensions + verdict) — base factuelle FOSS/EE. |
 | [`../PARITE_ENTREPRISE.md`](../PARITE_ENTREPRISE.md) · [`../COMPARATIF_COPILOT_AC360.md`](../COMPARATIF_COPILOT_AC360.md) | Parité vs assistant cloud / Copilot. |
-| Gates CI | `bandit`, `gitleaks`, `pip-audit --strict`, `trivy` (cf. `make test`). |
+| Gates CI | `bandit` (SAST : `actions` + `access-gateway` + `tests` + `scripts`), `gitleaks`, `pip-audit --strict`, `trivy` (cf. `make test`). |
 
 > Les **contrôles** vivent dans les scopes concernés : ACL/cloisonnement →
 > [`access-gateway.md`](access-gateway.md) ; audit HMAC/PII/DLP/rétention →

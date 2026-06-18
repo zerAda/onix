@@ -141,7 +141,7 @@ jobs:
         # d'autres workstreams) sont IGNORÉS par bandit (pas une erreur). On
         # exclut les suites de tests et venv ; sévérité/confiance moyenne+ bloquante.
         run: |
-          bandit -r actions tests access-gateway \
+          bandit -r actions tests access-gateway scripts \
             --exclude '**/tests/**,**/.venv/**' \
             --severity-level medium --confidence-level medium
 

@@ -436,7 +436,7 @@ pytest:
 
 bandit:
 	@command -v bandit >/dev/null 2>&1 || pip install --quiet bandit
-	@bandit -r actions --exclude '**/tests/**,**/.venv/**' \
+	@bandit -r actions access-gateway scripts --exclude '**/tests/**,**/.venv/**' \
 	  --severity-level medium --confidence-level medium
 	@echo "✓ bandit : aucune vulnérabilité (sévérité moyenne+)."
 
