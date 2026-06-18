@@ -6,6 +6,8 @@
 > le scope « gardien » : il relie les contrôles des autres scopes à une posture cohérente.
 > **Sous-agent** : sécurité / conformité / architecture. **État** :
 > [`../../ralph/state/security-governance.md`](../../ralph/state/security-governance.md).
+>
+> 👤 **Owner** : Sécurité / conformité / architecture · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 
@@ -26,7 +28,7 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 | [`../RGPD.md`](../RGPD.md) · [`../REGISTRE_TRAITEMENTS.md`](../REGISTRE_TRAITEMENTS.md) · [`../DPIA_TEMPLATE.md`](../DPIA_TEMPLATE.md) | Conformité : droits, registre des traitements, DPIA. |
 | [`../audit-onyx/`](../audit-onyx/) | **Audit byte-level d'Onyx** (7 dimensions + verdict) — base factuelle FOSS/EE. |
 | [`../PARITE_ENTREPRISE.md`](../PARITE_ENTREPRISE.md) · [`../COMPARATIF_COPILOT_AC360.md`](../COMPARATIF_COPILOT_AC360.md) | Parité vs assistant cloud / Copilot. |
-| Gates CI | `bandit`, `gitleaks`, `pip-audit --strict`, `trivy` (cf. `make test`). |
+| Gates CI | `bandit` (SAST : `actions` + `access-gateway` + `tests` + `scripts`), `gitleaks`, `pip-audit --strict`, `trivy` (cf. `make test`). |
 
 > Les **contrôles** vivent dans les scopes concernés : ACL/cloisonnement →
 > [`access-gateway.md`](access-gateway.md) ; audit HMAC/PII/DLP/rétention →
@@ -58,6 +60,10 @@ make test                            # barrière complète (inclut les 4 ci-dess
 - **Zéro mock présenté comme réel** : si non testé/vérifié, le dire.
 - **Fail-closed par défaut** ; **zéro secret en repo** ; **télémétrie OFF**.
 - On relève les **pins** dès qu'une CVE apparaît — on ne désactive **jamais** un gate.
+
+> 🔒 **Sécurité (scope gardien)** : ce scope **EST** la référence sécurité. Source :
+> [`SECURITY.md`](../../SECURITY.md). Fait respecter par les autres scopes : fail-closed,
+> zéro secret, FOSS vs EE, gates `make bandit gitleaks pip-audit trivy` **verts**.
 
 ## 6. Observabilité
 

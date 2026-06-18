@@ -6,6 +6,8 @@
 > activable indépendamment.
 > **Sous-agent** : observabilité / SRE. **État** :
 > [`../../ralph/state/monitoring.md`](../../ralph/state/monitoring.md).
+>
+> 👤 **Owner** : Observabilité / SRE · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 
@@ -54,6 +56,10 @@ make lint                            # yamllint (workflows + monitoring)
   toujours `/metrics` ; la pile monitoring est **opt-in** (ne pas créer de fausse
   dépendance « /metrics nécessite WS2 »).
 - YAML valide (`yamllint` relaxed) — le `lint` casse sinon.
+
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **aucun secret** dans les configs/dashboards,
+> Grafana admin fort (cf. `make monitor-up`) ; gates `make lint gitleaks` **verts**.
 
 ## 6. Observabilité
 

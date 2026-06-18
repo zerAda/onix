@@ -6,6 +6,8 @@
 > le **streaming** et l'exposition `/metrics`.
 > **Sous-agent** : sécurité plateforme (FastAPI/Redis). **État** :
 > [`../../ralph/state/access-gateway.md`](../../ralph/state/access-gateway.md).
+>
+> 👤 **Owner** : Sécurité plateforme (FastAPI/Redis) · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 
@@ -66,6 +68,10 @@ python access-gateway/tests/e2e/run_access_e2e.py
   mais la résolution user renvoie des **GUID Entra** → partager via **groupes Entra**
   (cf. [`../DECISION_RBAC.md`](../DECISION_RBAC.md)).
 - **Zéro secret loggé** (jeton/claims jamais journalisés).
+
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **fail-closed**, zéro secret loggé ;
+> gates `make bandit gitleaks pip-audit trivy` **verts** avant commit.
 
 ## 6. Observabilité
 

@@ -7,6 +7,8 @@
 > **rétention/effacement**.
 > **Sous-agent** : backend + RGPD. **État** :
 > [`../../ralph/state/actions.md`](../../ralph/state/actions.md).
+>
+> 👤 **Owner** : Backend + RGPD · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 
@@ -58,6 +60,10 @@ PII, le DLP egress, la rétention/effacement, le comptage de coûts. Offline.
 - **Stateless opt-in** : imports paresseux (`db.py`/`objstore.py`) — le mode mono-poste
   SQLite ne doit **pas** exiger Postgres/S3. Ne pas régresser.
 - **stdlib-first** : pas de dépendance lourde sans raison (cf. `requirements.txt` épinglé).
+
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **fail-closed**, audit HMAC intègre,
+> PII/DLP fail-safe, zéro secret loggé ; gates `make bandit gitleaks pip-audit trivy` **verts**.
 
 ## 6. Observabilité
 

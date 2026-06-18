@@ -6,6 +6,8 @@
 > **Azure/AKS** (bicep IaC) — plus les **scripts** d'ops (secrets, hardware, backup…).
 > **Sous-agent** : SRE / DevOps / IaC. **État** :
 > [`../../ralph/state/deploy-ops.md`](../../ralph/state/deploy-ops.md).
+>
+> 👤 **Owner** : SRE / DevOps / IaC · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 
@@ -65,6 +67,11 @@ make clean-deep                      # clean + venvs Python locaux
 - **Zéro secret en repo** : `.env` gitignoré, généré par `gen-secrets.sh`.
 - Conteneur nginx lié à **127.0.0.1** côté hôte (mono-poste) ; surcouches prod
   réécrites avec `!reset` (ne pas perdre les volumes — cf. branding).
+
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **zéro secret en repo** (`gen-secrets.sh`),
+> `runAsNonRoot`, TLS/`ENCRYPTION_KEY_SECRET` en prod, ports liés à 127.0.0.1 ;
+> gates `make compose-validate gitleaks` **verts**.
 
 ## 6. Observabilité
 

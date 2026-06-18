@@ -6,6 +6,8 @@
 > anti-injection).
 > **Sous-agent** : ML/RAG + prompt-engineering. **État** :
 > [`../../ralph/state/rag-prompts.md`](../../ralph/state/rag-prompts.md).
+>
+> 👤 **Owner** : ML/RAG + prompt-engineering · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 
@@ -55,6 +57,10 @@ make rag-eval-ci                     # + gate anti-régression (compare au basel
 - **Souveraineté** : éval **100 % locale** (juge Ollama) — aucun appel cloud.
 - **Embedding déterministe** : un embedding non déterministe casse le cache sémantique
   et l'éval — ne pas changer de modèle sans rejouer le baseline.
+
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **anti-injection** prouvé (red-team),
+> post-filtre déterministe, souveraineté (zéro cloud) ; gates `make bandit gitleaks pip-audit` **verts**.
 
 ## 6. Observabilité
 
