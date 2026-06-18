@@ -58,6 +58,10 @@ make rag-eval-ci                     # + gate anti-régression (compare au basel
 - **Embedding déterministe** : un embedding non déterministe casse le cache sémantique
   et l'éval — ne pas changer de modèle sans rejouer le baseline.
 
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **anti-injection** prouvé (red-team),
+> post-filtre déterministe, souveraineté (zéro cloud) ; gates `make bandit gitleaks pip-audit` **verts**.
+
 ## 6. Observabilité
 
 Qualité suivie par l'éval RAGAS (scores vs baseline) ; les métriques runtime du chat

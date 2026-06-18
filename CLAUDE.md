@@ -8,6 +8,7 @@ Rappels rapides pour Claude Code :
   + trivy + compose/helm). Suites offline : `actions/tests`, `access-gateway/tests`, `tests/rag`.
 - **Démarrage** : `make tune && make secrets && make up && make verify`.
 - **Conventions** : commentaires **en français**, stdlib-first, **zéro secret en repo**, **zéro mock présenté comme réel**.
+- **Sécurité (non négociable)** : **fail-closed** ; **zéro secret en repo** (`.env` gitignoré) ; télémétrie OFF ; `runAsNonRoot` ; egress allowlisté ; **FOSS vs EE** distingué ; gates `bandit` (0 medium+) · `gitleaks` (0) · `pip-audit --strict` (0 CVE) · `trivy` **verts** avant commit. Modèle : [`SECURITY.md`](SECURITY.md) · scope gardien : [`docs/scopes/security-governance.md`](docs/scopes/security-governance.md).
 - **Contexte clé** : Onyx FOSS ≠ entreprise turnkey (RBAC/audit/chiffrement = EE/absent) →
   la couche `onix` comble en FOSS. Toujours distinguer **FOSS vs EE**. Cf. `docs/audit-onyx/00-VERDICT.md`.
 - **Architecture** : [`ARCHITECTURE.md`](ARCHITECTURE.md) · **Sécurité** : [`SECURITY.md`](SECURITY.md) · **Index doc** : [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md).

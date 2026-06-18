@@ -69,6 +69,10 @@ python access-gateway/tests/e2e/run_access_e2e.py
   (cf. [`../DECISION_RBAC.md`](../DECISION_RBAC.md)).
 - **Zéro secret loggé** (jeton/claims jamais journalisés).
 
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **fail-closed**, zéro secret loggé ;
+> gates `make bandit gitleaks pip-audit trivy` **verts** avant commit.
+
 ## 6. Observabilité
 
 `GET /metrics` (Prometheus) + journal d'audit structuré (`app/audit.py`). Dashboard

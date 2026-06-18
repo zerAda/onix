@@ -68,6 +68,11 @@ make clean-deep                      # clean + venvs Python locaux
 - Conteneur nginx lié à **127.0.0.1** côté hôte (mono-poste) ; surcouches prod
   réécrites avec `!reset` (ne pas perdre les volumes — cf. branding).
 
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **zéro secret en repo** (`gen-secrets.sh`),
+> `runAsNonRoot`, TLS/`ENCRYPTION_KEY_SECRET` en prod, ports liés à 127.0.0.1 ;
+> gates `make compose-validate gitleaks` **verts**.
+
 ## 6. Observabilité
 
 Démarrage via `make verify` ; la pile observabilité est le scope

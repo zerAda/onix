@@ -60,7 +60,10 @@ regarder, et pour la validation automatique) :
 2. **Carte du code** — chemins → rôle, point(s) d'entrée.
 3. **Commandes** — build / test / run propres au scope (cibles `make` réelles).
 4. **Tests & preuves** — suites, ce qu'elles prouvent.
-5. **Invariants & pièges** — ce qu'il ne faut **pas** casser (cf. `AGENTS.md §7`).
+5. **Invariants & pièges** — ce qu'il ne faut **pas** casser (cf. `AGENTS.md §7`), **dont
+   la sécurité** : chaque dossier porte une ligne `🔒 Sécurité (scope)` qui renvoie à
+   [`../../SECURITY.md`](../../SECURITY.md) + au scope [`security-governance`](security-governance.md)
+   et rappelle les gates à passer (fail-closed, zéro secret, bandit/gitleaks/pip-audit/trivy).
 6. **Observabilité** — métriques / logs / alertes du scope.
 7. **Docs de fond** — pour approfondir.
 8. **Audit & journal** — `docs/audit-reality/<scope>.md` + `ralph/state/<scope>.md`.

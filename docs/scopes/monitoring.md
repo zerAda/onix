@@ -57,6 +57,10 @@ make lint                            # yamllint (workflows + monitoring)
   dépendance « /metrics nécessite WS2 »).
 - YAML valide (`yamllint` relaxed) — le `lint` casse sinon.
 
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **aucun secret** dans les configs/dashboards,
+> Grafana admin fort (cf. `make monitor-up`) ; gates `make lint gitleaks` **verts**.
+
 ## 6. Observabilité
 
 C'est **le** scope d'observabilité. Sources scrappées : gateway (`onix-gateway.json`),

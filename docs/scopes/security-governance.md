@@ -61,6 +61,10 @@ make test                            # barrière complète (inclut les 4 ci-dess
 - **Fail-closed par défaut** ; **zéro secret en repo** ; **télémétrie OFF**.
 - On relève les **pins** dès qu'une CVE apparaît — on ne désactive **jamais** un gate.
 
+> 🔒 **Sécurité (scope gardien)** : ce scope **EST** la référence sécurité. Source :
+> [`SECURITY.md`](../../SECURITY.md). Fait respecter par les autres scopes : fail-closed,
+> zéro secret, FOSS vs EE, gates `make bandit gitleaks pip-audit trivy` **verts**.
+
 ## 6. Observabilité
 
 Sécurité observable : journal d'audit (gateway `app/audit.py` + actions audit HMAC),

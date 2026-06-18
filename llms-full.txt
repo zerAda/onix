@@ -146,6 +146,7 @@ Rappels rapides pour Claude Code :
   + trivy + compose/helm). Suites offline : `actions/tests`, `access-gateway/tests`, `tests/rag`.
 - **Démarrage** : `make tune && make secrets && make up && make verify`.
 - **Conventions** : commentaires **en français**, stdlib-first, **zéro secret en repo**, **zéro mock présenté comme réel**.
+- **Sécurité (non négociable)** : **fail-closed** ; **zéro secret en repo** (`.env` gitignoré) ; télémétrie OFF ; `runAsNonRoot` ; egress allowlisté ; **FOSS vs EE** distingué ; gates `bandit` (0 medium+) · `gitleaks` (0) · `pip-audit --strict` (0 CVE) · `trivy` **verts** avant commit. Modèle : [`SECURITY.md`](SECURITY.md) · scope gardien : [`docs/scopes/security-governance.md`](docs/scopes/security-governance.md).
 - **Contexte clé** : Onyx FOSS ≠ entreprise turnkey (RBAC/audit/chiffrement = EE/absent) →
   la couche `onix` comble en FOSS. Toujours distinguer **FOSS vs EE**. Cf. `docs/audit-onyx/00-VERDICT.md`.
 - **Architecture** : [`ARCHITECTURE.md`](ARCHITECTURE.md) · **Sécurité** : [`SECURITY.md`](SECURITY.md) · **Index doc** : [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md).
@@ -258,7 +259,10 @@ regarder, et pour la validation automatique) :
 2. **Carte du code** — chemins → rôle, point(s) d'entrée.
 3. **Commandes** — build / test / run propres au scope (cibles `make` réelles).
 4. **Tests & preuves** — suites, ce qu'elles prouvent.
-5. **Invariants & pièges** — ce qu'il ne faut **pas** casser (cf. `AGENTS.md §7`).
+5. **Invariants & pièges** — ce qu'il ne faut **pas** casser (cf. `AGENTS.md §7`), **dont
+   la sécurité** : chaque dossier porte une ligne `🔒 Sécurité (scope)` qui renvoie à
+   [`../../SECURITY.md`](../../SECURITY.md) + au scope [`security-governance`](security-governance.md)
+   et rappelle les gates à passer (fail-closed, zéro secret, bandit/gitleaks/pip-audit/trivy).
 6. **Observabilité** — métriques / logs / alertes du scope.
 7. **Docs de fond** — pour approfondir.
 8. **Audit & journal** — `docs/audit-reality/<scope>.md` + `ralph/state/<scope>.md`.
@@ -355,6 +359,10 @@ python access-gateway/tests/e2e/run_access_e2e.py
   mais la résolution user renvoie des **GUID Entra** → partager via **groupes Entra**
   (cf. [`../DECISION_RBAC.md`](../DECISION_RBAC.md)).
 - **Zéro secret loggé** (jeton/claims jamais journalisés).
+
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **fail-closed**, zéro secret loggé ;
+> gates `make bandit gitleaks pip-audit trivy` **verts** avant commit.
 
 ## 6. Observabilité
 
@@ -460,6 +468,10 @@ PII, le DLP egress, la rétention/effacement, le comptage de coûts. Offline.
   SQLite ne doit **pas** exiger Postgres/S3. Ne pas régresser.
 - **stdlib-first** : pas de dépendance lourde sans raison (cf. `requirements.txt` épinglé).
 
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **fail-closed**, audit HMAC intègre,
+> PII/DLP fail-safe, zéro secret loggé ; gates `make bandit gitleaks pip-audit trivy` **verts**.
+
 ## 6. Observabilité
 
 `/metrics` Prometheus (instrumentation HTTP + FinOps + kill-switch). Dashboard
@@ -558,6 +570,10 @@ make rag-eval-ci                     # + gate anti-régression (compare au basel
 - **Embedding déterministe** : un embedding non déterministe casse le cache sémantique
   et l'éval — ne pas changer de modèle sans rejouer le baseline.
 
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **anti-injection** prouvé (red-team),
+> post-filtre déterministe, souveraineté (zéro cloud) ; gates `make bandit gitleaks pip-audit` **verts**.
+
 ## 6. Observabilité
 
 Qualité suivie par l'éval RAGAS (scores vs baseline) ; les métriques runtime du chat
@@ -654,6 +670,10 @@ make lint                            # yamllint (workflows + monitoring)
   toujours `/metrics` ; la pile monitoring est **opt-in** (ne pas créer de fausse
   dépendance « /metrics nécessite WS2 »).
 - YAML valide (`yamllint` relaxed) — le `lint` casse sinon.
+
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **aucun secret** dans les configs/dashboards,
+> Grafana admin fort (cf. `make monitor-up`) ; gates `make lint gitleaks` **verts**.
 
 ## 6. Observabilité
 
@@ -762,6 +782,11 @@ make clean-deep                      # clean + venvs Python locaux
 - Conteneur nginx lié à **127.0.0.1** côté hôte (mono-poste) ; surcouches prod
   réécrites avec `!reset` (ne pas perdre les volumes — cf. branding).
 
+> 🔒 **Sécurité (scope)** : applique [`SECURITY.md`](../../SECURITY.md) + le scope gardien
+> [`security-governance`](security-governance.md) ; **zéro secret en repo** (`gen-secrets.sh`),
+> `runAsNonRoot`, TLS/`ENCRYPTION_KEY_SECRET` en prod, ports liés à 127.0.0.1 ;
+> gates `make compose-validate gitleaks` **verts**.
+
 ## 6. Observabilité
 
 Démarrage via `make verify` ; la pile observabilité est le scope
@@ -864,6 +889,10 @@ make test                            # barrière complète (inclut les 4 ci-dess
 - **Zéro mock présenté comme réel** : si non testé/vérifié, le dire.
 - **Fail-closed par défaut** ; **zéro secret en repo** ; **télémétrie OFF**.
 - On relève les **pins** dès qu'une CVE apparaît — on ne désactive **jamais** un gate.
+
+> 🔒 **Sécurité (scope gardien)** : ce scope **EST** la référence sécurité. Source :
+> [`SECURITY.md`](../../SECURITY.md). Fait respecter par les autres scopes : fail-closed,
+> zéro secret, FOSS vs EE, gates `make bandit gitleaks pip-audit trivy` **verts**.
 
 ## 6. Observabilité
 

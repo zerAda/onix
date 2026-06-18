@@ -40,8 +40,11 @@ make llms-full        # régénère llms-full.txt (sinon docs-check échoue)
 ```bash
 make docs-check       # registre + gabarit + owner + liens + llms-full (+ revue)
 make docs-freshness   # anti-drift : code de scope ⇒ doc MAJ
+make bandit gitleaks pip-audit   # sécurité : 0 medium+, 0 secret, 0 CVE
 ```
-Les deux doivent être **verts**. Sinon, corrige (le message dit quoi).
+Tout doit être **vert**. Sinon, corrige (le message dit quoi). Si un **invariant de
+sécurité** du scope a changé, mets à jour la ligne `🔒 Sécurité (scope)` du dossier
+(cf. [`../../../SECURITY.md`](../../../SECURITY.md) + scope `security-governance`).
 
 ## 5. Cas particuliers
 - **Nouveau scope** : ajoute une entrée dans `docs/scopes/scopes.json` (owner,
