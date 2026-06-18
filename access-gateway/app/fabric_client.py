@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 # Import subprocess : utilisé UNIQUEMENT pour `az` avec une liste d'arguments FIXE
 # (jamais shell=True, jamais de chaîne interpolée). Cf. acquire_token_via_azcli.
 import subprocess  # nosec B404
@@ -72,6 +73,19 @@ _MAX_PAGES = 1000
 
 # Timeout par défaut des appels (cohérent graph_client.py : 15s).
 _DEFAULT_TIMEOUT = httpx.Timeout(15.0)
+
+# Détection d'un GUID (forme d'adressage OneLake par identifiant). En forme GUID,
+# la convention OneLake est `/{wsGUID}/{itemGUID}/...` SANS suffixe `.itemtype`
+# (le suffixe `.type` n'est valide qu'en adressage par NOM). Mélanger les deux
+# (`{GUID}.Lakehouse`) provoque un HTTP 400. Cf. docs OneLake « URI syntax ».
+_GUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _is_guid(value: str) -> bool:
+    """Vrai si `value` est un GUID (adressage OneLake par identifiant)."""
+    return bool(_GUID_RE.match((value or "").strip()))
 
 # Type d'un fournisseur de jeton injectable. Reçoit l'audience demandée et
 # renvoie un access_token brut. (Variante « consciente de l'audience » du
@@ -479,7 +493,10 @@ class FabricClient:
                 "tables gold uniquement)."
             )
         # Le filesystem est le workspace ; le directory cible l'item + sous-chemin.
-        directory = f"{item}.{item_type}"
+        # Adressage par GUID → PAS de suffixe `.itemtype` (sinon HTTP 400) ; par NOM
+        # → suffixe `.itemtype`. Cf. _is_guid / convention OneLake.
+        item_ref = item if _is_guid(item) else f"{item}.{item_type}"
+        directory = item_ref
         if subpath:
             directory = f"{directory}/{subpath.lstrip('/')}"
         base = f"{self.settings.onelake_host}/{workspace}"
@@ -543,8 +560,9 @@ class FabricClient:
                 "onelake_read_file: accès hors périmètre GOLD refusé (lecture seule, "
                 "tables gold uniquement)."
             )
-        # Avec un GUID d'item, item_type est vide → pas de suffixe ".type".
-        item_ref = f"{item}.{item_type}" if item_type else item
+        # Adressage par GUID → pas de suffixe ".type" (même si item_type est fourni) ;
+        # par NOM → suffixe ".itemtype". Cf. _is_guid / convention OneLake.
+        item_ref = item if _is_guid(item) else (f"{item}.{item_type}" if item_type else item)
         url = (
             f"{self.settings.onelake_host}/{workspace}/{item_ref}/{path.lstrip('/')}"
         )

@@ -308,6 +308,37 @@ def test_onelake_list_paths_filesystem_and_directory(monkeypatch):
     assert "directory=goldlake.Lakehouse%2FTables" in url
 
 
+def test_onelake_list_paths_guid_item_no_type_suffix(monkeypatch):
+    """Régression (détectée en e2e LIVE) : avec un GUID d'item, l'URL OneLake NE
+    doit PAS porter le suffixe `.itemtype` (forme GUID = `/{itemGUID}/...`). Le
+    mélange `{GUID}.Lakehouse` provoquait un HTTP 400 réel."""
+    real_guid = "595869b2-7364-4584-bc16-1539318cca5f"
+    settings = _settings(monkeypatch)
+    # Le lakehouse gold est adressé par GUID (réaligne le périmètre gold dessus).
+    monkeypatch.setenv("GATEWAY_FABRIC_GOLD_LAKEHOUSE_ID", real_guid)
+    config.reset_settings_cache()
+    settings = config.get_settings()
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"paths": [{"name": "Tables/x"}]})
+
+    async def go():
+        fab = _client(handler, settings)
+        try:
+            # item = GUID + item_type fourni : le suffixe `.Lakehouse` doit être IGNORÉ.
+            return await fab.onelake_list_paths("goldws", real_guid, "Lakehouse")
+        finally:
+            await fab.aclose()
+
+    run(go())
+    url = seen["url"]
+    assert real_guid in url
+    assert ".Lakehouse" not in url  # pas de suffixe en forme GUID (sinon HTTP 400)
+    assert f"directory={real_guid}%2FTables" in url
+
+
 def test_onelake_list_paths_pagination_header(monkeypatch):
     settings = _settings(monkeypatch)
 
