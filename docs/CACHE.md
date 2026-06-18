@@ -89,12 +89,25 @@ Le `principal` reste utilisé en audit (pseudonymisé, comme partout).
 | Raison | Déclencheur | Pourquoi on bypass |
 |---|---|---|
 | `no_store` | header `Cache-Control: no-store` | directive HTTP standard cliente, prioritaire |
-| `streaming` | `payload.stream is True` | un body SSE/streamé n'est pas un JSON intégral cachable |
+| `streaming` | `payload.stream is True` | un flux NDJSON streamé n'est pas un JSON intégral cachable |
 | `write_intent` | `guardrail.is_write_request(payload.message)` | une intention d'écriture ne doit JAMAIS être satisfaite sans le pipeline complet (le post-filtre y est encore plus strict) |
 | `explicit_admin_bypass` | header `X-Onix-Cache: bypass` **+** `is_admin=True` | debug / diagnostic admin ; **ignoré pour les non-admins** (anti déni-de-cache) |
 
 L'ordre est délibéré : `no-store` (directive cliente HTTP) > `streaming` >
 `explicit_admin_bypass` > `write_intent` (heuristique métier).
+
+> **État de câblage réel (honnêteté, règle de jeu n°1).** La logique
+> `explicit_admin_bypass` **existe et est testée unitairement** dans
+> `should_bypass(..., is_admin=True)` (`access-gateway/app/cache.py:681-684`),
+> **mais elle n'est PAS atteignable par le chemin HTTP en production** :
+> l'orchestrateur appelle `should_bypass(payload=payload, headers=request.headers)`
+> **sans** passer `is_admin` (`access-gateway/app/main.py:405`), donc le paramètre
+> garde sa valeur par défaut `is_admin=False` (`access-gateway/app/cache.py:652`).
+> Conséquence : le header `X-Onix-Cache: bypass` est **toujours ignoré** sur le
+> chemin réel et le bypass admin n'est **jamais déclenché**. **Impact sécurité
+> nul** (cache OFF n'élargit jamais l'accès ; refuser le bypass est la posture
+> sûre), mais la fonctionnalité est **inerte** tant que `is_admin` n'est pas câblé
+> dans `main.py`. À ne pas présenter comme opérationnelle.
 
 ---
 
@@ -110,6 +123,20 @@ L'ordre est délibéré : `no-store` (directive cliente HTTP) > `streaming` >
 └─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
+```
+
+> **Comportement réel au démarrage (secret HMAC manquant).** `build_cache` **lève
+> bien** une `RuntimeError` (`access-gateway/app/cache.py:976-980`) — c'est un
+> **filet interne fail-loud**. **Mais** l'orchestrateur la **capte** au démarrage
+> (`access-gateway/app/main.py:164-168`) et **désactive silencieusement le cache**
+> (`app.state.response_cache = None`) après un **log `CRITICAL`**, au lieu de bloquer
+> la passerelle. La posture effective est donc une **dégradation gracieuse**
+> (cache OFF), pas un arrêt du service : le cache est une **optimisation**, pas une
+> **autorité** ; cache OFF = posture sûre (aucun risque de fuite). La passerelle
+> continue de servir sans cache. Surveiller le log `CRITICAL` « Cache DÉSACTIVÉ »
+> pour détecter une configuration incomplète en production.
+
+```
        ┌───────────────────────────────────────────────────────┐
        │ Cache  (facade)                                       │
        │  - lookup(key, tier="exact") → dict | None            │
@@ -170,6 +197,12 @@ if cache and bypass is None and 200 <= resp.status_code < 300:
     cache.store(ckey, body, ttl=settings.cache_ttl_seconds)
 ```
 
+> **Note (état réel)** : le squelette ci-dessus illustre la signature complète de
+> `should_bypass` (avec `is_admin`). Le câblage **réel** de `main.py` n'alimente
+> **pas** `is_admin` (cf. §3, « État de câblage réel ») : le bypass admin est donc
+> inerte en production. Le reste du squelette (lookup, store, bypass HTTP standard)
+> est fidèle au code.
+
 **Point critique** : on stocke le `body` **POST-FILTRÉ** (après `post_filter`).
 Conséquence : sur un hit, on **ne re-run pas le post-filtre** — la réponse
 servie est exactement celle qu'on a délivrée la première fois (déterministe,
@@ -225,7 +258,7 @@ rate(onix_gateway_cache_hits_total[5m])
 | `GATEWAY_CACHE_REDIS_URL` | (vide) | `redis://host:6379/0` → Redis ; vide → LRU mémoire. |
 | `GATEWAY_CACHE_TTL_SECONDS` | `3600` | TTL d'une entrée. `0` = sans expiration (déconseillé). |
 | `GATEWAY_CACHE_MAX_ENTRIES` | `512` | Bornage de la LRU mémoire (ignoré en Redis). |
-| `GATEWAY_CACHE_HMAC_SECRET` | (REQUIS si activé) | Secret HMAC stable. **Fail-loud** au démarrage si manquant. |
+| `GATEWAY_CACHE_HMAC_SECRET` | (REQUIS si activé) | Secret HMAC stable. Si manquant : `build_cache` lève une `RuntimeError` (filet fail-loud, `cache.py:976-980`), **mais** `main.py:164-168` la capte et **désactive le cache** (log `CRITICAL`) plutôt que de bloquer le service → **dégradation gracieuse** (cf. §4). |
 | `GATEWAY_CACHE_LOCALE` | `fr` | Locale incluse dans la clé (différencie FR/EN). |
 | `GATEWAY_CACHE_SECONDS_PER_HIT` | `2.0` | Heuristique « secondes économisées ». |
 | `GATEWAY_SEMANTIC_CACHE_ENABLED` | `false` | **OPT-IN.** Active le tier sémantique (embedding + seuil). Désactivé par défaut : risque de précision sur du factuel (cf. §13). |
@@ -300,8 +333,9 @@ Plusieurs leviers (du plus chirurgical au plus radical) :
   un déploiement sans Redis aura un hit-rate dégradé (chaque réplica
   reconstruit son cache). **Redis recommandé** dès qu'on monte au-delà
   d'un worker uvicorn.
-* **Pas de cache pour `stream=True`.** Un body SSE n'est pas un JSON intégral
-  ; le cacher trahirait la sémantique streaming attendue par le client.
+* **Pas de cache pour `stream=True`.** Un flux NDJSON (`application/x-ndjson`,
+  cf. `access-gateway/app/main.py:391`) n'est pas un JSON intégral ; le cacher
+  trahirait la sémantique streaming attendue par le client.
 * **Pas de scope « par utilisateur ».** Volontaire : deux utilisateurs au
   même périmètre RBAC partagent légitimement le cache. Si un usage exigeait
   un cache strictement par-utilisateur (préférences personnelles dans la
