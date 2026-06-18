@@ -52,6 +52,11 @@ services:
       - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-false}
       - SECRET=${SECRET:?Lancez scripts/gen-secrets.sh pour generer les secrets}
       - USER_AUTH_SECRET=${USER_AUTH_SECRET:?Lancez scripts/gen-secrets.sh pour generer les secrets}
+      # Chiffrement AU REPOS des secrets connecteurs/LLM/OAuth stockes en base.
+      # Onyx (FOSS no-op ; EE court-circuite si vide) les ecrit EN CLAIR sans
+      # erreur au boot si la cle est vide. Genere par gen-secrets.sh ; jamais en
+      # repo. Cf. docs/audit-onyx/30-security.md:109-111, SECURITY.md:33.
+      - ENCRYPTION_KEY_SECRET=${ENCRYPTION_KEY_SECRET:?Lancez scripts/gen-secrets.sh pour generer les secrets}
       - WEB_DOMAIN=${WEB_DOMAIN:-http://localhost:3000}
       # Confidentialité : aucune télémétrie sortante.
       - DISABLE_TELEMETRY=${DISABLE_TELEMETRY:-true}
@@ -108,6 +113,9 @@ services:
     environment:
       - AUTH_TYPE=${AUTH_TYPE:-basic}
       - DISABLE_TELEMETRY=${DISABLE_TELEMETRY:-true}
+      # Chiffrement au repos (cf. api_server) : le background indexe et persiste
+      # aussi des secrets connecteurs -> doit lire la MÊME clé pour (dé)chiffrer.
+      - ENCRYPTION_KEY_SECRET=${ENCRYPTION_KEY_SECRET:?Lancez scripts/gen-secrets.sh pour generer les secrets}
       - POSTGRES_HOST=relational_db
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set in .env via gen-secrets.sh}

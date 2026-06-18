@@ -132,6 +132,9 @@ affinity:
 {{/*
 Variables d'environnement SECRÈTES data-tier, injectées depuis le Secret K8s.
 Noms de clés FIXES (cf. values.secrets). Réutilisé par api/background/actions/...
+Inclut ENCRYPTION_KEY_SECRET : SANS clé NON VIDE, Onyx écrit les secrets connecteurs/
+LLM/OAuth EN CLAIR dans Postgres SANS erreur au boot (asymétrie : échoue sur
+USER_AUTH_SECRET vide, PAS sur celle-ci). Cf. docs/audit-onyx/30-security.md:109-111.
 Usage: env:\n{{ include "onix.dataTierSecretEnv" . | nindent 12 }}
 */}}
 {{- define "onix.dataTierSecretEnv" -}}
@@ -150,6 +153,8 @@ Usage: env:\n{{ include "onix.dataTierSecretEnv" . | nindent 12 }}
   valueFrom: { secretKeyRef: { name: {{ $secret }}, key: SECRET } }
 - name: USER_AUTH_SECRET
   valueFrom: { secretKeyRef: { name: {{ $secret }}, key: USER_AUTH_SECRET } }
+- name: ENCRYPTION_KEY_SECRET
+  valueFrom: { secretKeyRef: { name: {{ $secret }}, key: ENCRYPTION_KEY_SECRET } }
 {{- end -}}
 
 {{/*

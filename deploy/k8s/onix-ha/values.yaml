@@ -46,6 +46,9 @@ secrets:
   # Clés attendues dans le Secret (noms FIXES, lus par les Deployments) :
   #   POSTGRES_PASSWORD, OPENSEARCH_ADMIN_PASSWORD, REDIS_PASSWORD,
   #   S3_AWS_ACCESS_KEY_ID, S3_AWS_SECRET_ACCESS_KEY, SECRET, USER_AUTH_SECRET,
+  #   # Chiffrement AU REPOS des secrets connecteurs/LLM Onyx — SINON ils sont
+  #   # écrits EN CLAIR dans Postgres SANS erreur au boot (footgun critique) :
+  #   ENCRYPTION_KEY_SECRET,
   #   ONIX_ACTIONS_API_KEY, BROKER_PASSWORD
   #   # onix-actions WS2 (security.py / audit_log.py / caller_identity.py) — SINON
   #   # /admin/* en 403 fail-closed et chaîne d'audit en repli SHA-256 :
