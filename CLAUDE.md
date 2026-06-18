@@ -31,15 +31,21 @@ Rappels rapides pour Claude Code :
 | Audit Onyx (verdict, dimensions) | [`docs/audit-onyx/00-VERDICT.md`](docs/audit-onyx/00-VERDICT.md) |
 | Tout (index exhaustif) | [`docs/DOCS_INDEX.md`](docs/DOCS_INDEX.md) |
 
-## 🔄 Tenir cette doc-infra à jour
+## 🔄 Tenir cette doc-infra à jour (à chaque action)
 
-- **Règle (non négociable)** : tu modifies un scope → mets à jour **son** dossier
-  [`docs/scopes/<scope>.md`](docs/scopes/) (carte du code/commandes/tests), **son**
+> Principe (« context engineering ») : *un agent n'est aussi bon que la dernière
+> fois où son contexte a été revu.* La fraîcheur est donc **vérifiée, pas espérée**.
+
+- **Règle (non négociable)** : tu touches le code d'un **scope** → tu mets à jour
+  **son** [`docs/scopes/<scope>.md`](docs/scopes/) (carte du code/commandes), **son**
   `docs/audit-reality/<scope>.md` (preuve `fichier:ligne`) et **son**
-  `ralph/state/<scope>.md` (journal). « Zéro mock présenté comme réel » s'applique aussi à la doc.
+  `ralph/state/<scope>.md` (journal). « Zéro mock présenté comme réel » vaut aussi pour la doc.
 - **Commandes** :
-  - `make docs-check` — valide l'infra : **1 dossier par scope**, **0 lien de navigation mort**,
-    signale les orphelins. **Inclus dans `make lint` → `make test` et en CI** (job `validate`).
-  - `make test` — barrière qualité complète (la doc-infra en fait partie).
-- **Nouveau scope ?** ajoute-le à `SCOPES` dans [`scripts/check-docs-map.py`](scripts/check-docs-map.py)
-  et crée son `docs/scopes/<scope>.md` (gabarit : [`docs/scopes/README.md`](docs/scopes/README.md)).
+  - `make docs-check` — STRUCTURE : registre [`docs/scopes/scopes.json`](docs/scopes/scopes.json),
+    gabarit des dossiers, 0 lien mort. Inclus dans `make lint` → `make test` **et en CI**.
+  - `make docs-freshness` — ANTI-DRIFT : refuse une modif de code de scope **sans** MAJ doc
+    (gate CI sur PR ; dérogation justifiée `[docs-skip:<scope>]`).
+  - `make hooks-install` — exécute ces deux gardes en **pre-commit** (à chaque commit).
+- **Source de vérité / nouveau scope** : édite [`docs/scopes/scopes.json`](docs/scopes/scopes.json)
+  (registre) + crée son `docs/scopes/<scope>.md` (gabarit : [`docs/scopes/README.md`](docs/scopes/README.md)).
+- **Carte agent racine** (standard llms.txt) : [`llms.txt`](llms.txt).

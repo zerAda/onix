@@ -1,0 +1,48 @@
+{
+  "_comment": "Registre des scopes — SOURCE DE VÉRITÉ UNIQUE de la doc-infra agents. Consommé par scripts/check-docs-map.py (structure/liens) et scripts/check-docs-freshness.py (anti-drift doc↔code). Ajouter un scope = ajouter une entrée ici + créer son docs/scopes/<scope>.md (gabarit: docs/scopes/README.md). 'code' = préfixes de chemins déclenchant l'exigence de mise à jour doc (anti-drift) ; [] = scope transverse (pas de déclencheur de code exclusif).",
+  "required_sections": 10,
+  "scopes": {
+    "access-gateway": {
+      "owner": "Sécurité plateforme (FastAPI/Redis)",
+      "code": ["access-gateway/"],
+      "dossier": "docs/scopes/access-gateway.md",
+      "audit": "docs/audit-reality/access-gateway.md",
+      "state": "ralph/state/access-gateway.md"
+    },
+    "actions": {
+      "owner": "Backend + RGPD",
+      "code": ["actions/"],
+      "dossier": "docs/scopes/actions.md",
+      "audit": "docs/audit-reality/actions.md",
+      "state": "ralph/state/actions.md"
+    },
+    "rag-prompts": {
+      "owner": "ML/RAG + prompt-engineering",
+      "code": ["tests/rag/", "prompts/"],
+      "dossier": "docs/scopes/rag-prompts.md",
+      "audit": "docs/audit-reality/rag-prompts.md",
+      "state": "ralph/state/rag-prompts.md"
+    },
+    "monitoring": {
+      "owner": "Observabilité / SRE",
+      "code": ["monitoring/"],
+      "dossier": "docs/scopes/monitoring.md",
+      "audit": "docs/audit-reality/monitoring.md",
+      "state": "ralph/state/monitoring.md"
+    },
+    "deploy-ops": {
+      "owner": "SRE / DevOps / IaC",
+      "code": ["deploy/", "nginx/"],
+      "dossier": "docs/scopes/deploy-ops.md",
+      "audit": "docs/audit-reality/deploy-ops.md",
+      "state": "ralph/state/deploy-ops.md"
+    },
+    "security-governance": {
+      "owner": "Sécurité / conformité / architecture",
+      "code": [],
+      "dossier": "docs/scopes/security-governance.md",
+      "audit": "docs/audit-reality/security-governance.md",
+      "state": "ralph/state/security-governance.md"
+    }
+  }
+}

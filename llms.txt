@@ -1,0 +1,33 @@
+# onix — carte pour agents (llms.txt)
+
+> onix = couche FOSS de compensation au-dessus d'**Onyx** (RAG souverain, ex-Danswer)
+> + **Ollama** (LLM local). Elle ajoute ce qu'Onyx réserve à l'EE ou n'a pas : RBAC
+> par-document, audit-trail HMAC, PII/DLP, rétention, déploiement durci.
+> Ceci est une **carte d'orientation** (standard llms.txt) : lis les fichiers
+> « Démarrage » d'abord, puis le **dossier de scope** concerné, puis la doc de fond.
+> Convention : commentaires en français, stdlib-first, zéro secret en repo, zéro
+> mock présenté comme réel, toujours distinguer **FOSS vs EE**.
+
+## Démarrage (à lire en premier)
+- [AGENTS.md](AGENTS.md) : embarquement, 4 couches, carte du dépôt, build/test, règles de jeu.
+- [CLAUDE.md](CLAUDE.md) : routeur « sujet → doc » + règle de mise à jour de la doc-infra.
+- [docs/scopes/README.md](docs/scopes/README.md) : routeur des 6 scopes + gabarit + carte sujet→scope.
+
+## Dossiers de scope (point d'entrée par domaine)
+- [access-gateway](docs/scopes/access-gateway.md) : passerelle RBAC, ACL par-doc, cache, streaming, SharePoint/Fabric.
+- [actions](docs/scopes/actions.md) : OCR/docgen/tâches, audit HMAC, PII, DLP, rétention, FinOps.
+- [rag-prompts](docs/scopes/rag-prompts.md) : qualité RAG, garde-fous, RAGAS, prompt agent.
+- [monitoring](docs/scopes/monitoring.md) : Prometheus/Grafana/Loki, alertes, SLO.
+- [deploy-ops](docs/scopes/deploy-ops.md) : Compose/Helm/Azure, scripts, branding.
+- [security-governance](docs/scopes/security-governance.md) : sécurité transverse, RGPD, parité FOSS/EE.
+
+## Architecture & sécurité
+- [ARCHITECTURE.md](ARCHITECTURE.md) : architecture système (4 couches, frontière FOSS/EE/onix).
+- [SECURITY.md](SECURITY.md) : modèle de sécurité (menaces, contrôles, RGPD).
+- [docs/audit-onyx/00-VERDICT.md](docs/audit-onyx/00-VERDICT.md) : audit byte-level d'Onyx (FOSS vs EE).
+- [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md) : index exhaustif de la documentation.
+
+## Maintenir cette doc-infra (à chaque action)
+- `make docs-check` : registre, gabarit des dossiers, liens de navigation (CI : job `validate`).
+- `make docs-freshness` : anti-drift — toute modif de code de scope exige une MAJ de sa doc.
+- Source de vérité des scopes : [docs/scopes/scopes.json](docs/scopes/scopes.json).
