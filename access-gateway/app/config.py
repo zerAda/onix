@@ -141,26 +141,60 @@ class Settings:
     # (rafraîchi périodique). 0 ⇒ figée après le 1er build (pas de re-sync auto).
     doc_acl_refresh_seconds: int
 
+    # ── Microsoft Fabric / OneLake / Power BI (cf. app/fabric_client.py) ──
+    # Module d'accès Fabric : énumération workspaces/items, RBAC de contrôle
+    # (roleAssignments), lecture OneLake (données ADLS Gen2) et datasets Power BI.
+    # Réutilise par DÉFAUT les identifiants Entra de Graph (même SPN) : on ne
+    # duplique pas un secret. Des overrides dédiés existent si le SPN Fabric
+    # diffère du SPN Graph. Défauts INERTES : si Fabric non configuré (pas de
+    # tenant/client/secret), `fabric_configured` est False → aucun appel (comme
+    # Graph non configuré).
+    fabric_tenant_id: str
+    fabric_client_id: str
+    fabric_client_secret: str
+    fabric_authority: str  # ex. https://login.microsoftonline.com
+    # Hôtes des trois surfaces (constants d'exploitation, pas d'entrée utilisateur).
+    fabric_api_host: str  # ex. https://api.fabric.microsoft.com
+    onelake_host: str  # ex. https://onelake.dfs.fabric.microsoft.com
+    powerbi_host: str  # ex. https://api.powerbi.com
+    # Identifiants par défaut OPTIONNELS (workspace/item ciblés par une intégration
+    # ultérieure ; vides = non câblé, l'appelant fournit les ids explicitement).
+    fabric_workspace_id: str
+    fabric_item_id: str
+
     @property
     def graph_configured(self) -> bool:
         return bool(self.graph_tenant_id and self.graph_client_id and self.graph_client_secret)
+
+    @property
+    def fabric_configured(self) -> bool:
+        """Fabric est exploitable si un SPN (tenant/client/secret) est disponible
+        — soit dédié Fabric, soit hérité de Graph (mêmes identifiants Entra)."""
+        return bool(
+            self.fabric_tenant_id and self.fabric_client_id and self.fabric_client_secret
+        )
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     claims = os.environ.get("GATEWAY_OIDC_GROUP_CLAIMS", "groups,roles")
     oidc_group_claims = tuple(c.strip() for c in claims.split(",") if c.strip())
+    # Identifiants Entra de Graph (réutilisés par défaut pour Fabric : même SPN).
+    graph_tenant_id = os.environ.get("GATEWAY_GRAPH_TENANT_ID", "").strip()
+    graph_client_id = os.environ.get("GATEWAY_GRAPH_CLIENT_ID", "").strip()
+    graph_client_secret = os.environ.get("GATEWAY_GRAPH_CLIENT_SECRET", "").strip()
+    graph_authority = os.environ.get(
+        "GATEWAY_GRAPH_AUTHORITY", "https://login.microsoftonline.com"
+    ).rstrip("/")
     return Settings(
         onyx_base_url=os.environ.get("GATEWAY_ONYX_BASE_URL", "http://api_server:8080").rstrip("/"),
         onyx_api_key=os.environ.get("GATEWAY_ONYX_API_KEY", "").strip(),
         group_source=os.environ.get("GATEWAY_GROUP_SOURCE", "auto").strip().lower(),
-        graph_tenant_id=os.environ.get("GATEWAY_GRAPH_TENANT_ID", "").strip(),
-        graph_client_id=os.environ.get("GATEWAY_GRAPH_CLIENT_ID", "").strip(),
-        graph_client_secret=os.environ.get("GATEWAY_GRAPH_CLIENT_SECRET", "").strip(),
+        graph_tenant_id=graph_tenant_id,
+        graph_client_id=graph_client_id,
+        graph_client_secret=graph_client_secret,
         graph_host=os.environ.get("GATEWAY_GRAPH_HOST", "https://graph.microsoft.com").rstrip("/"),
-        graph_authority=os.environ.get(
-            "GATEWAY_GRAPH_AUTHORITY", "https://login.microsoftonline.com"
-        ).rstrip("/"),
+        graph_authority=graph_authority,
         mapping_path=os.environ.get("GATEWAY_MAPPING_PATH", "/config/group_map.json"),
         deny_if_no_match=_bool("GATEWAY_DENY_IF_NO_MATCH", True),
         oidc_group_claims=oidc_group_claims,
@@ -210,6 +244,26 @@ def get_settings() -> Settings:
             "GATEWAY_DOC_ACL_MAPPING_PATH", "config/doc_acl_mapping.json"
         ).strip(),
         doc_acl_refresh_seconds=int(os.environ.get("GATEWAY_DOC_ACL_REFRESH_SECONDS", "900")),
+        # Microsoft Fabric / OneLake / Power BI (cf. app/fabric_client.py).
+        # Identifiants : override dédié SINON repli sur le SPN Graph (même Entra).
+        fabric_tenant_id=os.environ.get("GATEWAY_FABRIC_TENANT_ID", "").strip() or graph_tenant_id,
+        fabric_client_id=os.environ.get("GATEWAY_FABRIC_CLIENT_ID", "").strip() or graph_client_id,
+        fabric_client_secret=(
+            os.environ.get("GATEWAY_FABRIC_CLIENT_SECRET", "").strip() or graph_client_secret
+        ),
+        fabric_authority=os.environ.get("GATEWAY_FABRIC_AUTHORITY", "").strip().rstrip("/")
+        or graph_authority,
+        fabric_api_host=os.environ.get(
+            "GATEWAY_FABRIC_API_HOST", "https://api.fabric.microsoft.com"
+        ).rstrip("/"),
+        onelake_host=os.environ.get(
+            "GATEWAY_ONELAKE_HOST", "https://onelake.dfs.fabric.microsoft.com"
+        ).rstrip("/"),
+        powerbi_host=os.environ.get(
+            "GATEWAY_POWERBI_HOST", "https://api.powerbi.com"
+        ).rstrip("/"),
+        fabric_workspace_id=os.environ.get("GATEWAY_FABRIC_WORKSPACE_ID", "").strip(),
+        fabric_item_id=os.environ.get("GATEWAY_FABRIC_ITEM_ID", "").strip(),
     )
 
 
