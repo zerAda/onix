@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional
 
 from .admin_state import _connect, _lock, hash_id
 from . import docgen
+from . import objstore
 
 
 def _retention_days(default: int = 365) -> int:
@@ -82,8 +83,14 @@ def purge_by_age(days: Optional[int] = None, *, purge_files: bool = True) -> Dic
             deleted_tasks = cur.rowcount or 0
         conn.commit()
 
+    deleted_s3_objects = 0
     if purge_files:
         deleted_jobs = _purge_old_jobs(days)
+        # En mode S3, les .docx vivent aussi (et surtout, en HA) dans le bucket :
+        # purger par âge les objets correspondants (fail-safe si store local).
+        if objstore.is_s3():
+            cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+            deleted_s3_objects = objstore.delete_jobs_older_than(cutoff_ts)
 
     return {
         "retention_days": days,
@@ -91,6 +98,7 @@ def purge_by_age(days: Optional[int] = None, *, purge_files: bool = True) -> Dic
         "deleted_usage_events": deleted_usage,
         "deleted_tasks": deleted_tasks,
         "deleted_job_dirs": deleted_jobs,
+        "deleted_s3_objects": deleted_s3_objects,
     }
 
 
@@ -178,14 +186,22 @@ def erase_subject(
         conn.commit()
 
     erased_files = 0
+    erased_s3_objects = 0
     if erase_files and subject_id:
         erased_files = _erase_subject_files(subject_id)
+        # En mode S3, les fiches .docx du sujet vivent dans le bucket partagé :
+        # les effacer aussi (art. 17 exhaustif en HA). Fail-safe si store local.
+        if objstore.is_s3():
+            needle = docgen.safe_filename(subject_id).lower()
+            if needle and needle != "client_inconnu":
+                erased_s3_objects = objstore.delete_subject_docx(needle)
 
     return {
         "subject_hash": h,
         "deleted_usage_events": deleted_usage,
         "deleted_tasks": deleted_tasks,
         "erased_files": erased_files,
+        "erased_s3_objects": erased_s3_objects,
     }
 
 

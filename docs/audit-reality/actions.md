@@ -22,11 +22,11 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 
 | Classe | Nb | Commentaire |
 |---|---:|---|
-| ✅ CONFORME | 38 | Cœur applicatif fidèle à la doc (sécurité, FinOps, stateless code) |
-| ⚠️ ÉCART MINEUR | 9 | Chiffres de tests périmés, openapi.json incomplet, vars non listées en compose |
-| ❌ ÉCART MAJEUR | 4 | Câblage Helm : `ONIX_OBJECT_STORE` absent, secrets WS2 non injectés |
+| ✅ CONFORME | 42 | Cœur applicatif + câblage Helm corrigé (secrets WS2, object store, erase S3) |
+| ⚠️ ÉCART MINEUR | 6 | Chiffres de tests périmés (P2), openapi.json incomplet (P1), vars non listées en compose (P2) |
+| ❌ ÉCART MAJEUR | 0 | **Les 3 P0 HA corrigés** (itération Ralph 2026-06-18) — cf. §"Écarts priorisés" |
 | 🕳️ DOC-SANS-CODE | 0 | Aucune garantie *purement* fantôme trouvée dans le code |
-| 🔇 CODE-SANS-DOC | 3 | `/metrics`, dérivation DSN `POSTGRES_*`, `objstore.delete_job` non câblé |
+| 🔇 CODE-SANS-DOC | 1 | `/metrics` Prometheus non décrit dans ACTIONS.md (P2) |
 | ❔ NON VÉRIFIABLE | 2 | Recette cluster réel HA (HPA/bascule), comportement Ollama live |
 
 > **Nuance importante** : les 4 ❌ sont des écarts **doc ↔ déploiement** (la doc
@@ -111,7 +111,7 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 | SMTP STARTTLS exigé par défaut (refus envoi clair si non annoncé) | ✅ | `notify.py:114-131` | |
 | Rétention purge TTL `POST /admin/retention/purge` (usage/tâches terminées/.docx) | ✅ | `retention.py:56-119`, `main.py:916-921` | journal d'audit **non** purgé |
 | Effacement ciblé sujet `POST /admin/retention/erase` (art.17), par id clair OU hash | ✅ | `retention.py:145-189`, `main.py:924-937` | colonnes hashées ; audit préservé |
-| `.docx` du sujet effacés en best-effort (nom de fichier) — note explicite | ⚠️ | `retention.py:192-229` | limite réelle ; **en mode S3 la purge n'efface PAS l'objet** (cf. §4) |
+| `.docx` du sujet effacés en best-effort (nom de fichier) — note explicite | ✅ | `retention.py:192-194` (local) + `delete_subject_docx` (S3) | best-effort par nom (local **et** S3) ; **en mode S3 l'objet est désormais effacé** (cf. §4, P0#3 corrigé) |
 | Fail-closed sur flag inconnu (typo) → False + log | ✅ | `admin_state.py:106-123` | inverse le fail-open AC360 ; testé |
 | `gen-secrets.sh` génère ADMIN_KEY/CALLER_HMAC/AUDIT_HMAC (48 car., idempotent) | ✅ | `scripts/gen-secrets.sh:95-107` | `.env` gitignoré |
 | `/access/log` + helpers (UPN/doc hashés, requête RAG jamais en clair) | ✅ | `audit_log.py:201-237`, `main.py:882-910` | `rag_search` ne stocke que la longueur |
@@ -135,37 +135,37 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 | `POST /audit/file/async`→202+task_id ; `GET /jobs/{id}` ; 503 si non activé | ✅ | `main.py:561-638` | mêmes garde-fous (auth/kill-switch/validation) |
 | Défaut mono-poste **strictement inchangé** (SQLite/local/synchrone) | ✅ | défauts `db.backend()`/`objstore.backend()`/`queue_enabled()` | imports paresseux PG/S3/Celery |
 | « **71 passed, 4 skipped** » suite par défaut | ⚠️ | suite réelle = **86** tests `def test` | chiffre périmé |
-| Le chart **câble déjà** `ONIX_DB_BACKEND=postgres`, `ONIX_QUEUE_ENABLED`, broker, `POSTGRES_*`/`S3_*` | ⚠️/❌ | `configmap.yaml:30,34`, `actions.yaml:45-53`, helper `dataTierSecretEnv` | `ONIX_DB_BACKEND`/`QUEUE`/`POSTGRES_*`/`S3_*` **OK** ; mais **`ONIX_OBJECT_STORE=s3` ABSENT** du ConfigMap → S3 jamais activé en HA |
-| values.yaml documente `actions.config.objectStore`, `dbUrl`, `s3Bucket`, etc. | ⚠️ | `values.yaml:223-238` | clés documentées **mais non rendues** dans les templates |
-| Rétention RGPD en mode S3 opère sur copie locale + base ; objets S3 via cycle de vie bucket | ⚠️ | `retention.py` n'appelle jamais `objstore.delete_job` | `objstore.delete_job` existe (`objstore.py:156-170`) mais **n'est pas branché** → objets S3 non effacés par `/erase` (note doc partiellement honnête mais l'erase ne supprime pas le S3) |
+| Le chart **câble déjà** `ONIX_DB_BACKEND=postgres`, `ONIX_QUEUE_ENABLED`, broker, `POSTGRES_*`/`S3_*` | ✅ | `configmap.yaml:30-49`, `actions.yaml:45-46`, helpers `dataTierSecretEnv`/`actionsSecretEnv` | **Corrigé (P0#2)** : `ONIX_OBJECT_STORE`+`ONIX_S3_BUCKET`+`POSTGRES_DB` ajoutés au ConfigMap (`configmap.yaml:45-49`) → S3 activé en HA |
+| values.yaml documente `actions.config.objectStore`, `dbUrl`, `s3Bucket`, etc. | ✅ | `values.yaml:236-237` rendus par `configmap.yaml:36-49` | clés désormais **rendues** dans les templates (preuve : `helm template … | grep ONIX_OBJECT_STORE` → `"s3"`) |
+| Rétention RGPD en mode S3 efface aussi les objets S3 | ✅ | `retention.py:97-102` (`delete_jobs_older_than`), `retention.py:185-194` (`delete_subject_docx`) ; `objstore.py:173-247` | **Corrigé (P0#3)** : `erase_subject`/`purge_by_age` branchent la suppression S3 (fail-safe si local) ; testé `test_security_rgpd.py` (4 tests, mock client S3) |
 | Recette cluster réel (HPA, bascule HA, débit Celery, PDB) hors périmètre code | ❔ | doc §7 | non vérifiable ici (honnêteté correcte) |
 
 ---
 
 ## Écarts « production-ready » priorisés
 
-### P0 — sécurité/RGPD, à corriger avant prod HA
-1. **❌ Secrets WS2 non injectés par le chart Helm.** `ONIX_ACTIONS_ADMIN_KEY`,
-   `ONIX_ACTIONS_AUDIT_HMAC_KEY`, `ONIX_ACTIONS_CALLER_HMAC_SECRET` **n'apparaissent
-   dans aucun template** (`grep` → seul un *commentaire* dans `values.yaml:238`).
-   Conséquences en HA :
-   - `/admin/*` répond **403 permanent** (fail-closed sans clé admin, `security.py:196-203`)
-     → **kill-switch, `/admin/audit/verify`, purge/erase RGPD inaccessibles** ;
-   - le journal d'audit retombe en **repli SHA-256** au lieu du HMAC promis
-     (`audit_log.py:139-145`) → garantie cryptographique réduite, contraire à
-     SECURITY_RGPD §4.2 (« À définir en production »).
-   *Fix* : ajouter ces 3 clés au Secret K8s + `env`/`secretKeyRef` dans `actions.yaml`.
+### P0 — sécurité/RGPD ✅ CORRIGÉS (itération Ralph 2026-06-18)
+1. **✅ Secrets WS2 injectés par le chart Helm.** Helper `onix.actionsSecretEnv`
+   (`_helpers.tpl:155-171`) injecte `ONIX_ACTIONS_ADMIN_KEY`,
+   `ONIX_ACTIONS_AUDIT_HMAC_KEY`, `ONIX_ACTIONS_CALLER_HMAC_SECRET` via `secretKeyRef`
+   dans le Deployment `actions` (`actions.yaml:45`) **ET** le worker Celery
+   (`actions-queue.yaml:127`). Clés documentées dans `secret.yaml:7-9`, `values.yaml:51-54`,
+   placeholders factices CI dans `values-kind-smoke.yaml:36-39`. **Preuve** :
+   `helm template … | grep ONIX_ACTIONS_ADMIN_KEY` → 2 `secretKeyRef` (actions+worker).
+   « Zéro secret en repo » respecté : valeurs via `secrets.existingSecret`/`create`.
 
-2. **❌ `ONIX_OBJECT_STORE=s3` non câblé en HA.** Le ConfigMap pose `ONIX_DB_BACKEND`
-   et `ONIX_QUEUE_ENABLED` mais **pas** `ONIX_OBJECT_STORE` (`configmap.yaml:23-35`).
-   En multi-réplica les `.docx` restent sur disque local → `GET /download/{id}` peut
-   tomber sur une réplique sans le fichier (404), contredisant STATELESS §3/§7.
-   *Fix* : ajouter `ONIX_OBJECT_STORE`, `ONIX_S3_BUCKET` (et `ONIX_DB_URL`/schéma si requis) au ConfigMap.
+2. **✅ `ONIX_OBJECT_STORE=s3` câblé en HA.** ConfigMap pose désormais
+   `ONIX_OBJECT_STORE`, `ONIX_S3_BUCKET`, `POSTGRES_DB` (+`ONIX_DB_URL`/`ONIX_DB_SCHEMA`
+   conditionnels) — `configmap.yaml:30-49`, pilotés par `actions.config.*`. Les creds S3
+   restent dans le Secret (`dataTierSecretEnv`), `S3_ENDPOINT_URL` déjà en ConfigMap.
+   **Preuve** : `helm template … | grep ONIX_OBJECT_STORE` → `"s3"` (défaut values).
 
-3. **⚠️→P0 Effacement RGPD incomplet en mode S3.** `retention.erase_subject` /
-   `purge_by_age` ne suppriment **que** la copie locale et la base ; `objstore.delete_job`
-   (`objstore.py:156-170`) existe mais **n'est jamais appelé**. Droit à l'effacement
-   (art. 17) non exhaustif si S3 actif. *Fix* : brancher `delete_job` dans `retention`.
+3. **✅ Effacement RGPD S3 exhaustif (art. 17).** `objstore` expose
+   `delete_subject_docx` (par nom de sujet) et `delete_jobs_older_than` (par âge)
+   — `objstore.py:173-247`. `retention.erase_subject` (`retention.py:185-194`) et
+   `purge_by_age` (`retention.py:97-102`) les appellent en mode S3 (fail-safe si local).
+   **Preuve** : 4 tests `test_security_rgpd.py` (client S3 mocké) prouvant la suppression
+   des bons objets, la préservation des autres sujets, et le no-op en mode local.
 
 ### P1 — fiabilité / contrat
 4. **⚠️ `openapi.json` périmé.** Spec présentée comme « faisant foi » mais sans les
@@ -183,7 +183,9 @@ chart HA, où elles tombent silencieusement en mode dégradé.
    prennent leurs défauts (egress `default-deny` → `/notify` & `/tasks` webhook bloqués
    sans allowlist : comportement sûr mais surprenant).
 8. **🔇 `/metrics` Prometheus** implémenté (`main.py:359-372`) et non décrit dans ACTIONS.md.
-9. **🔇 `objstore.delete_job` / dérivation DSN `POSTGRES_*`** : code utile non documenté/non branché.
+9. **🔇 dérivation DSN `POSTGRES_*`** : code utile (db.py) ; désormais documenté
+   (STATELESS §2). `objstore.delete_job` était non branché → **branché (P0#3)** via
+   `delete_subject_docx`/`delete_jobs_older_than` dans `retention.py`.
 
 ---
 
@@ -192,8 +194,10 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 Le **code applicatif `onix-actions` est solide et honnête** : audit HMAC chaîné réellement
 vérifiable et tamper-evident, redaction PII effective, DLP egress fail-closed + anti-SSRF,
 rétention/effacement implémentés, identité HMAC/JWT fail-closed, FinOps tokens mesurés vs
-estimés sans tricherie — le tout couvert par 86 tests offline. **Aucune garantie de sécurité
-n'est purement fantôme dans le code (0 🕳️).** En revanche, le **branchement HA (Helm) trahit la
-doc** : secrets WS2 non injectés (→ `/admin/*` en 403 et audit en SHA-256 dégradé) et
-`ONIX_OBJECT_STORE` non câblé (→ download multi-réplica cassé) ; **mono-poste = production-ready,
-HA = NON tant que les P0 ne sont pas corrigés.**
+estimés sans tricherie — le tout couvert par 90 tests offline. **Aucune garantie de sécurité
+n'est purement fantôme dans le code (0 🕳️).** Les **3 P0 du branchement HA (Helm) sont corrigés**
+(itération Ralph 2026-06-18) : secrets WS2 injectés via `onix.actionsSecretEnv` (actions+worker),
+`ONIX_OBJECT_STORE=s3`/`ONIX_S3_BUCKET` câblés dans le ConfigMap, et effacement RGPD S3 branché
+(`erase_subject`/`purge_by_age` suppriment les objets du bucket). **Mono-poste ET HA =
+production-ready côté code/chart** ; restent des P1/P2 (openapi.json à régénérer, rate-limit Redis,
+compteurs de tests) et la recette cluster réel (HPA/bascule) hors périmètre code.

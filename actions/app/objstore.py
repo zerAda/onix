@@ -170,6 +170,78 @@ def delete_job(job_id: str) -> int:
     return deleted
 
 
+def _iter_all_job_objects(client):
+    """Itère sur TOUS les objets sous `jobs/` (paginé). Renvoie des tuples
+    (key, last_modified). Fail-safe : s'arrête silencieusement en cas d'erreur."""
+    prefix = f"{_KEY_PREFIX}/"
+    token: Optional[str] = None
+    while True:
+        kwargs = {"Bucket": bucket_name(), "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        try:
+            resp = client.list_objects_v2(**kwargs)
+        except Exception:
+            return
+        for it in resp.get("Contents") or []:
+            yield it.get("Key", ""), it.get("LastModified")
+        if not resp.get("IsTruncated"):
+            return
+        token = resp.get("NextContinuationToken")
+        if not token:
+            return
+
+
+def _delete_keys(client, keys: list) -> int:
+    """Supprime un lot de clés (batché par 1000, limite S3 delete_objects)."""
+    deleted = 0
+    for i in range(0, len(keys), 1000):
+        batch = [{"Key": k} for k in keys[i : i + 1000]]
+        try:
+            client.delete_objects(Bucket=bucket_name(), Delete={"Objects": batch})
+            deleted += len(batch)
+        except Exception:
+            pass
+    return deleted
+
+
+def delete_subject_docx(needle: str) -> int:
+    """Effacement RGPD (art. 17) en mode S3 : supprime les objets `.docx` dont le
+    NOM contient `needle` (nom de client sanitisé). Symétrique au best-effort
+    local (`retention._erase_subject_files`) : le nom de fichier n'est pas
+    l'identité, mais permet un effacement exhaustif des fiches du sujet en S3.
+
+    Retourne le nombre d'objets supprimés. Fail-safe (ne lève jamais)."""
+    needle = (needle or "").strip().lower()
+    if not needle:
+        return 0
+    client = _client()
+    matched = [
+        key
+        for key, _ in _iter_all_job_objects(client)
+        if key.lower().endswith(".docx") and needle in key.rsplit("/", 1)[-1].lower()
+    ]
+    return _delete_keys(client, matched) if matched else 0
+
+
+def delete_jobs_older_than(cutoff_ts: float) -> int:
+    """Purge par âge (TTL) en mode S3 : supprime les objets `jobs/...` dont la
+    date de dernière modification est antérieure à `cutoff_ts` (epoch UTC).
+    Retourne le nombre d'objets supprimés. Fail-safe (ne lève jamais)."""
+    client = _client()
+    stale = []
+    for key, last_modified in _iter_all_job_objects(client):
+        if not key or last_modified is None:
+            continue
+        try:
+            # boto3 renvoie un datetime tz-aware (UTC) ; compare en epoch.
+            if last_modified.timestamp() < cutoff_ts:
+                stale.append(key)
+        except (AttributeError, OSError, ValueError):
+            continue
+    return _delete_keys(client, stale) if stale else 0
+
+
 def reset_cache() -> None:
     """Réinitialise le client mémoïsé (utilitaire de test / changement de config)."""
     with _client_lock:

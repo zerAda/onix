@@ -164,15 +164,20 @@ chaîne en aval → **détectable**.
 
 - **Purge par âge (TTL)** — `POST /admin/retention/purge` :
   supprime `usage_events`, tâches **terminées** et `.docx` générés au-delà de
-  `ONIX_RETENTION_DAYS` (défaut 365). Le **journal d'audit** n'est PAS purgé par
-  âge (obligation de traçabilité + intégrité de la chaîne).
+  `ONIX_RETENTION_DAYS` (défaut 365). En mode `ONIX_OBJECT_STORE=s3`, supprime
+  **aussi** les objets `jobs/…` périmés du bucket (`objstore.delete_jobs_older_than`)
+  → champ `deleted_s3_objects` dans la réponse. Le **journal d'audit** n'est PAS
+  purgé par âge (obligation de traçabilité + intégrité de la chaîne).
 - **Effacement ciblé par sujet** — `POST /admin/retention/erase` (art. 17) :
   supprime toutes les traces d'un sujet désigné par son **identifiant en clair**
   (hashé ici) **ou** son **hash**. Opère sur les colonnes hashées
   (`user_id_hash`, `client_id_hash`, `owner_hash`) + fichiers `.docx` du sujet.
+  En mode S3, supprime **aussi** les `.docx` du sujet dans le bucket
+  (`objstore.delete_subject_docx`) → champ `erased_s3_objects` dans la réponse.
   Le journal d'audit chaîné est **préservé** (il ne contient que des hash).
   > Note : le rapprochement des `.docx` se fait sur le nom de fichier sanitisé
-  > (best-effort) ; pour un effacement exhaustif, coupler à un index sujet→jobs.
+  > (best-effort, identique en local et S3) ; pour un effacement exhaustif au-delà
+  > du nom, coupler à un index sujet→jobs.
 
 ---
 
@@ -190,6 +195,14 @@ valeur de flag **inconnue** (`ON`, `tru`, typo…). Une coquille de configuratio
 `ONIX_ACTIONS_ADMIN_KEY`, `ONIX_ACTIONS_CALLER_HMAC_SECRET`,
 `ONIX_ACTIONS_AUDIT_HMAC_KEY`. `.env` reste **gitignoré** + `chmod 600`.
 Le scan **gitleaks** (CI/pre-commit) protège contre un commit accidentel.
+
+En **HA (Helm)**, ces trois clés sont injectées depuis le Secret K8s
+(`onix.actionsSecretEnv` → `secretKeyRef`) dans le Deployment `actions` **et** le
+worker Celery (cf. [`deploy/k8s/onix-ha`](../deploy/k8s/onix-ha/)). Sans elles :
+`/admin/*` répond **403 fail-closed** (kill-switch, `/admin/audit/verify`,
+purge/erase inaccessibles) et la chaîne d'audit retombe en **SHA-256**. Les
+**valeurs** viennent de `secrets.existingSecret` (prod / Key Vault) ou
+`secrets.create` (démo/CI) — **jamais du repo**.
 
 ---
 
