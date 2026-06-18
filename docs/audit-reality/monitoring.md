@@ -17,11 +17,11 @@
 
 | Classe | Nombre |
 |---|---:|
-| ✅ CONFORME | 30 |
+| ✅ CONFORME | 31 (dont 3 P1 🔇 résolus itér. 2 — voir §P1) |
 | ⚠️ ÉCART MINEUR | 6 |
 | ❌ ÉCART MAJEUR | 2 (dont 1 ✅ résolu — voir §P0) |
 | 🕳️ DOC-SANS-CODE | 0 |
-| 🔇 CODE-SANS-DOC | 4 |
+| 🔇 CODE-SANS-DOC | 3 (1 résolu : dashboard/alerte gateway ; restent : métriques sémantiques, auto-supervision Prometheus, rétention) |
 | ❔ NON VÉRIFIABLE | 1 |
 | **Total affirmations classées** | **43** |
 
@@ -100,7 +100,7 @@
 | Famille streaming (`stream_requests`, `stream_aborted{reason}`, `stream_overridden`) | ✅ | `metrics.py:141-158` | `reason` énuméré conforme à la doc §5b l.164. |
 | `onix_gateway_cache_semantic_candidates_total` / `_rejected_divergence_total` | 🔇 | `metrics.py:126-137` | **Émises mais ABSENTES du tableau §5b** (la doc ne liste que `tier=semantic` « futur »). Métriques sémantiques bien réelles, non documentées dans OBSERVABILITY.md. |
 | Caveat multi-worker `PROMETHEUS_MULTIPROC_DIR` | ✅ | doc §5b l.190-197 ; conteneurs lancés single-worker `Dockerfile:37` (gateway), `actions/Dockerfile:54` | Non bloquant en pratique : aucun `--workers N`. |
-| **Aucune métrique `onix_gateway_*` n'est consommée par un dashboard/alerte** | 🔇 | Grep `onix_gateway` dans `monitoring/` ⇒ uniquement commentaires `prometheus.yml:62-69` ; absentes de `onix-actions.json`, `onix-infra.json`, `onix-alerts.yml` | 18 métriques gateway émises + scrappées **mais ni visualisées ni alertées**. Écart « observabilité morte ». |
+| **Aucune métrique `onix_gateway_*` n'est consommée par un dashboard/alerte** | ✅ (résolu itér. 2) | Dashboard `grafana/dashboards/onix-gateway.json` (15 panneaux) + groupe d'alertes `onix-gateway-app` (`onix-alerts.yml`) + recording rules `onix-slo.yml` | Auparavant 🔇 (« observabilité morte ») : 18 métriques émises/scrappées sans consommateur. Désormais visualisées (décisions, garde-fous, citations, latence p50/p95/p99, erreurs amont, hit-rate cache, feedback, flux **NDJSON** avortés) et alertées. |
 
 ## 5. Dashboards Grafana (§3)
 
@@ -174,15 +174,39 @@
    Observabilité « morte » : citations, garde-fous, streaming avorté, cache —
    tous mesurés mais invisibles. Manque un dashboard `onix-gateway` + alertes
    (ex. taux d'avortement streaming, hit-rate cache).
+   → ✅ **RÉSOLU** (boucle Ralph `monitoring`, itér. 2) : dashboard
+   `monitoring/grafana/dashboards/onix-gateway.json` (15 panneaux : décisions
+   allow/deny `:106`, garde-fous par règle, citations avec/sans/sans-contexte,
+   latence p50/p95/p99 sur `onix_gateway_request_latency_seconds_bucket`,
+   erreurs amont, hit-rate cache effectif, feedback up/down, flux **NDJSON**
+   avortés par `reason` + taux d'avortement, logs Loki
+   `{compose_service="access-gateway"}`). Alertes dans le groupe
+   `onix-gateway-app` de `onix-alerts.yml` (`GatewayHighUpstreamErrorRate`,
+   `GatewayHighLatencyP95`, `GatewayAbnormalStreamAbortRate`). Validé : JSON +
+   YAML OK, `docker compose config -q` OK.
 3. **Aucun SLO/SLI ni recording rule (🔇/écart).** `grep recording|slo|sli` =
    0 résultat dans `monitoring/`. Pas d'objectif de disponibilité/latence
    formalisé, pas d'agrégation pré-calculée (les `histogram_quantile` sont
    recalculés à chaque évaluation). Attendu d'un déploiement régulé.
+   → ✅ **RÉSOLU** (itér. 2) : `monitoring/prometheus/rules/onix-slo.yml`
+   (capté par `rule_files: /etc/prometheus/rules/*.yml`) : recording rules SLI
+   (`job:onix_gateway_error_ratio:5m`, `job:onix_gateway_availability:ratio_5m`,
+   `job:onix_gateway_request_latency:p95_5m`,
+   `job:onix_gateway_stream_abort_ratio:5m` + équivalents actions) et 2 alertes
+   basées SLO (`GatewaySLOAvailabilityBreached` < 99 %,
+   `GatewaySLOLatencyBreached` p95 > 30 s). Validé : YAML + structure OK.
 4. **Grafana démarre sur `admin/admin` si `.env` absent (🔇).**
    `docker-compose.monitoring.yml:115-116` (`:-admin`). Mitigé *si et seulement
    si* `make secrets` a été lancé (`gen-secrets.sh:112` génère le mot de passe,
    pas l'utilisateur). `monitor-up` ne vérifie pas la présence du secret →
    exposition loopback en creds par défaut possible.
+   → ✅ **RÉSOLU** (itér. 2) : défaut compose durci (utilisateur `onix-admin`,
+   mot de passe de repli NON trivial — plus de `:-admin`,
+   `docker-compose.monitoring.yml`) ET garde-fou bloquant dans `monitor-up`
+   (`Makefile`) qui REFUSE le démarrage si `GRAFANA_ADMIN_PASSWORD` est absent,
+   trivial (`admin`/`CHANGEME`) ou < 12 caractères. `:?` écarté côté compose
+   pour ne pas casser `docker compose config` (.env facultatif). Validé :
+   `docker compose config -q` OK.
 
 ### P2 — durcissement / dette
 5. **Stack monitoring non durcie (écart vs posture AGENTS.md).** Aucun
@@ -206,7 +230,10 @@ La stack d'observabilité est **réellement implémentée, cohérente et conform
 l'essentiel (images épinglées, posture loopback/souveraine, 11 alertes vérifiées,
 2 dashboards fonctionnels, `/metrics` *réels* côté actions **et** gateway). Le
 défaut majeur n'est pas du mock mais une **doc périmée qui nie un endpoint pourtant
-livré** (`actions/metrics`), et une **observabilité gateway morte** (18 métriques
-sans dashboard/alerte). **Production-ready : OUI pour un poste/POC ; NON pour un
-client régulé** sans SLO/SLI, dashboard gateway, durcissement de la stack monitoring
-et garde-fou anti-`admin/admin`.
+livré** (`actions/metrics`) — corrigé en itér. 1. L'**observabilité gateway morte**
+(18 métriques sans dashboard/alerte), l'**absence de SLO/SLI** et le **garde-fou
+anti-`admin/admin`** sont résolus en itér. 2 (dashboard `onix-gateway.json`,
+alertes `onix-gateway-app`, recording rules + alertes SLO `onix-slo.yml`, refus de
+démarrage sans mot de passe fort). **Production-ready : OUI pour un poste/POC** ;
+reste pour un client régulé le **durcissement de la stack monitoring** (P2 :
+`no-new-privileges`/`cap_drop`/`read_only`) et la **visualisation OpenSearch**.
