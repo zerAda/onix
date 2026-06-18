@@ -13,7 +13,9 @@ httpx==0.28.1
 python-docx==1.1.2
 thefuzz==0.22.1
 pdfplumber==0.11.10
-pypdf==6.13.2
+# pypdf relevé 6.13.2 → 6.13.3 pour purger GHSA-jm82-fx9c-mx94 (gate pip-audit
+# --strict = 0 CVE). Correctif de patch (même mineure) → API inchangée.
+pypdf==6.13.3
 pytesseract==0.3.13
 pdf2image==1.17.0
 Pillow==12.2.0
