@@ -283,3 +283,50 @@ progress::-moz-progress-bar       { background-color: var(--gerep-primary); }
 [class*="progress"] [class*="bar"] {
   background-color: var(--gerep-primary) !important;
 }
+
+/* --------------------------------------------------------------------------
+   4) LOGO GEREP — remplacement FOSS du logo Onyx
+   --------------------------------------------------------------------------
+   IMPORTANT (FOSS vs EE) : le whitelabel ADMIN d'Onyx (nom d'app + upload de
+   logo dans Admin → Settings) est une fonctionnalité **Enterprise Edition**
+   (`ee/onyx/server/enterprise_settings/models.py:application_name, use_custom_logo`,
+   CE = « No » — cf. docs/audit-onyx/70-oss-health-licensing.md §Whitelabeling).
+   onix tourne sur les images **Community Edition** (`onyxdotapp/onyx-*`), donc
+   ce panneau n'est PAS disponible. On obtient le même résultat **en FOSS** en
+   substituant le logo ici, via la surcouche nginx que l'on maîtrise.
+
+   Le logo GEREP est servi par nginx en /onix-branding/gerep-logo.svg.
+   Sélecteurs CIBLÉS (chemins d'assets Onyx + lien de marque vers l'accueil)
+   pour ne PAS toucher aux images de contenu (connecteurs, documents…).
+   Best-effort sur frontend préfabriqué → à AFFINER EN LIVE (cf. caveat doc).
+   -------------------------------------------------------------------------- */
+
+/* Cas A — logo servi comme <img> (chemins d'assets Onyx connus + brand link).
+   `content:` remplace la source de l'image par notre logo. */
+img[src$="/logo.png"],
+img[src*="/logotype"],
+header a[href="/"] img,
+nav a[href="/"] img,
+[class*="sidebar"] a[href="/"] img {
+  content: url("/onix-branding/gerep-logo.svg") !important;
+  object-fit: contain !important;
+  max-height: 34px !important;
+  width: auto !important;
+}
+
+/* Cas B — logo en SVG inline (composant OnyxIcon) : on ne peut pas réécrire ses
+   tracés en CSS ; on masque le SVG et on pose le logo GEREP en fond du conteneur.
+   Conteneur réel à confirmer EN LIVE (data-testid/classe) → bloc prêt à activer :
+--------------------------------------------------------------------------------
+header a[href="/"] svg,
+nav a[href="/"] svg,
+[class*="sidebar"] a[href="/"] svg { display: none !important; }
+
+header a[href="/"],
+nav a[href="/"],
+[class*="sidebar"] a[href="/"] {
+  background: url("/onix-branding/gerep-logo.svg") left center / contain no-repeat !important;
+  min-width: 128px !important;
+  min-height: 34px !important;
+}
+-------------------------------------------------------------------------------- */

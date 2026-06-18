@@ -56,7 +56,7 @@
 ## 🎨 UI · branding
 | Doc | Contenu |
 |---|---|
-| [`BRANDING_GEREP.md`](BRANDING_GEREP.md) | Surcouche de marque GEREP (thème CSS injecté via nginx `sub_filter`, palette/rôles, whitelabel admin, accessibilité AA, réglage live) |
+| [`BRANDING_GEREP.md`](BRANDING_GEREP.md) | Surcouche de marque GEREP (thème CSS + logo + titre injectés via nginx `sub_filter`, dev **et** prod, palette/rôles, **FOSS vs EE** pour le whitelabel, accessibilité AA, réglage live) |
 
 ## 🔌 Connecteurs
 | Doc | Contenu |
