@@ -82,7 +82,16 @@ port 8100) ; Prometheus collecte :
 | `onix_budget_spent_eur` | gauge | Coût estimé cumulé (FinOps) |
 | `onix_budget_limit_eur` | gauge | Budget alloué |
 | `onix_budget_ratio` | gauge | Ratio consommé (0–1+) → alertes budget |
-| `onix_up` | gauge | Vivacité applicative (1/0) |
+| `onix_up` | gauge | Présence du process (voir limite ci-dessous) |
+
+> **Limite connue — `onix_up` figé à 1.** Cette jauge est posée une seule fois au
+> démarrage côté `actions` (`actions/app/main.py`, `UP.set(1)`) et n'est jamais
+> remise à 0 : un process mort cesse simplement d'être scrappé (série absente),
+> elle ne descend donc jamais à 0. Elle **n'apporte rien de plus que la métrique
+> standard `up`** générée par Prometheus pour chaque cible. **Préférez `up`**
+> (et l'alerte `TargetDown` / la sonde blackbox `ActionsServiceDown`) pour la
+> vivacité réelle. Correctif côté `actions` hors périmètre du scope monitoring
+> (cf. `docs/audit-reality/monitoring.md` §P2-6).
 
 ### Logs (Loki / Promtail)
 
@@ -103,7 +112,10 @@ Auto-provisionnés (dossier `onix`) depuis `monitoring/grafana/dashboards/` :
    logs Loki.
 2. **`onix-infra` — infrastructure & services** : timeline de disponibilité
    (`up`) de toutes les cibles, CPU/RAM/disque hôte, `pg_up`/`redis_up`, clients
-   Redis.
+   Redis, **santé du cluster OpenSearch** (green/yellow/red), **heap JVM
+   OpenSearch (%)** et **documents indexés** (métriques de l'elasticsearch-exporter
+   `elasticsearch_cluster_health_status{color}`, `elasticsearch_jvm_memory_*_bytes`,
+   `elasticsearch_indices_docs`).
 
 Les panneaux applicatifs se peuplent dès que la stack supervise un service
 `actions` en marche (endpoint `/metrics` **livré**, cf. §5) ; les panneaux infra
@@ -129,6 +141,9 @@ Routage : [`monitoring/alertmanager/alertmanager.yml`](../monitoring/alertmanage
 | `KillSwitchBlockingTraffic` | 403 kill-switch ≥ 1 req/s (5 min) | info | **oui** |
 | `BudgetWarning` | consommé ≥ 80 % et < 100 % du budget | warning | **oui** |
 | `BudgetExceeded` | consommé ≥ 100 % du budget | critical | **oui** |
+| `OpenSearchClusterRed` | cluster OpenSearch en RED 2 min | critical | non |
+| `OpenSearchExporterDown` | `elasticsearch_cluster_health_up == 0` 2 min | critical | non |
+| `OpenSearchHeapHigh` | heap JVM OpenSearch > 90 % pendant 10 min | warning | non |
 
 **Notification :** par défaut **aucune sortie** (récepteur local — souveraineté).
 Pour notifier, renseignez `ALERT_WEBHOOK_URL` (Slack/Mattermost/Teams-compatible,

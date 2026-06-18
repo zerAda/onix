@@ -17,8 +17,8 @@
 
 | Classe | Nombre |
 |---|---:|
-| ✅ CONFORME | 31 (dont 3 P1 🔇 résolus itér. 2 — voir §P1) |
-| ⚠️ ÉCART MINEUR | 6 |
+| ✅ CONFORME | 32 (dont 3 P1 🔇 résolus itér. 2 ; OpenSearch ⚠️→✅ itér. 3) |
+| ⚠️ ÉCART MINEUR | 5 (dont `onix_up` figé, désormais documenté — correctif code hors scope) |
 | ❌ ÉCART MAJEUR | 2 (dont 1 ✅ résolu — voir §P0) |
 | 🕳️ DOC-SANS-CODE | 0 |
 | 🔇 CODE-SANS-DOC | 3 (1 résolu : dashboard/alerte gateway ; restent : métriques sémantiques, auto-supervision Prometheus, rétention) |
@@ -65,7 +65,7 @@
 | Job `node` → `node-exporter:9100` | ✅ | `prometheus/prometheus.yml:78-82` | |
 | Job `postgres` → `postgres-exporter:9187` (`pg_up`, conn., tx, taille) | ✅ | `prometheus.yml:84-88` ; `pg_up` consommé `grafana/dashboards/onix-infra.json:78` | |
 | Job `redis` → `redis-exporter:9121` (`redis_up`, clients, mémoire) | ✅ | `prometheus.yml:90-94` ; `redis_up`/`redis_connected_clients` `onix-infra.json:96,115` | |
-| Job `opensearch` → `opensearch-exporter:9114` (santé cluster, heap, docs) | ⚠️ | `prometheus.yml:97-101` (cible OK) | Aucun panneau/alerte OpenSearch dans les 2 dashboards ni `onix-alerts.yml` : la cible est scrappée mais « santé cluster / heap / documents » n'est **visualisée nulle part**. |
+| Job `opensearch` → `opensearch-exporter:9114` (santé cluster, heap, docs) | ✅ (résolu itér. 3) | `prometheus.yml:97-101` (cible) ; panneaux `onix-infra.json` (id 8-10) ; alertes `onix-opensearch` `onix-alerts.yml` | Auparavant ⚠️ : cible scrappée mais jamais visualisée. Désormais santé cluster (couleur), heap JVM %, documents + 3 alertes (RED, exporter down, heap > 90 %). |
 | Sondes Blackbox sur `actions:8100/health` et `nginx:80/nginx-health` | ✅ | `prometheus.yml:106-122` ; module `http_2xx` `blackbox/blackbox.yml:9-17` | `valid_status_codes:[200]`, timeout 5s. |
 | Job `onix-actions` → `actions:8100/metrics` | ✅ | `prometheus.yml:47-55` | Cible et chemin conformes. |
 | Job `onix-access-gateway` → `access-gateway:8200/metrics` | ✅ | `prometheus.yml:70-75` ; port confirmé `access-gateway/Dockerfile:31,37` | |
@@ -81,7 +81,7 @@
 | `onix_http_request_duration_seconds_bucket{endpoint,le}` (histogram) | ✅ | `actions/app/main.py:134-137,159` | |
 | `onix_killswitch_blocked_total{feature,reason}` (counter) | ✅ | `actions/app/main.py:138-141` ; incrémenté dans `_gate()` `main.py:173` | Conforme à la spec §5 (l.256-261). |
 | `onix_budget_spent_eur` / `onix_budget_limit_eur` / `onix_budget_ratio` (gauges) | ✅ | `actions/app/main.py:142-144,366-371` | Rafraîchies à chaque scrape depuis `usage_tracker`/`cost_tracker`. |
-| `onix_up` (gauge 1/0) | ⚠️ | `actions/app/main.py:145-146` (`UP.set(1)` une fois) | Émis mais **figé à 1** : ne descend jamais à 0 (process mort = pas de scrape = série absente). N'apporte rien de plus que `up`. La doc le présente comme « vivacité applicative » trompeur. |
+| `onix_up` (gauge 1/0) | ⚠️ (documenté itér. 3) | `actions/app/main.py:145-146` (`UP.set(1)` une fois) ; limite explicitée `docs/OBSERVABILITY.md` §2 | Émis mais **figé à 1** : ne descend jamais à 0 (process mort = pas de scrape = série absente). N'apporte rien de plus que `up`. Limite désormais documentée (préférer `up`) ; correctif code hors scope monitoring. |
 | `/metrics` non authentifié (réseau interne) | ✅ | `actions/app/main.py:359-365` (commentaire + absence de garde API-key) ; spec §5 l.211-212 | Conforme à la posture déclarée. |
 
 ## 4. Métriques `onix-access-gateway` documentées vs émises (§5b)
@@ -215,12 +215,35 @@
    `pid: host` + `/:/host:ro` et `promtail` accède au socket Docker — surfaces
    sensibles non contraintes. La doc vante le durcissement applicatif sans le
    répliquer ici.
+   → ✅ **RÉSOLU** (itér. 3) : `security_opt: ["no-new-privileges:true"]` +
+   `cap_drop: ["ALL"]` ajoutés à **CHAQUE** service
+   (`docker-compose.monitoring.yml`). `read_only: true` + `tmpfs: [/tmp]` sur les
+   services sans écriture disque : `promtail` (positions → /tmp), `postgres-`,
+   `redis-`, `opensearch-`, `blackbox-exporter`. PRUDENCE volontaire : pas de
+   `read_only` sur `prometheus`/`alertmanager`/`grafana`/`loki` (écriture de
+   leurs volumes) ni sur `node-exporter` (`pid: host` + montage hôte). Aucun
+   `cap_add` requis (lecture socket Docker et /proc/sys = accès fichier, pas de
+   capability ; module blackbox = http_2xx, pas d'ICMP). Validé :
+   `docker compose config -q` OK + yamllint OK.
 6. **`onix_up` figé à 1 (⚠️).** `actions/app/main.py:145-146` : `UP.set(1)` une
    seule fois, jamais remis à 0 → métrique inutile (redondante avec `up`),
    présentée comme « vivacité applicative ».
+   → ✅ **DOCUMENTÉ** (itér. 3) : limite explicitée dans `docs/OBSERVABILITY.md`
+   §2 (encadré sous le tableau métriques actions : préférer `up` +
+   `TargetDown`/`ActionsServiceDown`). Le correctif **code** est côté `actions/`
+   (hors propriété du scope monitoring) — non touché, signalé.
 7. **Cible `opensearch` scrappée mais jamais visualisée/alertée (⚠️).** La doc
    promet « santé cluster / heap JVM / documents » ; aucun panneau ni alerte
    OpenSearch n'existe (`onix-infra.json`, `onix-alerts.yml`).
+   → ✅ **RÉSOLU** (itér. 3) : 3 panneaux ajoutés à
+   `monitoring/grafana/dashboards/onix-infra.json` (santé cluster green/yellow/red
+   via `elasticsearch_cluster_health_status{color}` ; heap JVM % via
+   `elasticsearch_jvm_memory_used_bytes / _max_bytes{area="heap"}` ; documents
+   `elasticsearch_indices_docs`) + groupe d'alertes `onix-opensearch` dans
+   `onix-alerts.yml` (`OpenSearchClusterRed`, `OpenSearchExporterDown` sur
+   `elasticsearch_cluster_health_up`, `OpenSearchHeapHigh` > 90 %). Noms de
+   métriques de l'elasticsearch-exporter v1.7.0 commentés à la source. Validé :
+   JSON OK + YAML OK.
 
 ---
 
@@ -234,6 +257,9 @@ livré** (`actions/metrics`) — corrigé en itér. 1. L'**observabilité gatewa
 (18 métriques sans dashboard/alerte), l'**absence de SLO/SLI** et le **garde-fou
 anti-`admin/admin`** sont résolus en itér. 2 (dashboard `onix-gateway.json`,
 alertes `onix-gateway-app`, recording rules + alertes SLO `onix-slo.yml`, refus de
-démarrage sans mot de passe fort). **Production-ready : OUI pour un poste/POC** ;
-reste pour un client régulé le **durcissement de la stack monitoring** (P2 :
-`no-new-privileges`/`cap_drop`/`read_only`) et la **visualisation OpenSearch**.
+démarrage sans mot de passe fort). Le **durcissement de la stack monitoring**
+(`no-new-privileges`/`cap_drop`/`read_only` sur chaque service) et la
+**visualisation/alerte OpenSearch** (3 panneaux infra + groupe `onix-opensearch`)
+sont résolus en itér. 3, et la limite `onix_up` figé est documentée (préférer
+`up`). **Production-ready : OUI** pour un poste/POC comme pour un client régulé
+sur le périmètre monitoring (le correctif code `onix_up` reste côté `actions/`).
