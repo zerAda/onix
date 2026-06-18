@@ -114,8 +114,10 @@ Souvent un démarrage encore en cours. Réessayer après 1–2 min ; vérifier
 ## 7. Montée en charge (optionnel)
 
 - **Model server d'indexation dédié** : pour de gros volumes d'indexation,
-  rétablir un second `inference_model_server` (`INDEXING_ONLY=True`) et pointer
-  `INDEXING_MODEL_SERVER_HOST` dessus dans `.env`. Coût : +RAM.
+  activer le profil performance avec `make up PERF=1` — il démarre le service
+  `indexing_model_server` (`INDEXING_ONLY=True`, défini dans
+  `docker-compose.performance.yml`) et pointe `INDEXING_MODEL_SERVER_HOST` dessus.
+  Cumulable avec `GPU=1`. Coût : +RAM.
 - **OpenSearch** : augmenter `OPENSEARCH_HEAP` (≈ 50 % de `OPENSEARCH_MEM_LIMIT`).
 - **GPU** : `make up GPU=1` + modèle plus capable (`llama3.1:8b`, `qwen2.5:14b`).
 
