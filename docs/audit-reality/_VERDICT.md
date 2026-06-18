@@ -58,7 +58,9 @@ conformité non archivées**.
 - ✅ Compteurs de tests réconciliés (gateway 52→267, actions →90/85/5, rag 21 cas).
 - ✅ « SSE »→NDJSON (gateway + monitoring) ; ✅ RUNBOOK `indexing_model_server`.
 - ✅ `securityContext` généralisé (seccomp partout, non-root où l'image le permet) ; ✅ DPIA/registre squelette factuel ; ✅ provenance `audit-onyx/*`.
-- ⬜ **Restant** (non bloquant) : `readOnlyRootFilesystem`/`NetworkPolicy` Helm (suite documentée) ; durcissement stack monitoring (M5) ; extension red-team multi-langue (R3) ; forward-auth oauth2-proxy ingress AKS.
+- ✅ Durcissement Helm **OPT-IN** livré : `NetworkPolicy` (default-deny, défaut OFF) + `readOnlyRootFilesystem` (access-gateway, défaut OFF) — rendu par défaut inchangé. *(`58ba627`)*
+- ✅ Durcissement stack monitoring (M5 : `no-new-privileges`/`cap_drop`/`read_only`) + visualisation/alertes OpenSearch. *(`26f8ce8`)*
+- ⬜ **Restant (différé — nécessite cluster/live)** : forward-auth oauth2-proxy ingress AKS (décision reportée) ; extension red-team multi-langue (R3, à valider en live).
 
 ## 5. État des boucles Ralph
 Les 6 boucles ont exécuté leurs itérations **P0 + doc-truth/P1** (gates verts, poussées) :
