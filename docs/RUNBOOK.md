@@ -62,6 +62,14 @@ Mettre à jour Ollama : ajuster `OLLAMA_IMAGE_TAG` puis `make update`.
   `minio_data`, `file-system` dans `backups/<horodatage>/`, redémarrage.
   (Les modèles Ollama ne sont pas sauvegardés : re-tirables via `make models`.)
 - `make restore DIR=backups/<horodatage>` : restaure (écrase) ces volumes.
+- **Profils** : par défaut le script cible la stack de base (`docker-compose.yml`).
+  Sur un déploiement PROD exposé ou machine-unique, passez le profil pour que l'arrêt
+  de cohérence couvre TOUS les services (Caddy/oauth2-proxy/gateway ou overlay
+  prod-local), pas seulement Onyx :
+  ```bash
+  PROFILE=prod ENV=deploy/prod/.env.prod make backup   # prod exposé
+  PROFILE=local-prod make backup                        # prod machine unique
+  ```
 
 ## 6. Dépannage
 
