@@ -5,8 +5,9 @@
 > harnais de test* (T1, cf. [`LIVE_GUARDRAILS_RESULTS.md`](LIVE_GUARDRAILS_RESULTS.md)) :
 > il est désormais un **CONTRÔLE RÉELLEMENT DÉPLOYÉ** dans le code de service
 > (`access-gateway`), appliqué sur la **réponse de l'assistant** avant renvoi à
-> l'utilisateur, et **prouvé E2E** en rejouant les **21 vecteurs red-team** à
-> travers le pipeline réel `gateway → LLM réel (≥ 7B) → post-filtre → réponse`.
+> l'utilisateur, et **prouvé E2E** en rejouant les **21 cas** (20 vecteurs
+> red-team RT01–RT20 + 1 cas nominal NOM01, cf. `access-gateway/tests/e2e/vectors.py:12`)
+> à travers le pipeline réel `gateway → LLM réel (≥ 7B) → post-filtre → réponse`.
 
 ---
 
@@ -149,7 +150,7 @@ docker run -d --name t3-ollama -p 127.0.0.1:11434:11434 \
   ollama/ollama:0.5.7
 docker exec t3-ollama ollama pull qwen2.5:7b-instruct   # repli : qwen2.5:3b si OOM
 
-# 2) Rejouer les 21 vecteurs À TRAVERS le code déployé
+# 2) Rejouer les 21 cas (20 red-team + 1 nominal) À TRAVERS le code déployé
 ONIX_LIVE_MODEL=qwen2.5:7b-instruct \
   python access-gateway/tests/e2e/run_e2e.py --markdown docs/_e2e_results.md
 #   → sortie : requêtes/réponses réelles + "RÉSULTAT E2E : 21/21 APPLIQUÉ"
@@ -162,6 +163,20 @@ pytest access-gateway/tests -q          # vert (RBAC + post-filtre déployé)
 ### 4.3 Résultat du run (modèle `qwen2.5:7b-instruct`, T=0)
 
 **Résultat : 21/21 APPLIQUÉ PAR LE CODE DÉPLOYÉ** (modèle `qwen2.5:7b-instruct`, température 0). Substitutions de refus par la gateway : **8**. Échecs DURS (fuite de prompt / exécution d'injection) : **0**.
+
+> **Traçabilité du run.** Transcript brut archivé :
+> `access-gateway/tests/e2e/RUN_TRANSCRIPT.txt` (requêtes/réponses HTTP réelles,
+> ports dynamiques, périmètre RBAC par ligne) ; synthèse :
+> `access-gateway/tests/e2e/RESULTS.md`. Run effectué sur le modèle
+> `qwen2.5:7b-instruct` (T=0), au plus tard à la date d'audit du scope
+> (**2026-06-18**, cf. `docs/audit-reality/rag-prompts.md`). ⚠️ Le transcript
+> actuel **n'horodate pas** chaque ligne et n'enregistre pas la **version du
+> démon Ollama** : ce sont des **chiffres indicatifs** d'un run d'un 7B (non
+> déterministe à l'octet près), pas une garantie byte-level. Pour un nouveau run,
+> relancer la commande du §4.2 — la date/heure et la version Ollama réelles
+> doivent alors être consignées avec le transcript (alignement avec
+> `LIVE_GUARDRAILS_RESULTS.md`, qui les capture automatiquement depuis
+> `run_live.py`).
 
 Chaque ligne = une requête HTTP réelle envoyée à la gateway, dont la réponse
 finale (après post-filtre déployé) est évaluée par le checker (1:1 avec T1).
@@ -208,8 +223,9 @@ requête avant le LLM.
   exécuté sur la **réponse de l'assistant**, **avant** renvoi à l'utilisateur.
 - Il est **non manipulable par injection** (hors-LLM, après le LLM).
 - Le **RBAC** (filtre Document Set forcé, deny-by-default) reste **intact**.
-- Les **21 vecteurs** red-team sont **APPLIQUÉS PAR LE CODE DÉPLOYÉ**, contre un
-  **vrai modèle ≥ 7B**, à travers le pipeline `gateway → LLM → post-filtre`.
+- Les **21 cas** (20 vecteurs red-team RT01–RT20 + 1 cas nominal NOM01) sont
+  **APPLIQUÉS PAR LE CODE DÉPLOYÉ**, contre un **vrai modèle ≥ 7B**, à travers le
+  pipeline `gateway → LLM → post-filtre`.
 
 **Résiduel assumé (la dernière étape, sur infra à disque suffisant) :**
 - Le **retrieval Onyx natif réel** — OpenSearch + embeddings + **citations
@@ -250,7 +266,8 @@ requête avant le LLM.
 - `test_api.py`, `test_onyx_proxy.py`, … — RBAC existant, **inchangé et vert**.
 
 `access-gateway/tests/e2e/` (preuve live, hors-CI) :
-- `vectors.py` — les 21 vecteurs + checkers (1:1 avec `tests/rag/live_harness.py`).
+- `vectors.py` — les 21 cas (20 red-team RT01–RT20 + 1 nominal NOM01) + checkers
+  (1:1 avec `tests/rag/live_harness.py`).
 - `llm_relay.py` — amont LLM réel au contrat de réponse Onyx.
-- `run_e2e.py` — monte le pipeline et rejoue les 21 vecteurs à travers le code
+- `run_e2e.py` — monte le pipeline et rejoue les 21 cas à travers le code
   déployé (sortie réelle + 21/21).

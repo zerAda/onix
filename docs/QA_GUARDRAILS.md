@@ -120,7 +120,7 @@ sensible, **forcer un modèle ≥ 7B** plutôt que le défaut léger.
 
 ### 4.1 Mode contrat — hors-LLM (CI, anti-régression)
 Ne nécessite **ni LLM ni réseau**. Vérifie que les garde-fous restent présents
-dans le prompt, que les 20+ vecteurs red-team ont leur défense, et que le dataset
+dans le prompt, que les 20 vecteurs red-team ont leur défense, et que le dataset
 d'éval est cohérent.
 
 ```bash
