@@ -26,10 +26,10 @@ conformité non archivées**.
 | Scope | Rapport | P0 | Verdict production-ready |
 |---|---|--:|---|
 | access-gateway | [access-gateway.md](access-gateway.md) | 0 | **Presque** — invariants RBAC/fail-closed/cache↔ACL implémentés ET testés ; 3 P1 d'honnêteté doc. |
-| actions | [actions.md](actions.md) | **3** | **Mono-poste ✓ / HA ✗** — code solide ; le branchement Helm trahit la doc (secrets WS2, object-store, erase S3). |
+| actions | [actions.md](actions.md) | ✅ 0 _(3 résolus)_ | **Mono-poste ✓ ; HA débloqué** — 3 P0 fermés (secrets WS2, object-store, erase S3) ; restent P1 (openapi, rate-limit HA). |
 | rag-prompts | [rag-prompts.md](rag-prompts.md) | 0 | **Solide & honnête** — limites documentées ; fiabiliser les *preuves* live/baseline. |
 | deploy-ops | [deploy-ops.md](deploy-ops.md) | 0 | **Mono-nœud ✓ / Azure ✗** — `prod-local`/`deploy/prod` aboutis ; 2 trous de câblage Azure. |
-| monitoring | [monitoring.md](monitoring.md) | 1 | **POC ✓ / régulé ✗** — stack réelle ; doc fausse sur `/metrics` actions + pas de dashboard/alerte gateway, pas de SLO. |
+| monitoring | [monitoring.md](monitoring.md) | ✅ 0 _(1 résolu)_ | **POC ✓** — doc fausse `/metrics` corrigée ; restent P1 (dashboard/alerte gateway, SLO). |
 | security-governance | [security-governance.md](security-governance.md) | 0 | **Code ✓ / preuves ✗** — contrôles réels ; conformité (DPIA/registre) = templates, garde-fous opérationnels manquants. |
 
 ## 3. Aptitude par palier de déploiement
@@ -38,14 +38,14 @@ conformité non archivées**.
 | **Mono-poste / POC** (`make up`) | ✅ Oui | Aucun bloquant fonctionnel. Corriger la doc fausse monitoring (honnêteté). |
 | **Prod machine-unique** (`up-local-prod`) | ✅ Oui | Pièce la plus aboutie ; appliquer P1 honnêteté + garde-fou Grafana. |
 | **Prod exposée** (`deploy/prod`) | ✅ Oui | Anti-spoofing/fail-closed câblés ; corriger `backup.sh` (surcouche prod). |
-| **HA Kubernetes / Azure AKS** | ❌ **Non** | **3 P0 actions** (secrets WS2 Helm, `ONIX_OBJECT_STORE`, erase S3) + 2 trous Azure (ingress RBAC, TLS Redis/PG Onyx) + `ENCRYPTION_KEY_SECRET`. |
+| **HA Kubernetes / Azure AKS** | ⏳ **En cours** | ~~3 P0 actions~~ **✅ résolus** (secrets WS2, `ONIX_OBJECT_STORE`, erase S3) ; **restent** 2 trous Azure (ingress RBAC, TLS Redis/PG Onyx) + `ENCRYPTION_KEY_SECRET` (P1). |
 
 ## 4. Backlog consolidé priorisé (vers production-ready entreprise)
-### P0 — bloquants HA (à traiter en premier)
-1. **[actions]** Secrets WS2 (`ONIX_ACTIONS_ADMIN_KEY`/`AUDIT_HMAC_KEY`/`CALLER_HMAC_SECRET`) non injectés par le chart → `/admin/*` en 403, audit dégradé en SHA-256. *(scope `actions` + `deploy-ops`)*
-2. **[actions]** `ONIX_OBJECT_STORE=s3` non câblé → `.docx` non partagés, `GET /download` casse en multi-réplica.
-3. **[actions]** Effacement RGPD S3 incomplet (`objstore.delete_job` jamais appelé) → art.17 non exhaustif.
-4. **[monitoring]** `OBSERVABILITY.md` affirme faussement que `/metrics` actions n'existe pas → **doc fausse** (règle n°1).
+### P0 — bloquants HA _(tous résolus — boucles Ralph)_
+1. ✅ **RÉSOLU [actions]** Secrets WS2 injectés par le chart (helper `onix.actionsSecretEnv`, `secretKeyRef` dans `actions.yaml`+`actions-queue.yaml`, noms alignés sur le code). *(`0fc8893`)*
+2. ✅ **RÉSOLU [actions]** `ONIX_OBJECT_STORE` câblé dans le ConfigMap HA (rend `"s3"`). *(`b205d31`)*
+3. ✅ **RÉSOLU [actions]** Effacement RGPD S3 branché (`delete_subject_docx`/`delete_jobs_older_than` dans `retention`) + 4 tests. *(`bc7f9a6`)*
+4. ✅ **RÉSOLU [monitoring]** Doc « `/metrics` actions n'existe pas » corrigée (6 fichiers). *(`961978f`)*
 
 ### P1 — exactitude, sécurité, conformité
 - **[access-gateway]** `explicit_admin_bypass` inerte ; contradiction fail-loud/fail-safe du cache ; `_READ_ROLES` partiel.
