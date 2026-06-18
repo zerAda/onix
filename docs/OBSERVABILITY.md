@@ -7,8 +7,8 @@ images épinglées, aucune télémétrie sortante, aucun service cloud.
 
 > Périmètre WS6 : `.github/workflows/{ci,cd}.yml`, `monitoring/`,
 > `docs/OBSERVABILITY.md`, blocs dédiés dans `Makefile` et `env.template`.
-> Le microservice `actions/` n'est **pas** modifié ici : l'endpoint `/metrics`
-> requis est **spécifié ci-dessous** pour intégration par WS2.
+> L'endpoint `/metrics` du microservice `actions/` est **livré** (cf. §5,
+> `actions/app/main.py:359-372`) ; ce document décrit la collecte associée.
 
 ---
 
@@ -66,12 +66,13 @@ Identifiants Grafana : `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` (cf.
 - **Redis** (redis-exporter) : `redis_up`, clients connectés, mémoire, hits/miss.
 - **OpenSearch** (elasticsearch-exporter) : santé du cluster, heap JVM, documents.
 - **Sondes HTTP** (blackbox-exporter) : `probe_success` sur `actions:8100/health`
-  et `nginx:80/nginx-health` — **disponibilité indépendante** des métriques
-  applicatives (fonctionne avant même que `/metrics` existe).
+  et `nginx:80/nginx-health` — **disponibilité « boîte noire »**, complémentaire
+  des métriques applicatives.
 
-### Métriques applicatives `onix-actions` (dépendent de WS2 — cf. §5)
+### Métriques applicatives `onix-actions` (livré — cf. §5)
 
-Une fois l'endpoint `/metrics` exposé, Prometheus collecte :
+L'endpoint `/metrics` est exposé par le microservice (`actions/app/main.py`,
+port 8100) ; Prometheus collecte :
 
 | Métrique | Type | Sens |
 |---|---|---|
@@ -104,8 +105,9 @@ Auto-provisionnés (dossier `onix`) depuis `monitoring/grafana/dashboards/` :
    (`up`) de toutes les cibles, CPU/RAM/disque hôte, `pg_up`/`redis_up`, clients
    Redis.
 
-Les panneaux applicatifs restent vides tant que `/metrics` (WS2) n'existe pas ;
-les panneaux infra et la timeline de disponibilité sont **immédiatement** peuplés.
+Les panneaux applicatifs se peuplent dès que la stack supervise un service
+`actions` en marche (endpoint `/metrics` **livré**, cf. §5) ; les panneaux infra
+et la timeline de disponibilité le sont de même.
 
 ---
 
@@ -198,22 +200,23 @@ Voir : https://prometheus.github.io/client_python/multiprocess/
 
 ---
 
-## 5. Dépendance d'intégration : endpoint `/metrics` (à ajouter par WS2)
+## 5. Endpoint `/metrics` du microservice `onix-actions` (livré)
 
-> **Action requise côté `actions/` (hors périmètre WS6).** Le job Prometheus
-> `onix-actions` cible `http://actions:8100/metrics`. Tant que cet endpoint
-> n'existe pas, **seul ce job est `down`** ; toute la supervision infra +
-> sondes `/health` fonctionne. Les règles `onix_*` restent inertes (aucune
-> série) sans casser l'évaluation des autres groupes.
+> **Implémenté côté `actions/`.** Le job Prometheus `onix-actions` cible
+> `http://actions:8100/metrics`, endpoint exposé par le microservice
+> (`actions/app/main.py:359-372`, dépendance `prometheus-client==0.21.1`
+> épinglée dans `actions/requirements.txt`). Les règles `onix_*` deviennent
+> actives dès que la stack supervise un service `actions` en marche.
 
-### Spécification proposée
+### Implémentation (réelle)
 
-Exposer `GET /metrics` (format texte Prometheus, **non authentifié** car réseau
-interne sans port hôte — ou exempté du `require_api_key`). Implémentation
-recommandée avec [`prometheus-client`](https://github.com/prometheus/client_python) :
+`GET /metrics` est exposé au format texte Prometheus, **non authentifié** (réseau
+interne sans port hôte). Implémentation avec
+[`prometheus-client`](https://github.com/prometheus/client_python), telle que
+présente dans le code (extrait illustratif) :
 
-1. Ajouter à `actions/requirements.txt` : `prometheus-client==0.21.1` (épinglé).
-2. Instrumenter `actions/app/main.py` :
+1. `actions/requirements.txt` épingle `prometheus-client==0.21.1`.
+2. `actions/app/main.py` est instrumenté ainsi :
 
 ```python
 from prometheus_client import (
@@ -253,7 +256,7 @@ def metrics() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 ```
 
-3. Dans `_gate()` (le point unique qui lève les 403), incrémenter le compteur
+3. Au point unique qui lève les 403 (kill-switch), le compteur est incrémenté
    avant de lever l'exception :
 
 ```python
@@ -261,7 +264,7 @@ KILLSWITCH.labels(feature, reason or "unknown").inc()
 ```
 
 Les noms de métriques ci-dessus correspondent **exactement** aux requêtes des
-dashboards et des règles d'alerte — aucun changement côté WS6 ne sera nécessaire.
+dashboards et des règles d'alerte — contrat de noms figé côté monitoring.
 
 > Le service expose déjà des signaux observables réutilisables : événements
 > `usage_tracker` (dont `budget_warning_triggered`, `service_emergency_stopped`,
@@ -323,8 +326,9 @@ ignorés proprement en local s'ils ne sont pas installés (ils tournent en CI).
 - **Observabilité :** la stack est complète et **validée** (`docker compose
   config -q` OK). Dès `make monitor-up`, les dashboards infra/disponibilité et
   les sondes `/health` sont peuplés, et 6 alertes (down/CPU/RAM/disque) sont
-  actives **sans dépendance**. Les 5 alertes + panneaux applicatifs s'allument
-  automatiquement dès que WS2 ajoute `/metrics` (contrat de noms déjà figé).
+  actives **sans dépendance**. Les alertes + panneaux applicatifs basés sur
+  `/metrics` (livré) s'allument dès que la stack supervise un `actions` en marche
+  (contrat de noms figé).
 - **Gates :** CI durcie avec tests + SAST + audit de dépendances + scan
   vulnérabilités (fs & image) + garde `.env` + gitleaks, **tous bloquants** ;
   CD signe la chaîne d'appro (scan-avant-push, image taggée/digestée, SBOM).
@@ -346,5 +350,5 @@ ignorés proprement en local s'ils ne sont pas installés (ils tournent en CI).
 - Exécution des actions GitHub (`trivy-action`, `sbom-action`,
   `build-push-action`, upload SARIF) — réseau + runner requis.
 - `make monitor-up` réel : scrape des cibles, peuplement Grafana, déclenchement
-  d'alertes (notamment celles dépendant de `/metrics` une fois WS2 livré).
+  d'alertes (y compris celles basées sur `/metrics`, désormais livré).
 - Push GHCR (nécessite les permissions `packages: write` du dépôt).

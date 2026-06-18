@@ -5,10 +5,10 @@
 # 403 kill-switch, saturation ressources. Les seuils sont volontairement
 # prudents et commentés ; ajustez-les par déploiement.
 #
-# NB : les règles `onix_*` (groupe onix-actions-app) dépendent de l'endpoint
-# /metrics que WS2 doit exposer (cf. docs/OBSERVABILITY.md). Elles restent
-# inertes (aucune série) tant que la cible est down — sans casser l'évaluation
-# des autres groupes (infra/blackbox), qui eux fonctionnent immédiatement.
+# NB : les règles `onix_*` (groupe onix-actions-app) s'appuient sur l'endpoint
+# /metrics exposé par le microservice actions (cf. docs/OBSERVABILITY.md §5).
+# Elles restent inertes (aucune série) tant que la cible est down — sans casser
+# l'évaluation des autres groupes (infra/blackbox), qui fonctionnent toujours.
 # =============================================================================
 groups:
   # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ groups:
             1 minute. Audit / génération / OCR indisponibles.
 
   # ---------------------------------------------------------------------------
-  # 2. Application onix-actions : erreurs, latence, kill-switch (DÉPEND DE WS2).
+  # 2. Application onix-actions : erreurs, latence, kill-switch (basé sur /metrics).
   #    Toutes ces règles consomment des métriques /metrics non encore exposées.
   # ---------------------------------------------------------------------------
   - name: onix-actions-app
@@ -108,7 +108,7 @@ groups:
             Vérifiez que la coupure est intentionnelle.
 
   # ---------------------------------------------------------------------------
-  # 3. FinOps : budget dépassé / proche du seuil (DÉPEND DE WS2 /metrics).
+  # 3. FinOps : budget dépassé / proche du seuil (basé sur /metrics).
   # ---------------------------------------------------------------------------
   - name: onix-finops
     rules:

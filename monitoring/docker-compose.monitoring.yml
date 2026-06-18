@@ -18,8 +18,8 @@
 #   2) docker compose -f monitoring/docker-compose.monitoring.yml up -d
 #   (ou bien : make monitor-up / make monitor-down — cf. Makefile bloc WS6).
 #
-# DÉPENDANCE WS2 : le job Prometheus `onix-actions` cible actions:8100/metrics.
-#   Tant que WS2 n'expose pas /metrics, ce job est `down` (les autres signaux —
+# Le job Prometheus `onix-actions` cible actions:8100/metrics (endpoint livré).
+#   Si le service actions est arrêté, ce job est `down` (les autres signaux —
 #   sonde blackbox /health, exporters infra — fonctionnent immédiatement).
 # =============================================================================
 

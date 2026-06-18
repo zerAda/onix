@@ -4,7 +4,7 @@
 ## Backlog (source : docs/audit-reality/monitoring.md)
 | ID | Prio | Écart | Axe | Statut |
 |---|---|---|---|---|
-| M1 | **P0** | Doc FAUSSE : `/metrics` actions « n'existe pas » alors qu'implémenté (`main.py:359-372`) | A1 | ⬜ |
+| M1 | **P0** | Doc FAUSSE : `/metrics` actions « n'existe pas » alors qu'implémenté (`main.py:359-372`) | A1 | ✅ |
 | M2 | P1 | 18 métriques `onix_gateway_*` émises mais aucun dashboard/alerte | A4 | ⬜ |
 | M3 | P1 | Aucun SLO/SLI ni recording rule | A4 | ⬜ |
 | M4 | P1 | Grafana `admin/admin` si `.env` absent (garde-fou `monitor-up`) | A3 | ⬜ |
@@ -13,6 +13,7 @@
 ## Journal
 | Itér. | Date | Item | Correctif | Gates | SHA |
 |---|---|---|---|---|---|
+| 1 | 2026-06-18 | M1 (P0 doc-faux) | Corrigé les claims « /metrics dépend de WS2 / n'existe pas » dans 6 fichiers (OBSERVABILITY.md, prometheus.yml, onix-alerts.yml, blackbox.yml, compose monitoring, env.template) | vert (YAML+compose config) | (ce commit) |
 
 ## Questions bloquantes
 - (aucune) — coordination `docker-compose.monitoring.yml` partagé.

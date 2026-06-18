@@ -2,8 +2,8 @@
 # onix — Blackbox exporter : modules de sonde HTTP « boîte noire ».
 # -----------------------------------------------------------------------------
 # Sonde la disponibilité des endpoints de santé SANS dépendre des métriques
-# applicatives — utile en particulier tant que onix-actions /metrics (WS2)
-# n'existe pas. Le service actions /health renvoie 200 sans authentification.
+# applicatives — complément de onix-actions /metrics (p. ex. si le process est
+# figé). Le service actions /health renvoie 200 sans authentification.
 # =============================================================================
 modules:
   http_2xx:

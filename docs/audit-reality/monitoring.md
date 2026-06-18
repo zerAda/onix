@@ -19,7 +19,7 @@
 |---|---:|
 | ✅ CONFORME | 30 |
 | ⚠️ ÉCART MINEUR | 6 |
-| ❌ ÉCART MAJEUR | 2 |
+| ❌ ÉCART MAJEUR | 2 (dont 1 ✅ résolu — voir §P0) |
 | 🕳️ DOC-SANS-CODE | 0 |
 | 🔇 CODE-SANS-DOC | 4 |
 | ❔ NON VÉRIFIABLE | 1 |
@@ -161,6 +161,11 @@
    Risque : un opérateur croit la supervision applicative inactive et ne
    l'exploite pas. *Inverse* de « mock présenté comme réel » mais viole la règle
    n°1 (affirmation non conforme au code). **Corriger la doc.**
+   → ✅ **RÉSOLU** (boucle Ralph `monitoring`, itér. 1) : toutes les occurrences
+   « dépend de WS2 / n'existe pas » corrigées dans `OBSERVABILITY.md`
+   (§0/§2/§3/§5/§7/§8), `prometheus.yml`, `onix-alerts.yml`, `blackbox.yml`,
+   `docker-compose.monitoring.yml`, `env.template`. Validé : YAML OK +
+   `docker compose -f monitoring/docker-compose.monitoring.yml config -q` OK.
 
 ### P1 — sérieux
 2. **18 métriques `onix_gateway_*` émises, scrappées, mais ni visualisées ni
