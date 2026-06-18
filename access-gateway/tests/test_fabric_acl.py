@@ -23,13 +23,20 @@ from app.fabric_acl import (
     _onelake_access_grants_read,
     authorized_items,
     can_principal_read,
+    item_in_gold_scope,
     principal_has_read_role,
 )
 from app.fabric_client import FabricClient
 from conftest import run
 
 
-def _settings(monkeypatch, *, configured=True):
+# Workspace/items GOLD utilisés par les tests positifs (le workspace de test EST
+# le workspace gold ; les items candidats sont des alias id/nom du lakehouse gold).
+GOLD_WS = "ws1"
+GOLD_ITEMS = ("item1", "i1", "i2", "i3")  # alias acceptés du lakehouse gold
+
+
+def _settings(monkeypatch, *, configured=True, gold=True):
     if configured:
         monkeypatch.setenv("GATEWAY_GRAPH_TENANT_ID", "tid")
         monkeypatch.setenv("GATEWAY_GRAPH_CLIENT_ID", "cid")
@@ -44,6 +51,21 @@ def _settings(monkeypatch, *, configured=True):
             "GATEWAY_FABRIC_CLIENT_SECRET",
         ):
             monkeypatch.delenv(var, raising=False)
+    if gold:
+        # `is_gold_path` matche l'item contre {lakehouse_id, lakehouse_name}. Les
+        # tests historiques emploient plusieurs ids d'item ; pour rester gold-only
+        # tout en les couvrant, on monkeypatch la garde au niveau item (le cœur
+        # gold-path est testé exhaustivement dans test_fabric_client.py).
+        monkeypatch.setenv("GATEWAY_FABRIC_GOLD_WORKSPACE_ID", GOLD_WS)
+        monkeypatch.setenv("GATEWAY_FABRIC_GOLD_LAKEHOUSE_ID", "gold-lh")
+        monkeypatch.setenv("GATEWAY_FABRIC_GOLD_LAKEHOUSE_NAME", "gold")
+
+        import app.fabric_acl as acl_mod
+
+        def _fake_scope(settings, workspace_id, item_id):  # noqa: ARG001
+            return workspace_id == GOLD_WS and item_id in GOLD_ITEMS
+
+        monkeypatch.setattr(acl_mod, "item_in_gold_scope", _fake_scope)
     config.reset_settings_cache()
     return config.get_settings()
 
@@ -431,3 +453,119 @@ def test_onelake_grants_read_denies_unknown_or_empty():
     assert not _onelake_access_grants_read({"actions": ["write"]})
     assert not _onelake_access_grants_read({"effectivePermissions": ["NoRead"]})
     assert not _onelake_access_grants_read("not-a-dict")  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- #
+# 7. GOLD-ONLY — un item hors périmètre gold est REFUSÉ (réel, sans fake).     #
+# --------------------------------------------------------------------------- #
+def _settings_real_gold(monkeypatch):
+    """Settings avec gold RÉEL configuré (pas de fake item_in_gold_scope) :
+    workspace gold = 'goldws', lakehouse gold = id 'lh1' / nom 'goldlake'."""
+    monkeypatch.setenv("GATEWAY_GRAPH_TENANT_ID", "tid")
+    monkeypatch.setenv("GATEWAY_GRAPH_CLIENT_ID", "cid")
+    monkeypatch.setenv("GATEWAY_GRAPH_CLIENT_SECRET", "sek")
+    monkeypatch.setenv("GATEWAY_FABRIC_GOLD_WORKSPACE_ID", "goldws")
+    monkeypatch.setenv("GATEWAY_FABRIC_GOLD_LAKEHOUSE_ID", "lh1")
+    monkeypatch.setenv("GATEWAY_FABRIC_GOLD_LAKEHOUSE_NAME", "goldlake")
+    config.reset_settings_cache()
+    return config.get_settings()
+
+
+def test_item_in_gold_scope_helper(monkeypatch):
+    settings = _settings_real_gold(monkeypatch)
+    assert item_in_gold_scope(settings, "goldws", "lh1")
+    assert item_in_gold_scope(settings, "goldws", "goldlake")  # par nom
+    assert not item_in_gold_scope(settings, "autrews", "lh1")  # mauvais workspace
+    assert not item_in_gold_scope(settings, "goldws", "autre")  # item hors gold
+
+
+def test_can_read_refused_for_non_gold_item_even_with_role(monkeypatch):
+    """Un rôle de lecture est attribué, MAIS l'item est hors gold → refus, et
+    AUCUN appel réseau (la garde gold court-circuite avant)."""
+    settings = _settings_real_gold(monkeypatch)
+    called = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called["n"] += 1
+        return httpx.Response(200, json={"value": [_assignment("p1", role="Admin")]})
+
+    async def go():
+        fab = _client(handler, settings)
+        try:
+            # item 'autre' n'est PAS le lakehouse gold → refus malgré le rôle Admin.
+            return await can_principal_read("p1", "goldws", "autre", fabric=fab)
+        finally:
+            await fab.aclose()
+
+    assert run(go()) is False
+    assert called["n"] == 0  # pas de réseau pour un item hors gold
+
+
+def test_can_read_granted_for_gold_item(monkeypatch):
+    """Même rôle, mais cette fois l'item EST le lakehouse gold → accordé."""
+    settings = _settings_real_gold(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "roleAssignments" in str(request.url):
+            return httpx.Response(200, json={"value": [_assignment("p1", role="Admin")]})
+        return httpx.Response(404, json={})
+
+    async def go():
+        fab = _client(handler, settings)
+        try:
+            return await can_principal_read("p1", "goldws", "lh1", fabric=fab)
+        finally:
+            await fab.aclose()
+
+    assert run(go()) is True
+
+
+def test_authorized_items_filters_non_gold(monkeypatch):
+    """authorized_items n'inclut QUE les items gold (lh1/goldlake), pas les autres."""
+    settings = _settings_real_gold(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "roleAssignments" in str(request.url):
+            return httpx.Response(200, json={"value": [_assignment("p1", role="Member")]})
+        return httpx.Response(404, json={})
+
+    async def go():
+        fab = _client(handler, settings)
+        try:
+            return await authorized_items(
+                "p1", "goldws", ["lh1", "goldlake", "autre", "x"], fabric=fab
+            )
+        finally:
+            await fab.aclose()
+
+    # Seuls les alias du lakehouse gold sont retenus.
+    assert run(go()) == {"lh1", "goldlake"}
+
+
+def test_can_read_refused_when_gold_unconfigured(monkeypatch):
+    """Gold non configuré → refus total (défaut INERTE), même item/rôle valides."""
+    monkeypatch.setenv("GATEWAY_GRAPH_TENANT_ID", "tid")
+    monkeypatch.setenv("GATEWAY_GRAPH_CLIENT_ID", "cid")
+    monkeypatch.setenv("GATEWAY_GRAPH_CLIENT_SECRET", "sek")
+    for var in (
+        "GATEWAY_FABRIC_GOLD_WORKSPACE_ID",
+        "GATEWAY_FABRIC_GOLD_WORKSPACE_NAME",
+        "GATEWAY_FABRIC_GOLD_LAKEHOUSE_ID",
+        "GATEWAY_FABRIC_GOLD_LAKEHOUSE_NAME",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    config.reset_settings_cache()
+    settings = config.get_settings()
+    assert settings.fabric_gold_configured is False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": [_assignment("p1", role="Admin")]})
+
+    async def go():
+        fab = _client(handler, settings)
+        try:
+            return await can_principal_read("p1", "anyws", "anyitem", fabric=fab)
+        finally:
+            await fab.aclose()
+
+    assert run(go()) is False

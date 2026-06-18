@@ -5,6 +5,12 @@ Pendant Fabric de `graph_acl.py` (SharePoint). Question posée :
   « Le principal P (utilisateur OU SPN, plus ses groupes Entra) peut-il LIRE
     l'item I du workspace W ? »
 
+PÉRIMÈTRE GOLD (lecture seule). Avant même de regarder les rôles, on REFUSE tout
+item hors du **périmètre gold** (le lakehouse gold du workspace gold, cf.
+`item_in_gold_scope` / `fabric_client.is_gold_path`) : onix ne lit que la couche
+gold, et seulement en lecture. Un item hors-gold ⇒ refus systématique (fail-closed),
+quel que soit le rôle attribué.
+
 Deux sources de vérité, dans l'ordre, **OR-mergées** mais toutes deux fail-closed :
   (a) **roleAssignments du workspace** (RBAC de CONTRÔLE Fabric) — un rôle Fabric
       qui confère AU MOINS la lecture (Viewer/Contributor/Member/Admin) attribué :
@@ -37,7 +43,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Iterable, Mapping, Optional
 
-from .fabric_client import FabricClient, FabricError
+from .config import Settings
+from .fabric_client import FabricClient, FabricError, is_gold_path
 
 logger = logging.getLogger("onix.gateway.fabric_acl")
 
@@ -54,6 +61,16 @@ def _norm(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip().lower()
+
+
+def item_in_gold_scope(settings: Settings, workspace_id: str, item_id: str) -> bool:
+    """`True` si (workspace_id, item_id) appartient au **périmètre GOLD**.
+
+    Pendant ACL de `fabric_client.is_gold_path` au niveau ITEM (sans chemin) : la
+    décision de lecture n'est accordée QUE pour le lakehouse gold du workspace gold.
+    L'item peut être référencé par GUID (item_type vide) ou par nom — `is_gold_path`
+    gère les deux. Fail-closed : gold non configuré ⇒ `False`."""
+    return is_gold_path(settings, workspace_id, item_id, "", "")
 
 
 def _role_grants_read(role: Any) -> bool:
@@ -177,6 +194,11 @@ async def can_principal_read(
     if not fabric.settings.fabric_configured:
         logger.debug("fabric_acl: Fabric non configuré → refus (fail-closed).")
         return False
+    # Gold-only : on n'accorde JAMAIS la lecture d'un item hors du périmètre gold
+    # (le lakehouse gold du workspace gold), même si un rôle l'autoriserait.
+    if not item_in_gold_scope(fabric.settings, workspace_id, item_id):
+        logger.debug("fabric_acl: item hors périmètre GOLD → refus (fail-closed).")
+        return False
 
     groups = list(principal_group_ids or [])
 
@@ -252,6 +274,9 @@ async def authorized_items(
 
     for item_id in candidate_item_ids:
         if not item_id:
+            continue
+        # Gold-only : un item hors périmètre gold n'est JAMAIS inclus.
+        if not item_in_gold_scope(fabric.settings, workspace_id, item_id):
             continue
         if workspace_grants_read:
             result.add(item_id)

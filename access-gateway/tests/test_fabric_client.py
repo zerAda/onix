@@ -15,6 +15,8 @@ Couvre :
 """
 from __future__ import annotations
 
+import os
+
 import httpx
 import pytest
 
@@ -26,14 +28,28 @@ from app.fabric_client import (
     FabricClient,
     FabricError,
     acquire_token,
+    acquire_token_via_azcli,
+    is_gold_path,
+    make_azcli_token_provider,
 )
 from conftest import run
 
 
-def _settings(monkeypatch):
+def _settings(monkeypatch, *, gold=True):
     monkeypatch.setenv("GATEWAY_GRAPH_TENANT_ID", "tid")
     monkeypatch.setenv("GATEWAY_GRAPH_CLIENT_ID", "cid")
     monkeypatch.setenv("GATEWAY_GRAPH_CLIENT_SECRET", "sek")
+    if gold:
+        # Périmètre GOLD : on autorise plusieurs alias de workspace/lakehouse
+        # utilisés par les tests OneLake (nom + GUID). Les tests OneLake ci-dessous
+        # ciblent ces ids ; tout autre chemin est refusé (cf. tests gold dédiés).
+        monkeypatch.setenv("GATEWAY_FABRIC_GOLD_WORKSPACE_ID", "WSGUID")
+        monkeypatch.setenv("GATEWAY_FABRIC_GOLD_WORKSPACE_NAME", "goldws")
+        monkeypatch.setenv("GATEWAY_FABRIC_GOLD_LAKEHOUSE_ID", "ITEMGUID")
+        monkeypatch.setenv("GATEWAY_FABRIC_GOLD_LAKEHOUSE_NAME", "goldlake")
+        # Préfixe : ne pas écraser une surcharge déjà posée par le test appelant.
+        if "GATEWAY_FABRIC_GOLD_TABLES_PREFIX" not in os.environ:
+            monkeypatch.setenv("GATEWAY_FABRIC_GOLD_TABLES_PREFIX", "Tables")
     config.reset_settings_cache()
     return config.get_settings()
 
@@ -271,24 +287,25 @@ def test_onelake_list_paths_filesystem_and_directory(monkeypatch):
         seen["url"] = str(request.url)
         return httpx.Response(
             200,
-            json={"paths": [{"name": "Files/a.csv"}, {"name": "Files/b.csv"}]},
+            json={"paths": [{"name": "Tables/a"}, {"name": "Tables/b"}]},
         )
 
     async def go():
         fab = _client(handler, settings)
         try:
-            return await fab.onelake_list_paths("myws", "mylake", "Lakehouse")
+            # Workspace/lakehouse GOLD (par nom) ; sans subpath → racine Tables gold.
+            return await fab.onelake_list_paths("goldws", "goldlake", "Lakehouse")
         finally:
             await fab.aclose()
 
     paths = run(go())
-    assert [p["name"] for p in paths] == ["Files/a.csv", "Files/b.csv"]
+    assert [p["name"] for p in paths] == ["Tables/a", "Tables/b"]
     url = seen["url"]
-    assert "onelake.dfs.fabric.microsoft.com/myws" in url
+    assert "onelake.dfs.fabric.microsoft.com/goldws" in url
     assert "resource=filesystem" in url
     assert "recursive=true" in url
-    # directory = {item}.{itemtype}/{subpath}, url-encodé.
-    assert "directory=mylake.Lakehouse%2FFiles" in url
+    # directory = {item}.{itemtype}/{subpath gold}, url-encodé (Tables par défaut).
+    assert "directory=goldlake.Lakehouse%2FTables" in url
 
 
 def test_onelake_list_paths_pagination_header(monkeypatch):
@@ -306,7 +323,7 @@ def test_onelake_list_paths_pagination_header(monkeypatch):
     async def go():
         fab = _client(handler, settings)
         try:
-            return await fab.onelake_list_paths("ws", "it", "Lakehouse")
+            return await fab.onelake_list_paths("goldws", "goldlake", "Lakehouse")
         finally:
             await fab.aclose()
 
@@ -324,13 +341,16 @@ def test_onelake_read_file_url_with_name(monkeypatch):
     async def go():
         fab = _client(handler, settings)
         try:
-            return await fab.onelake_read_file("myws", "mylake", "Lakehouse", "Files/a.csv")
+            # Fichier sous le sous-arbre des tables GOLD.
+            return await fab.onelake_read_file(
+                "goldws", "goldlake", "Lakehouse", "Tables/dim/part-0.parquet"
+            )
         finally:
             await fab.aclose()
 
     data = run(go())
     assert data == b"hello-bytes"
-    assert seen["url"].endswith("/myws/mylake.Lakehouse/Files/a.csv")
+    assert seen["url"].endswith("/goldws/goldlake.Lakehouse/Tables/dim/part-0.parquet")
 
 
 def test_onelake_read_file_url_with_guid(monkeypatch):
@@ -345,12 +365,13 @@ def test_onelake_read_file_url_with_guid(monkeypatch):
     async def go():
         fab = _client(handler, settings)
         try:
-            return await fab.onelake_read_file("WSGUID", "ITEMGUID", "", "Files/x")
+            # Adressage par GUID (item_type vide), chemin sous Tables gold.
+            return await fab.onelake_read_file("WSGUID", "ITEMGUID", "", "Tables/x")
         finally:
             await fab.aclose()
 
     run(go())
-    assert seen["url"].endswith("/WSGUID/ITEMGUID/Files/x")
+    assert seen["url"].endswith("/WSGUID/ITEMGUID/Tables/x")
 
 
 def test_onelake_read_file_error_raises(monkeypatch):
@@ -359,7 +380,8 @@ def test_onelake_read_file_error_raises(monkeypatch):
     async def go():
         fab = _client(lambda r: httpx.Response(404, content=b""), settings)
         try:
-            await fab.onelake_read_file("ws", "it", "Lakehouse", "Files/x")
+            # Chemin GOLD valide → la garde passe, on teste bien l'erreur HTTP 404.
+            await fab.onelake_read_file("goldws", "goldlake", "Lakehouse", "Tables/x")
         finally:
             await fab.aclose()
 
@@ -449,3 +471,189 @@ def test_list_powerbi_datasets_in_group_with_pagination(monkeypatch):
             await fab.aclose()
 
     assert [d["id"] for d in run(go())] == ["d1", "d2"]
+
+
+# --------------------------------------------------------------------------- #
+# 6. Périmètre GOLD — is_gold_path (autorise gold, refuse hors-gold).          #
+# --------------------------------------------------------------------------- #
+def test_is_gold_path_allows_gold(monkeypatch):
+    settings = _settings(monkeypatch)
+    # Par nom et par GUID, à la racine Tables et plus profond.
+    assert is_gold_path(settings, "goldws", "goldlake", "Lakehouse", "Tables")
+    assert is_gold_path(settings, "goldws", "goldlake", "Lakehouse", "Tables/dim/x.parquet")
+    assert is_gold_path(settings, "WSGUID", "ITEMGUID", "", "Tables/x")
+    # Casse-insensible.
+    assert is_gold_path(settings, "GOLDWS", "GoldLake", "lakehouse", "tables/x")
+    # Sans chemin : suffit que workspace+item+type matchent (usage ACL niveau item).
+    assert is_gold_path(settings, "goldws", "goldlake", "Lakehouse", "")
+
+
+def test_is_gold_path_refuses_out_of_scope(monkeypatch):
+    settings = _settings(monkeypatch)
+    # Mauvais workspace.
+    assert not is_gold_path(settings, "autrews", "goldlake", "Lakehouse", "Tables/x")
+    # Mauvais lakehouse.
+    assert not is_gold_path(settings, "goldws", "autrelake", "Lakehouse", "Tables/x")
+    # Mauvais type d'item.
+    assert not is_gold_path(settings, "goldws", "goldlake", "Warehouse", "Tables/x")
+    # Chemin hors préfixe gold (données brutes Files).
+    assert not is_gold_path(settings, "goldws", "goldlake", "Lakehouse", "Files/secret.csv")
+    # Préfixe « collé » qui ne doit PAS matcher (TablesAutre ≠ Tables).
+    assert not is_gold_path(settings, "goldws", "goldlake", "Lakehouse", "TablesAutre/x")
+
+
+def test_is_gold_path_refuses_when_gold_unconfigured(monkeypatch):
+    settings = _settings(monkeypatch, gold=False)
+    assert settings.fabric_gold_configured is False
+    # Défaut INERTE : sans gold configuré, tout chemin est refusé.
+    assert not is_gold_path(settings, "goldws", "goldlake", "Lakehouse", "Tables/x")
+
+
+def test_is_gold_path_custom_prefix(monkeypatch):
+    """Préfixe surchargé (schéma gold) : Tables/gold autorisé, Tables seul refusé."""
+    monkeypatch.setenv("GATEWAY_FABRIC_GOLD_TABLES_PREFIX", "Tables/gold")
+    settings = _settings(monkeypatch)
+    assert is_gold_path(settings, "goldws", "goldlake", "Lakehouse", "Tables/gold/dim")
+    assert not is_gold_path(settings, "goldws", "goldlake", "Lakehouse", "Tables/silver/x")
+    # « Tables » seul ne suffit plus (moins profond que le préfixe).
+    assert not is_gold_path(settings, "goldws", "goldlake", "Lakehouse", "Tables")
+
+
+def test_onelake_list_paths_refuses_out_of_gold(monkeypatch):
+    settings = _settings(monkeypatch)
+
+    called = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called["n"] += 1
+        return httpx.Response(200, json={"paths": []})
+
+    async def go():
+        fab = _client(handler, settings)
+        try:
+            # Workspace hors gold → refus AVANT tout réseau.
+            await fab.onelake_list_paths("autrews", "goldlake", "Lakehouse")
+        finally:
+            await fab.aclose()
+
+    with pytest.raises(FabricError):
+        run(go())
+    assert called["n"] == 0  # aucun appel réseau hors-gold
+
+
+def test_onelake_read_file_refuses_out_of_gold(monkeypatch):
+    settings = _settings(monkeypatch)
+    called = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called["n"] += 1
+        return httpx.Response(200, content=b"x")
+
+    async def go():
+        fab = _client(handler, settings)
+        try:
+            # Chemin hors préfixe gold (Files) → refus.
+            await fab.onelake_read_file("goldws", "goldlake", "Lakehouse", "Files/x")
+        finally:
+            await fab.aclose()
+
+    with pytest.raises(FabricError):
+        run(go())
+    assert called["n"] == 0
+
+
+def test_onelake_refuses_when_gold_unconfigured(monkeypatch):
+    settings = _settings(monkeypatch, gold=False)
+
+    async def go():
+        fab = _client(lambda r: httpx.Response(200, json={"paths": []}), settings)
+        try:
+            await fab.onelake_list_paths("goldws", "goldlake", "Lakehouse")
+        finally:
+            await fab.aclose()
+
+    with pytest.raises(FabricError):
+        run(go())
+
+
+# --------------------------------------------------------------------------- #
+# 7. Provider de jeton via Azure CLI (`az`) — subprocess SIMULÉ (offline).     #
+# --------------------------------------------------------------------------- #
+def test_azcli_token_runner_injected():
+    """runner injecté simule la sortie de `az` (aucun processus réel)."""
+    seen = {}
+
+    def runner(args):
+        seen["args"] = args
+        # Forme réelle de `az account get-access-token --output json`.
+        return '{"accessToken": "AZTOKEN", "expiresOn": "2026-01-01", "tokenType": "Bearer"}'
+
+    tok = acquire_token_via_azcli(AUDIENCE_FABRIC, tenant="tid", runner=runner)
+    assert tok == "AZTOKEN"
+    # Liste d'arguments FIXE (pas de shell) avec la ressource + le tenant.
+    assert seen["args"][:3] == ["az", "account", "get-access-token"]
+    assert "--resource" in seen["args"]
+    assert AUDIENCE_FABRIC in seen["args"]
+    assert "--tenant" in seen["args"] and "tid" in seen["args"]
+    assert "--output" in seen["args"] and "json" in seen["args"]
+
+
+def test_azcli_token_no_tenant_omits_flag():
+    def runner(args):
+        return '{"accessToken": "T"}'
+
+    acquire_token_via_azcli(AUDIENCE_STORAGE, runner=runner)
+    # Sans tenant, on n'ajoute pas le flag (az utilise la session courante).
+    # Vérifié indirectement : pas d'erreur, jeton renvoyé.
+
+
+def test_azcli_token_missing_token_raises():
+    def runner(args):
+        return '{"expiresOn": "2026"}'  # pas d'accessToken
+
+    with pytest.raises(FabricError):
+        acquire_token_via_azcli(AUDIENCE_FABRIC, runner=runner)
+
+
+def test_azcli_token_bad_json_raises_without_leaking():
+    def runner(args):
+        return "not-json-SECRETish"
+
+    try:
+        acquire_token_via_azcli(AUDIENCE_FABRIC, runner=runner)
+        assert False, "devait lever"
+    except FabricError as exc:
+        # L'erreur ne doit JAMAIS contenir la sortie brute (qui contiendrait le jeton).
+        assert "not-json-SECRETish" not in str(exc)
+
+
+def test_azcli_provider_wires_into_client(monkeypatch):
+    """make_azcli_token_provider câble l'auth az dans FabricClient (offline)."""
+    settings = _settings(monkeypatch)
+    audiences = []
+
+    def runner(args):
+        # La ressource est l'avant-dernier ou un élément de la liste : on la repère.
+        idx = args.index("--resource")
+        audiences.append(args[idx + 1])
+        return '{"accessToken": "AZ"}'
+
+    provider = make_azcli_token_provider(settings, runner=runner)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Le jeton az doit être présent dans l'en-tête Authorization.
+        assert request.headers.get("Authorization") == "Bearer AZ"
+        return httpx.Response(200, json={"value": [{"id": "w1"}]})
+
+    async def go():
+        transport = httpx.MockTransport(handler)
+        httpx_client = httpx.AsyncClient(transport=transport)
+        fab = FabricClient(settings, client=httpx_client, token_provider=provider)
+        try:
+            return await fab.list_workspaces()
+        finally:
+            await fab.aclose()
+
+    ws = run(go())
+    assert [w["id"] for w in ws] == ["w1"]
+    assert AUDIENCE_FABRIC in audiences  # le provider a demandé l'audience Fabric

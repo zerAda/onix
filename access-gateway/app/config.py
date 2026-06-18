@@ -162,6 +162,36 @@ class Settings:
     fabric_workspace_id: str
     fabric_item_id: str
 
+    # ── Périmètre GOLD — LECTURE SEULE, tables gold uniquement (cf. fabric_client) ──
+    # Fabric chez onix est volontairement restreint : on ne lit QUE la couche
+    # « gold » (données nettoyées/agrégées, exposables) d'UN lakehouse précis dans
+    # UN workspace précis. Tout chemin OneLake hors de
+    # ``{gold_lakehouse}.Lakehouse/{gold_tables_prefix}/...`` ou hors du
+    # ``gold_workspace`` est REFUSÉ (fail-closed, cf. fabric_client.is_gold_path).
+    # Défauts INERTES : si le gold n'est pas configuré (workspace + lakehouse),
+    # `gold_configured` est False → AUCUN accès OneLake n'est accordé.
+    # Le workspace/lakehouse acceptent l'id (GUID) ET le nom (l'API OneLake gère
+    # les deux) : on renseigne celui dont on dispose (les deux idéalement).
+    fabric_gold_workspace_id: str
+    fabric_gold_workspace_name: str
+    fabric_gold_lakehouse_id: str
+    fabric_gold_lakehouse_name: str
+    # Type d'item du lakehouse gold (toujours "Lakehouse" en pratique ; surchargeable
+    # pour rester explicite — un Warehouse a un autre type/chemin).
+    fabric_gold_lakehouse_type: str
+    # Préfixe de chemin des tables gold sous le lakehouse. Défaut "Tables" (racine
+    # managée des tables Delta) ; surchargeable en "Tables/gold" ou un schéma
+    # ("Tables/gold" pour le schéma `gold`). On REFUSE tout chemin hors de ce
+    # préfixe (ex. "Files/..." = données brutes non exposables).
+    fabric_gold_tables_prefix: str
+
+    # ── Fournisseur de jeton via Azure CLI (`az`) — zéro secret en repo ──
+    # Si True, le client Fabric acquiert ses jetons via ``az account get-access-token``
+    # (l'identité vient de `az login`, pas d'un client_secret). Utile en e2e LIVE
+    # sur un poste az-connecté. Défaut False (la passerelle en service utilise le
+    # SPN client-credentials). Cf. fabric_client.acquire_token_via_azcli.
+    fabric_use_azcli: bool
+
     @property
     def graph_configured(self) -> bool:
         return bool(self.graph_tenant_id and self.graph_client_id and self.graph_client_secret)
@@ -169,10 +199,22 @@ class Settings:
     @property
     def fabric_configured(self) -> bool:
         """Fabric est exploitable si un SPN (tenant/client/secret) est disponible
-        — soit dédié Fabric, soit hérité de Graph (mêmes identifiants Entra)."""
+        — soit dédié Fabric, soit hérité de Graph (mêmes identifiants Entra) — OU
+        si l'auth `az` est activée (l'identité vient alors de `az login`)."""
+        if self.fabric_use_azcli:
+            return True
         return bool(
             self.fabric_tenant_id and self.fabric_client_id and self.fabric_client_secret
         )
+
+    @property
+    def fabric_gold_configured(self) -> bool:
+        """Le périmètre gold est exploitable si on connaît AU MOINS un identifiant
+        du workspace gold ET un identifiant du lakehouse gold (id OU nom). Sans
+        cela, aucun accès OneLake n'est accordé (défaut INERTE, fail-closed)."""
+        ws = bool(self.fabric_gold_workspace_id or self.fabric_gold_workspace_name)
+        lh = bool(self.fabric_gold_lakehouse_id or self.fabric_gold_lakehouse_name)
+        return ws and lh
 
 
 @lru_cache(maxsize=1)
@@ -264,6 +306,30 @@ def get_settings() -> Settings:
         ).rstrip("/"),
         fabric_workspace_id=os.environ.get("GATEWAY_FABRIC_WORKSPACE_ID", "").strip(),
         fabric_item_id=os.environ.get("GATEWAY_FABRIC_ITEM_ID", "").strip(),
+        # Périmètre GOLD (lecture seule, tables gold uniquement). Défauts INERTES :
+        # tout vide → `fabric_gold_configured` False → aucun accès OneLake.
+        fabric_gold_workspace_id=os.environ.get(
+            "GATEWAY_FABRIC_GOLD_WORKSPACE_ID", ""
+        ).strip(),
+        fabric_gold_workspace_name=os.environ.get(
+            "GATEWAY_FABRIC_GOLD_WORKSPACE_NAME", ""
+        ).strip(),
+        fabric_gold_lakehouse_id=os.environ.get(
+            "GATEWAY_FABRIC_GOLD_LAKEHOUSE_ID", ""
+        ).strip(),
+        fabric_gold_lakehouse_name=os.environ.get(
+            "GATEWAY_FABRIC_GOLD_LAKEHOUSE_NAME", ""
+        ).strip(),
+        fabric_gold_lakehouse_type=os.environ.get(
+            "GATEWAY_FABRIC_GOLD_LAKEHOUSE_TYPE", "Lakehouse"
+        ).strip()
+        or "Lakehouse",
+        fabric_gold_tables_prefix=os.environ.get(
+            "GATEWAY_FABRIC_GOLD_TABLES_PREFIX", "Tables"
+        ).strip()
+        or "Tables",
+        # Auth via Azure CLI (`az`) : zéro secret, identité de `az login`.
+        fabric_use_azcli=_bool("GATEWAY_FABRIC_USE_AZCLI", False),
     )
 
 

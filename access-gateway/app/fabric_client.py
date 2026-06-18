@@ -33,10 +33,21 @@ Pagination — chaque API a SA forme (respectée exactement) :
 Sécurité : hôtes CONSTANTS (issus des Settings, pas d'URL utilisateur arbitraire),
 TLS vérifié par défaut (httpx), on ne journalise JAMAIS le jeton ni le corps de
 réponse (peut contenir des données sensibles). stdlib + httpx uniquement.
+
+**LECTURE SEULE PAR CONCEPTION (read-only by design).** Ce module n'émet QUE des
+requêtes GET : il n'écrit, ne crée, ne modifie et ne supprime JAMAIS rien sur
+Fabric / OneLake / Power BI. Aucune méthode POST/PUT/PATCH/DELETE n'existe ni ne
+doit être ajoutée. De plus, l'accès OneLake (données) est restreint au **périmètre
+GOLD** (un lakehouse précis, sous-arbre `Tables` gold) : voir `is_gold_path` —
+tout chemin hors-gold est REFUSÉ (fail-closed).
 """
 from __future__ import annotations
 
+import json
 import logging
+# Import subprocess : utilisé UNIQUEMENT pour `az` avec une liste d'arguments FIXE
+# (jamais shell=True, jamais de chaîne interpolée). Cf. acquire_token_via_azcli.
+import subprocess  # nosec B404
 from typing import Any, Awaitable, Callable, Optional, Union
 
 import httpx
@@ -49,6 +60,12 @@ logger = logging.getLogger("onix.gateway.fabric")
 AUDIENCE_FABRIC = "https://api.fabric.microsoft.com"
 AUDIENCE_STORAGE = "https://storage.azure.com"
 AUDIENCE_POWERBI = "https://analysis.windows.net/powerbi/api"
+# Audience Microsoft Graph (utile au provider az pour la résolution de groupes).
+AUDIENCE_GRAPH = "https://graph.microsoft.com"
+
+# Timeout (s) du sous-processus `az` (acquisition de jeton). Borné pour ne jamais
+# bloquer indéfiniment si la CLI attend une interaction.
+_AZCLI_TIMEOUT = 30.0
 
 # Garde-fou anti-boucle de pagination (cohérent graph_client.py).
 _MAX_PAGES = 1000
@@ -108,6 +125,171 @@ async def acquire_token(
     if not token:
         raise FabricError("Réponse de jeton Fabric sans access_token.")
     return token
+
+
+def acquire_token_via_azcli(
+    resource: str,
+    *,
+    tenant: Optional[str] = None,
+    runner: Optional[Callable[[list[str]], str]] = None,
+) -> str:
+    """Acquiert un jeton d'accès via **Azure CLI** (`az`) — zéro secret en repo.
+
+    Exécute ``az account get-access-token --resource {resource} --output json`` et
+    renvoie l'``accessToken``. L'identité provient de ``az login`` (utilisateur ou
+    identité managée) : AUCUN client_secret n'est requis ni stocké. Les ressources
+    par audience sont : ``https://api.fabric.microsoft.com``,
+    ``https://storage.azure.com``, ``https://analysis.windows.net/powerbi/api``,
+    ``https://graph.microsoft.com``.
+
+    Sécurité (bandit B602/B603) : on appelle ``subprocess`` avec une **liste
+    d'arguments FIXE** (jamais ``shell=True``, jamais une chaîne) — `resource` et
+    `tenant` ne sont que des éléments de la liste, pas interprétés par un shell. Le
+    jeton n'est JAMAIS journalisé ni inclus dans un message d'erreur ; en cas
+    d'échec on ne remonte que stderr tronqué et nettoyé.
+
+    `runner` est injectable (tests offline : on simule la sortie de `az` sans
+    exécuter de processus réel).
+    """
+    if not resource:
+        raise FabricError("acquire_token_via_azcli: resource requise.")
+    # Liste d'arguments STRICTEMENT fixe (pas de shell, pas d'interpolation).
+    args = [
+        "az",
+        "account",
+        "get-access-token",
+        "--resource",
+        resource,
+        "--output",
+        "json",
+    ]
+    if tenant:
+        args += ["--tenant", tenant]
+
+    if runner is not None:
+        raw = runner(args)
+    else:
+        try:
+            # args est une liste STRICTEMENT fixe, shell=False → pas d'injection.
+            completed = subprocess.run(  # nosec B603
+                args,
+                capture_output=True,
+                text=True,
+                timeout=_AZCLI_TIMEOUT,
+                check=False,
+                shell=False,
+            )
+        except FileNotFoundError as exc:  # `az` absent du PATH
+            raise FabricError(
+                "Azure CLI (`az`) introuvable : exécutez `az login` sur un poste "
+                "où la CLI est installée."
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise FabricError("Azure CLI (`az`) : délai dépassé.") from exc
+        if completed.returncode != 0:
+            # stderr peut contenir un message d'auth, JAMAIS le jeton (échec) ;
+            # on tronque pour ne rien étaler d'inutile.
+            err = (completed.stderr or "").strip().splitlines()
+            detail = err[-1][:200] if err else f"code {completed.returncode}"
+            raise FabricError(
+                f"Échec `az account get-access-token` (résolvez via `az login`) : {detail}"
+            )
+        raw = completed.stdout
+
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        # Ne JAMAIS inclure `raw` (contient le jeton) dans l'erreur.
+        raise FabricError("Sortie `az` illisible (JSON attendu).") from exc
+    token = payload.get("accessToken") if isinstance(payload, dict) else None
+    if not token:
+        raise FabricError("Sortie `az` sans accessToken.")
+    return token
+
+
+def make_azcli_token_provider(
+    settings: Settings,
+    *,
+    runner: Optional[Callable[[list[str]], str]] = None,
+) -> TokenProvider:
+    """Construit un `TokenProvider` injectable qui acquiert ses jetons via `az`.
+
+    Le provider reçoit une **audience** (ressource OAuth2) et renvoie le jeton
+    correspondant via `acquire_token_via_azcli`. Le tenant est passé à `az` s'il
+    est connu (Settings) — sinon `az` utilise le tenant courant de la session
+    (`az account show`). Pratique pour câbler l'auth az dans `FabricClient`
+    (e2e LIVE) sans secret.
+    """
+    tenant = settings.fabric_tenant_id or None
+
+    async def _provider(audience: str) -> str:
+        # `acquire_token_via_azcli` est synchrone (subprocess) — pas d'await réel.
+        return acquire_token_via_azcli(audience, tenant=tenant, runner=runner)
+
+    return _provider
+
+
+def is_gold_path(
+    settings: Settings,
+    workspace: str,
+    item: str,
+    item_type: str,
+    path: str = "",
+) -> bool:
+    """Valide qu'un accès OneLake reste dans le **périmètre GOLD** (lecture seule).
+
+    Renvoie ``True`` UNIQUEMENT si TOUTES ces conditions sont réunies (fail-closed :
+    le moindre doute ⇒ ``False``) :
+      1. le gold est configuré (`settings.fabric_gold_configured`) ;
+      2. `workspace` correspond au workspace gold (id OU nom, casse-insensible) ;
+      3. `item` correspond au lakehouse gold (id OU nom) ;
+      4. `item_type` est le type du lakehouse gold (défaut "Lakehouse") — ou vide
+         lorsqu'on adresse par GUID (convention OneLake ``/{wsGUID}/{itemGUID}/...``) ;
+      5. `path` (s'il est fourni) est SOUS le préfixe des tables gold
+         (`fabric_gold_tables_prefix`, ex. "Tables" ou "Tables/gold"). Tout chemin
+         hors de ce sous-arbre (ex. "Files/...") est REFUSÉ.
+
+    C'est la garde unique appelée par `onelake_list_paths`/`onelake_read_file` :
+    aucune lecture hors-gold n'est possible.
+    """
+    if not settings.fabric_gold_configured:
+        return False
+
+    def _n(v: Any) -> str:
+        return v.strip().lower() if isinstance(v, str) else ""
+
+    # (2) Workspace : doit matcher l'id OU le nom gold (ceux qui sont renseignés).
+    ws = _n(workspace)
+    allowed_ws = {_n(settings.fabric_gold_workspace_id), _n(settings.fabric_gold_workspace_name)}
+    allowed_ws.discard("")
+    if not ws or ws not in allowed_ws:
+        return False
+
+    # (3) Item (lakehouse) : id OU nom gold.
+    it = _n(item)
+    allowed_item = {_n(settings.fabric_gold_lakehouse_id), _n(settings.fabric_gold_lakehouse_name)}
+    allowed_item.discard("")
+    if not it or it not in allowed_item:
+        return False
+
+    # (4) Type d'item : le type gold, OU vide (adressage par GUID, sans suffixe).
+    typ = _n(item_type)
+    if typ and typ != _n(settings.fabric_gold_lakehouse_type):
+        return False
+
+    # (5) Chemin : sous le préfixe des tables gold. On compare segment par segment
+    # (un préfixe "Tables" ne doit PAS autoriser "TablesAutre", ni "Files").
+    if path:
+        prefix = settings.fabric_gold_tables_prefix.strip("/")
+        norm_path = path.strip("/")
+        prefix_segs = [s for s in prefix.lower().split("/") if s]
+        path_segs = [s for s in norm_path.lower().split("/") if s]
+        if len(path_segs) < len(prefix_segs):
+            return False
+        if path_segs[: len(prefix_segs)] != prefix_segs:
+            return False
+
+    return True
 
 
 class FabricClient:
@@ -265,9 +447,9 @@ class FabricClient:
         workspace: str,
         item: str,
         item_type: str,
-        subpath: str = "Files",
+        subpath: str = "",
     ) -> list[dict[str, Any]]:
-        """Liste les chemins OneLake d'un item (lakehouse/warehouse…).
+        """Liste les chemins OneLake d'un item — **restreint au périmètre GOLD**.
 
         ``GET https://onelake.dfs.fabric.microsoft.com/{workspace}?resource=
         filesystem&recursive=true&directory={item}.{itemtype}/{subpath}``
@@ -277,11 +459,25 @@ class FabricClient:
         `onelake_read_file`). Audience = stockage (`storage.azure.com`). Pagination
         ADLS via l'en-tête de réponse ``x-ms-continuation`` (rejoué en query).
 
+        **Gold-only (fail-closed).** Si `subpath` est vide, on liste le sous-arbre
+        des tables gold (`fabric_gold_tables_prefix`). Tout `workspace`/`item`/
+        `subpath` hors du périmètre gold (cf. `is_gold_path`) ⇒ `FabricError` AVANT
+        tout appel réseau.
+
         Renvoie la liste des entrées ``paths`` (objets {name, isDirectory,
         contentLength…}). Lève `FabricError` sur erreur (fail-closed côté ACL).
         """
         if not (workspace and item and item_type):
             raise FabricError("onelake_list_paths: workspace/item/item_type requis.")
+        # Sans sous-chemin explicite, on cible la racine des tables gold.
+        if not subpath:
+            subpath = self.settings.fabric_gold_tables_prefix
+        # Garde GOLD : refuse tout hors-périmètre AVANT le réseau (fail-closed).
+        if not is_gold_path(self.settings, workspace, item, item_type, subpath):
+            raise FabricError(
+                "onelake_list_paths: accès hors périmètre GOLD refusé (lecture seule, "
+                "tables gold uniquement)."
+            )
         # Le filesystem est le workspace ; le directory cible l'item + sous-chemin.
         directory = f"{item}.{item_type}"
         if subpath:
@@ -328,15 +524,25 @@ class FabricClient:
         item_type: str,
         path: str,
     ) -> bytes:
-        """Lit le contenu BRUT d'un fichier OneLake.
+        """Lit le contenu BRUT d'un fichier OneLake — **restreint au périmètre GOLD**.
 
         ``GET https://onelake.dfs.fabric.microsoft.com/{workspace}/{item}.{itemtype}
         /{path}`` (supporte aussi les GUID : ``/{wsGUID}/{itemGUID}/{path}`` —
         passe alors ``item_type=""``). Audience = stockage. Renvoie les octets ;
         lève `FabricError` sur erreur. On NE journalise PAS le contenu.
+
+        **Gold-only (fail-closed).** Tout `workspace`/`item`/`path` hors du
+        périmètre gold (cf. `is_gold_path` : le `path` DOIT être sous le préfixe des
+        tables gold) ⇒ `FabricError` AVANT tout appel réseau.
         """
         if not (workspace and item and path):
             raise FabricError("onelake_read_file: workspace/item/path requis.")
+        # Garde GOLD : refuse tout hors-périmètre AVANT le réseau (fail-closed).
+        if not is_gold_path(self.settings, workspace, item, item_type, path):
+            raise FabricError(
+                "onelake_read_file: accès hors périmètre GOLD refusé (lecture seule, "
+                "tables gold uniquement)."
+            )
         # Avec un GUID d'item, item_type est vide → pas de suffixe ".type".
         item_ref = f"{item}.{item_type}" if item_type else item
         url = (

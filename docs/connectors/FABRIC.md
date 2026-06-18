@@ -44,6 +44,44 @@ OneLake DFS :
 > `GATEWAY_POWERBI_HOST` / `GATEWAY_FABRIC_AUTHORITY`
 > ([`config.py:254-264`](../../access-gateway/app/config.py)).
 
+## 1 bis. Lecture seule + périmètre GOLD (fail-closed)
+
+Deux garde-fous **non négociables** encadrent l'accès Fabric d'onix :
+
+### Read-only by design
+
+`fabric_client.py` n'émet **que des GET** : aucune méthode POST/PUT/PATCH/DELETE
+n'existe ni ne doit être ajoutée (commentaire explicite « read-only by design » en
+tête du module,
+[`fabric_client.py`](../../access-gateway/app/fabric_client.py)). onix ne **modifie
+jamais** Fabric / OneLake / Power BI.
+
+### Tables GOLD uniquement
+
+L'accès **données OneLake** est restreint à **UN lakehouse « gold » précis** dans
+**UN workspace précis**, et **sous l'arbre des tables gold** (préfixe `Tables` par
+défaut, surchargeable en `Tables/gold` ou un schéma `gold`). La validation
+centrale `is_gold_path(settings, workspace, item, item_type, path)`
+([`fabric_client.py`](../../access-gateway/app/fabric_client.py)) **refuse**
+(fail-closed) tout chemin :
+
+- hors du **workspace gold** (`GATEWAY_FABRIC_GOLD_WORKSPACE_ID`/`_NAME`) ;
+- hors du **lakehouse gold** (`GATEWAY_FABRIC_GOLD_LAKEHOUSE_ID`/`_NAME`) ;
+- d'un **type d'item** différent (`Lakehouse` par défaut) ;
+- hors du **préfixe des tables gold** (ex. `Files/...` = données brutes → REFUSÉ).
+
+`onelake_list_paths` (sans sous-chemin → racine des tables gold) et
+`onelake_read_file` appellent cette garde **avant tout appel réseau** : un chemin
+hors-gold lève `FabricError` sans toucher au réseau. Côté décision,
+`fabric_acl.can_principal_read`/`authorized_items` **n'accordent que** pour le
+lakehouse gold (`item_in_gold_scope`,
+[`fabric_acl.py`](../../access-gateway/app/fabric_acl.py)) — un item hors gold est
+refusé **même si un rôle l'autoriserait**.
+
+**Défaut INERTE** : si le gold n'est pas configuré (`fabric_gold_configured`
+False — il manque le workspace OU le lakehouse), **aucun** accès OneLake n'est
+accordé. Le gold se câble par les variables `GATEWAY_FABRIC_GOLD_*` (cf. §4).
+
 ## 2. Modèle RBAC — deux sources de vérité, OR-mergées, fail-closed
 
 `fabric_acl.can_principal_read(...)` répond : « le principal P (+ ses groupes
@@ -150,9 +188,28 @@ réglages tenant ci-dessus.
 | `GATEWAY_POWERBI_HOST` | `https://api.powerbi.com` | hôte Power BI |
 | `GATEWAY_FABRIC_WORKSPACE_ID` | (vide) | workspace par défaut optionnel |
 | `GATEWAY_FABRIC_ITEM_ID` | (vide) | item par défaut optionnel |
+| `GATEWAY_FABRIC_GOLD_WORKSPACE_ID` | (vide) | **workspace gold** (id/GUID) — périmètre lecture |
+| `GATEWAY_FABRIC_GOLD_WORKSPACE_NAME` | (vide) | workspace gold (nom, alternative à l'id) |
+| `GATEWAY_FABRIC_GOLD_LAKEHOUSE_ID` | (vide) | **lakehouse gold** (item id/GUID) |
+| `GATEWAY_FABRIC_GOLD_LAKEHOUSE_NAME` | (vide) | lakehouse gold (nom, alternative à l'id) |
+| `GATEWAY_FABRIC_GOLD_LAKEHOUSE_TYPE` | `Lakehouse` | type d'item gold (toujours Lakehouse en pratique) |
+| `GATEWAY_FABRIC_GOLD_TABLES_PREFIX` | `Tables` | préfixe des tables gold (ex. `Tables/gold`, schéma `gold`) |
+| `GATEWAY_FABRIC_USE_AZCLI` | `false` | si `true`, jetons via Azure CLI (`az login`) au lieu du client_secret |
+
+> **Périmètre GOLD requis pour OneLake.** Renseignez **au moins** un id/nom de
+> workspace gold **et** un id/nom de lakehouse gold (`fabric_gold_configured`).
+> Sans cela, aucune lecture OneLake n'est accordée (défaut inerte, cf. §1 bis).
 
 > **Zéro secret en repo.** Posez `GATEWAY_FABRIC_CLIENT_SECRET` (ou son repli
 > Graph) en variable d'environnement / coffre — jamais en clair dans le dépôt.
+> **Alternative sans secret : Azure CLI.** Avec `GATEWAY_FABRIC_USE_AZCLI=true`,
+> le client acquiert ses jetons via `az account get-access-token` (identité de
+> `az login`) — aucun client_secret n'est requis ni stocké
+> (`acquire_token_via_azcli`,
+> [`fabric_client.py`](../../access-gateway/app/fabric_client.py) ; appel
+> `subprocess` avec une **liste d'arguments fixe**, jamais `shell=True` ; le jeton
+> n'est jamais journalisé). Pratique en e2e LIVE sur un poste az-connecté ; en
+> service, on privilégie le SPN client-credentials (ou une identité managée).
 
 ### Preuve e2e LIVE
 
@@ -174,6 +231,8 @@ nature**.
 | Capacité | onix FOSS (filtre de sortie) | Fabric / Onyx EE (contrôle natif) |
 |---|---|---|
 | Décision « qui peut voir » | ✅ roleAssignments + principalAccess (fail-closed) | ✅ |
+| **Lecture seule** (aucune écriture) | ✅ que des GET (read-only by design) | n/a |
+| **Périmètre GOLD uniquement** (tables gold d'un lakehouse) | ✅ `is_gold_path` fail-closed | ✅ (réglable) |
 | Trimming **au niveau du stockage** (zéro-fuite à la recherche) | ❌ (filtre de sortie) | ✅ |
 | Accès effectif fin OneLake | ⚠ **PREVIEW** (404 fréquent → ignoré, fail-closed) | ✅ data access roles GA |
 
