@@ -383,18 +383,23 @@ logs-local-prod:
 # Pré-requis make test : python3 + pip, docker, gitleaks (téléchargé si absent).
 MONITORING_COMPOSE := docker compose -f monitoring/docker-compose.monitoring.yml
 
-.PHONY: test lint pytest bandit pip-audit trivy gitleaks compose-validate sbom \
+.PHONY: test lint docs-check pytest bandit pip-audit trivy gitleaks compose-validate sbom \
         monitor-up monitor-down monitor-config monitor-logs
 
 # Barrière unique : tout ce que la CI vérifie, en local, dans l'ordre.
 test: lint compose-validate pytest bandit pip-audit gitleaks trivy
 	@echo "✓ WS6 : toutes les barrières qualité/sécurité/supply-chain sont VERTES."
 
-lint:
+lint: docs-check
 	@command -v yamllint >/dev/null 2>&1 || pip install --quiet yamllint
 	@yamllint -d "{extends: relaxed, rules: {line-length: disable}}" \
 	  .github/workflows monitoring
 	@echo "✓ YAML valide (workflows + monitoring)."
+
+# Valide l'infra de doc pour agents : 1 dossier par scope (docs/scopes/), 0 lien
+# de navigation mort (CLAUDE.md/AGENTS.md/DOCS_INDEX/scopes), signale les orphelins.
+docs-check:
+	@python3 scripts/check-docs-map.py
 
 compose-validate:
 	@docker compose -f docker-compose.yml config -q
@@ -474,3 +479,34 @@ monitor-config:
 
 monitor-logs:
 	@$(MONITORING_COMPOSE) logs -f --tail=200
+
+# =============================================================================
+# --- NETTOYAGE (release) -----------------------------------------------------
+# `make clean`      : retire les artefacts/caches/temporaires RÉGÉNÉRABLES.
+#                     CONSERVE le pertinent : code source, **doc (dont
+#                     docs/scopes/)**, configs, .env (secrets), backups/. C'est le
+#                     « clean release » : l'arbre reste fonctionnel, seul le
+#                     jetable disparaît. Idempotent, sûr (ne touche jamais .git).
+# `make clean-deep` : clean + venvs Python locaux (actions/.venv, access-gateway/.venv).
+# (Pour DÉTRUIRE la stack Docker + volumes : `make destroy`.)
+# =============================================================================
+.PHONY: clean clean-deep
+
+clean:
+	@echo "→ Nettoyage release (artefacts/caches/temporaires régénérables)…"
+	@find . -path ./.git -prune -o -type d -name '__pycache__'   -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type d -name '.mypy_cache'   -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type d -name '.ruff_cache'   -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type d -name '*.egg-info'    -exec rm -rf {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type f -name '*.py[co]'      -exec rm -f  {} + 2>/dev/null || true
+	@find . -path ./.git -prune -o -type f \( -name '.DS_Store' -o -name 'Thumbs.db' -o -name '*.swp' \) -exec rm -f {} + 2>/dev/null || true
+	@rm -rf .coverage coverage.xml htmlcov dist build
+	@rm -f sbom*.json sbom*.spdx.json sbom*.xml
+	@rm -f deploy/azure/bicep/main.json
+	@echo "✓ clean : jetable retiré. Conservés : code, docs (docs/scopes/…), configs, .env, backups/."
+
+clean-deep: clean
+	@echo "→ Nettoyage profond (venvs Python locaux)…"
+	@rm -rf actions/.venv access-gateway/.venv
+	@echo "✓ clean-deep : venvs retirés (recréez-les via vos commandes d'install)."

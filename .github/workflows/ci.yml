@@ -28,6 +28,9 @@ jobs:
         run: |
           for s in scripts/*.sh; do bash -n "$s"; done
 
+      - name: Doc-infra agents (carte des scopes + liens)
+        run: python scripts/check-docs-map.py
+
       - name: Lint YAML (workflows + monitoring)
         run: |
           python -m pip install --quiet yamllint

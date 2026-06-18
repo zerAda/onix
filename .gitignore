@@ -29,6 +29,28 @@ access-gateway/config/group_map.json
 **/__pycache__/
 *.pyc
 
+# Caches & artefacts de build/test — globalement ignorés (retirés par `make clean`).
+*.pyo
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/*.egg-info/
+.coverage
+coverage.xml
+htmlcov/
+/dist/
+/build/
+
+# SBOM générés (regénérables via `make sbom`).
+sbom*.json
+sbom*.spdx.json
+sbom*.xml
+
+# Cruft OS / éditeurs.
+.DS_Store
+Thumbs.db
+*.swp
+
 # Bicep — ARM compilé généré par `bicep build` (regénérable depuis *.bicep ;
 # `az deployment` compile à la volée). Ne pas committer l'artefact.
 deploy/azure/bicep/main.json

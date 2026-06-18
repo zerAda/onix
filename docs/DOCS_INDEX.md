@@ -3,6 +3,19 @@
 > Carte de **toute** la doc, par scope. Embarquement agent : [`../AGENTS.md`](../AGENTS.md).
 > Racine : [`../ARCHITECTURE.md`](../ARCHITECTURE.md) · [`../SECURITY.md`](../SECURITY.md) · [`../CLAUDE.md`](../CLAUDE.md).
 
+## 🧭 Dossiers de scope (navigation agent)
+> Point d'entrée par scope (code + commandes + tests + invariants + docs + journal).
+> Routeur : [`scopes/README.md`](scopes/README.md).
+
+| Scope | Dossier |
+|---|---|
+| access-gateway | [`scopes/access-gateway.md`](scopes/access-gateway.md) |
+| actions | [`scopes/actions.md`](scopes/actions.md) |
+| rag-prompts | [`scopes/rag-prompts.md`](scopes/rag-prompts.md) |
+| monitoring | [`scopes/monitoring.md`](scopes/monitoring.md) |
+| deploy-ops | [`scopes/deploy-ops.md`](scopes/deploy-ops.md) |
+| security-governance | [`scopes/security-governance.md`](scopes/security-governance.md) |
+
 ## 🚀 Embarquement & vue d'ensemble
 | Doc | Contenu |
 |---|---|
