@@ -1,156 +1,151 @@
 # Technology Stack
 
-**Analysis Date:** 2026-06-18
+**Analysis Date:** 2026-06-19
 
 ## Languages
 
 **Primary:**
-- Python 3.11.11 - Backend microservices (Onyx API, onix-actions, access-gateway)
-- TypeScript/Next.js - Frontend web server (Onyx web UI)
+- Python 3.11.11 - Backend services, microservices (`actions`, `access-gateway`), scripts, tests
+  - Thin Debian bookworm image: `python:3.11.11-slim-bookworm`
+  - Used across all Python services: actions, access-gateway, tests/rag, scripts
 
 **Secondary:**
-- Bash/Shell - Infrastructure automation (scripts/detect-hardware.sh, scripts/gen-secrets.sh, scripts/verify.sh)
-- YAML - Configuration (docker-compose, Kubernetes/Helm charts)
-- SQL - Postgres schema and migrations (via Alembic)
+- JavaScript/Node.js - Onyx frontend (upstream; not authored here)
+- Shell (POSIX sh/bash) - Scripts, automation, Makefile targets
+- YAML - Docker Compose, Kubernetes Helm, Prometheus configuration, CI/CD workflows
+- SQL - Postgres migrations (Alembic via Onyx), schema management
 
 ## Runtime
 
 **Environment:**
-- Docker Compose v2 - Mono-poste orchestration (docker-compose.yml + overlay files: .gpu, .performance, .prod-local, .lan)
-- Kubernetes (AKS) - Production High Availability via Helm chart `deploy/k8s/onix-ha/`
-- Ollama 0.30.8 - Local LLM runtime (containerized, isolated network)
+- Docker / Docker Compose v2 (primary orchestration for local/single-node)
+- Kubernetes (HA deployment via Helm chart `deploy/k8s/onix-ha`)
+- POSIX sh (container entry points, scripts)
 
 **Package Manager:**
-- pip (Python)
-  - Lockfile: requirements.txt (pinned versions per component)
-  - Key files:
-    - `actions/requirements.txt` - onix-actions microservice deps (57 lines, 0 CVE verified)
-    - `access-gateway/requirements.txt` - RBAC gateway deps (19 lines, 0 CVE verified)
-    - `tests/rag/requirements.txt` - RAG test harnesse deps (pinned pytest, PyYAML, requests)
+- pip (Python packages)
+- Lockfile: Requirements.txt files with pinned versions (for reproducibility)
+  - `actions/requirements.txt` - all dependencies pinned
+  - `access-gateway/requirements.txt` - pinned versions
+  - `tests/rag/requirements.txt` - test runner dependencies
 
 ## Frameworks
 
 **Core:**
-- FastAPI 0.137.1 - Async HTTP framework for actions/access-gateway microservices
-- Uvicorn 0.34.0 - ASGI server (http://0.0.0.0:8100 for actions, :8200 for gateway)
-- Pydantic 2.10.4 - Request/response validation and serialization
-- Onyx 4.1.1 (FOSS, MIT) - RAG platform (connecters, indexation, chat, model-server)
+- FastAPI 0.137.1 - HTTP framework for `actions` and `access-gateway` microservices
+  - Uvicorn 0.34.0 - ASGI server (async HTTP handler)
+- Pydantic 2.10.4 - Data validation and settings management (12-factor config)
 
 **Testing:**
-- pytest 9.0.3 - Unit/integration test runner (suites: `actions/tests`, `access-gateway/tests`, `tests/rag`)
-- PyYAML 6.0.2 - Fixtures and config parsing in RAG tests
-- requests 2.33.0 - HTTP client for live test mode (ONIX_RAG_LIVE=1)
+- pytest 9.0.3 - Test runner (suites: `actions/tests`, `access-gateway/tests`, `tests/rag`)
+- PyYAML 6.0.2 - YAML parsing for test fixtures and configs
+- requests 2.33.0 - HTTP client for RAG live tests
 
 **Build/Dev:**
-- Docker/Docker Compose - Container orchestration
-- Helm 3.x - Kubernetes package manager (chart: `deploy/k8s/onix-ha`)
-- Alembic - Database migrations (Onyx/Postgres schema versioning)
-- Make - Unified CLI orchestration (`Makefile` targets: make up, make verify, make test, etc.)
+- Helm 3.x - Kubernetes chart templating and packaging (`deploy/k8s/onix-ha`)
+- Docker - Container image building (Dockerfile: `actions/Dockerfile`, `access-gateway/Dockerfile`)
+- Alembic - Database schema migrations (embedded in Onyx backend)
+- Celery 5.6.3 - Async task queue (OPT-IN for stateless multi-replica actions service)
 
 ## Key Dependencies
 
-**Critical (Core Application):**
-- httpx 0.28.1 - HTTP client for external integrations (Graph API, Ollama, async)
-- psycopg 3.3.4 + psycopg-binary 3.3.4 - PostgreSQL driver (lazy import in multi-replica mode)
-- redis 5.2.1 (gateway) / redis 8.0.0 (actions) - Cache/session backend (optional; degrades to LRU in-memory if absent)
-- boto3 1.43.30 + botocore 1.43.30 - S3/MinIO client (lazy import in S3 mode, local SQLite default)
-- python-multipart 0.0.32 - Multipart form parsing (FastAPI file uploads)
+**Critical (Security/Core):**
+- PyJWT 2.13.0 - JWT verification (RS256/ES256/HS256 signatures for OIDC)
+  - Pinned for 12 CVE fixes (PYSEC-2025-183, PYSEC-2026-120/175/176/177/178/179)
+  - Required for federated identity via Entra ID / Microsoft Graph
+- python-multipart 0.0.32 - Multipart form data parsing (FastAPI dependency)
+- httpx 0.28.1 - Async HTTP client (Graph, Fabric, OneLake, SharePoint calls; stdlib-only, no SDK)
 
-**Document Processing:**
-- python-docx 1.1.2 - Generate .docx files (audit export)
-- pdfplumber 0.11.10 - PDF text extraction
-- pypdf 6.13.2 - PDF manipulation
-- pdf2image 1.17.1 - PDF to image conversion
-- pytesseract 0.3.13 - OCR engine binding
-- Pillow 12.2.0 - Image processing (OCR preprocessing)
-- poppler-utils (system binary) - PDF rendering for OCR
+**Data Processing & OCR:**
+- pdfplumber 0.11.10 - PDF parsing and text extraction
+- pypdf 6.13.3 - PDF manipulation (pinned 6.13.2 → 6.13.3 for GHSA-jm82-fx9c-mx94 CVE fix)
+- python-docx 1.1.2 - Microsoft Word (.docx) generation
+- Pillow 12.2.0 - Image processing (PDF → image conversion for OCR)
+- pdf2image 1.17.0 - PDF to image rendering
+- pytesseract 0.3.13 - OCR via Tesseract engine
+- thefuzz 0.22.1 - Fuzzy string matching
 
-**Infrastructure:**
-- slowapi 0.1.9 - Rate-limiting (per-caller quota enforcement)
-- PyJWT 2.13.0 - OIDC JWT verification (RS256/ES256 + JWKS, Entra ID SSO)
-- prometheus-client 0.21.1 - Metrics export `/metrics` endpoint (Prometheus scrape)
-- celery 5.6.3 - Async task queue (OCR, batch audits)
+**Observability & Metrics:**
+- prometheus-client 0.21.1 - Prometheus instrumentation (HTTP metrics, FinOps, kill-switch)
+  - Endpoints: `actions:8100/metrics`, `access-gateway:8200/metrics`
 
-**Security/Compliance:**
-- thefuzz 0.22.1 - Fuzzy string matching (audit data comparison)
-- bandit - SAST security scanner (CI gate)
-- gitleaks - Secret detection (CI gate, 0 secrets allowed)
-- pip-audit - Dependency CVE scanner (CI gate, --strict = 0 CVE)
-- trivy - Container image scanner (CI gate)
+**Rate Limiting:**
+- slowapi 0.1.9 - Per-caller rate limiting (API quota enforcement)
+  - Optional; memory-based fallback if absent
 
-**System Binaries (Dockerfile):**
-- tesseract-ocr (Debian package) - OCR engine
-- tesseract-ocr-fra (Debian package) - French language support (OCR_LANG=fra+eng default)
-- curl - Healthcheck commands in containers
-- nginx 1.27-alpine - Reverse proxy (unique ingress, bound 127.0.0.1 only by default)
+**Persistence (Multi-Replica/HA):**
+- psycopg 3.3.4 + psycopg-binary 3.3.4 - Postgres driver (OPT-IN, lazy-imported)
+  - Required for stateless actions in multi-replica mode
+  - Default (mono-poste): SQLite (no new dependency)
+- redis 8.0.0 (actions) / 5.2.1 (access-gateway) - Redis client
+  - Cache: for access-gateway semantic cache (LRU memory if REDIS_URL absent)
+  - Broker: Celery task queue optional backend
+- boto3 1.43.30 + botocore 1.43.30 - S3/MinIO client (OPT-IN, lazy-imported)
+  - Object storage for `.docx` generation (S3/MinIO compatible path-style)
+- urllib3 2.7.0 - HTTP urllib library (pinned for CVE fixes PYSEC-2026-141/142)
+
+**Task Queue (OPT-IN):**
+- celery 5.6.3 - Async task processing (multi-replica deployments)
+  - Broker: AMQP (RabbitMQ prod) or Redis (dev/alternative HA)
 
 ## Configuration
 
 **Environment:**
-- `.env` file (gitignored, generated by `scripts/gen-secrets.sh`)
-  - Mandatory vars: `POSTGRES_PASSWORD`, `OPENSEARCH_ADMIN_PASSWORD`, `REDIS_PASSWORD`, `SECRET`, `USER_AUTH_SECRET`, `S3_AWS_ACCESS_KEY_ID`, `S3_AWS_SECRET_ACCESS_KEY`, `ONIX_ACTIONS_API_KEY`
-  - Optional vars: `IMAGE_TAG` (default 4.1.1), `OLLAMA_IMAGE_TAG`, `ONYX_HOST_PORT` (default 3000), `OLLAMA_KEEP_ALIVE`, `OLLAMA_CONTEXT_LENGTH`, etc.
-  - Key configs required:
-    - `DISABLE_TELEMETRY=true` (sovereignty/GDPR — Onyx default is ON)
-    - `AUTH_TYPE=basic` (or oidc, saml)
-    - `WEB_DOMAIN=http://localhost:3000` (or custom DNS)
+- 12-factor app pattern: all config via environment variables (no .ini, no secrets in repo)
+- `.env` file (git-ignored): sourced at startup, generated by `scripts/gen-secrets.sh`
+- No secrets committed to repository (enforced by gitleaks gate in CI)
 
-**Build:**
-- `docker-compose.yml` - Base stack (API, web, database, OpenSearch, Redis, MinIO, Ollama, nginx, actions, background workers)
-- `docker-compose.gpu.yml` - NVIDIA GPU profile (Ollama acceleration)
-- `docker-compose.performance.yml` - High-throughput tuning (larger heap, parallel models)
-- `docker-compose.prod-local.yml` - Production single-machine (healthchecks, restart:always, sanity checks)
-- `docker-compose.lan.yml` - LAN tester access (nginx bind 0.0.0.0, caution)
-- `Dockerfile` files:
-  - `actions/Dockerfile` - Python 3.11.11-slim, tesseract+poppler, non-root user (uid 10001)
-  - `access-gateway/Dockerfile` - Python 3.11.11-slim, non-root (uid 10002)
+**Key Configuration Files:**
+- `.env` (git-ignored) - Runtime secrets, passwords, API keys
+- `.env.template` (in each service) - Configuration template with placeholders
+- `docker-compose.yml` - Base stack definition (v3.8+)
+- `docker-compose.gpu.yml` - GPU acceleration overlay (NVIDIA)
+- `docker-compose.performance.yml` - Perf tuning overlay (high-throughput)
+- `docker-compose.prod-local.yml` - Single-node production hardening
+- `docker-compose.prod.yml` - Full production deployment (TLS via Caddy, OIDC Entra ID)
+- `deploy/prod/.env.prod` (git-ignored template) - Production environment
+- `monitoring/docker-compose.monitoring.yml` - Observability stack (separate, opt-in)
+
+**Build Configuration:**
+- `Dockerfile` (actions, access-gateway) - Python 3.11.11-slim, non-root user, minimal attack surface
+- `nginx/onyx.conf` - Reverse proxy configuration (single point of entry, localhost-bound)
+- `monitoring/prometheus/prometheus.yml` - Prometheus scrape config + alert rules
+- `monitoring/loki/loki-config.yml` - Log aggregation config
+- `monitoring/alertmanager/alertmanager.yml` - Alert routing config
 
 ## Platform Requirements
 
 **Development:**
-- Docker Desktop / Docker Engine v25+ with Docker Compose v2
-- Linux (recommended): vm.max_map_count >= 262144 (OpenSearch requirement)
-- RAM:
-  - Minimum 16 GB (base stack, model 3B)
-  - Recommended 24+ GB (7B model, parallel inference)
-- Disk: ~20 GB free (images + model cache + volumes)
-- CPU: 4+ cores (Ollama + indexing parallelism)
-- Optional: NVIDIA GPU (RTX 3060+ or Tesla T4, CUDA 12.x)
+- Docker + Docker Compose v2 (mandatory)
+- Python 3.11+ (for local scripts, optional if using Docker)
+- Linux kernel: `vm.max_map_count >= 262144` (for OpenSearch)
+- Bash/POSIX sh (script execution)
+- (Optional) Helm 3.x for K8s HA templating
+- (Optional) Azure CLI (`az`) for Fabric/Graph service principal setup
 
-**Production:**
-- **Docker Compose (single-machine):** Linux host with systemd (cf. `deploy/local-prod/`), backup/restore scripts
-- **Kubernetes (HA):** AKS with:
-  - Premium SSD v2 storage class (CSI)
-  - Postgres Flexible Server (Azure managed, TLS, zone-redundant)
-  - Azure Cache for Redis (Premium tier, TLS on 6380, key-based auth)
-  - OpenSearch 3.6.0 (3 nodes HA, in-cluster)
-  - MinIO 4 nodes (erasure-coded, S3)
-  - Helm 3.x (chart: `deploy/k8s/onix-ha/`)
-- **Azure IaC:** Bicep templates (`deploy/azure/bicep/`) for repeatable infrastructure
+**Production (Single-Node Local):**
+- Docker + Docker Compose v2
+- TLS certificate (auto-provisioned by Caddy if ONYX_DOMAIN set)
+- Entra ID app registration (OAuth2 OIDC client credentials)
+- Hardware: Adjustable CPU/RAM limits per service (recommended: 16GB+ for full stack with LLM)
 
-## Deployment Targets
+**Production (Kubernetes HA):**
+- Kubernetes 1.24+ cluster
+- Helm 3.x
+- Data-tier operators:
+  - CloudNative-PG operator (Postgres HA)
+  - OpenSearch operator (optional, can use external)
+  - Redis operator (optional, can use external)
+  - MinIO (optional, can use S3)
+- Ingress controller (for TLS routing)
+- Persistent volume provisioner (for StatefulSet data)
 
-**Supported Platforms:**
-- Docker Compose (development, single-machine production)
-- Kubernetes on AKS (high-availability, multi-zone)
-- Local production (systemd unit, cf. `deploy/local-prod/` and `docs/PROD_LOCAL.md`)
-
-**Image Registry:**
-- Docker Hub (upstream Onyx images: `onyxdotapp/onyx-*:4.1.1`)
-- Azure Container Registry (ACR) for custom images (onix-actions, access-gateway)
-
-## Monitoring & Observability
-
-**Built-in:**
-- Prometheus metrics endpoint `/metrics` (provided by `prometheus-client` in actions/gateway)
-- Logging: JSON-file driver (Docker, max-size 50m, max-file 6)
-- Healthchecks: HTTP endpoints per service (curl to /health)
-
-**Optional (monitored stack):**
-- Grafana (cf. `monitoring/` directory)
-- Loki (log aggregation)
-- Prometheus (metrics scrape)
+**Production (Entra ID Integration):**
+- Azure app registration (with Microsoft Graph API permissions)
+- Service Principal client secret
+- OIDC provider endpoint (for identity claims relay)
+- Tenant ID, Client ID, Client Secret (environment variables)
 
 ---
 
-*Stack analysis: 2026-06-18*
+*Stack analysis: 2026-06-19*

@@ -1,309 +1,508 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-06-18
+**Analysis Date:** 2026-06-19
 
-## Tech Debt
+## Overview
 
-### Onyx FOSS Upstream Limitations (Architectural)
+This is a refresh audit following 73 commits merged to `main` that resolved numerous prior concerns (CVE pypdf→6.13.3, monitoring hardening, backup/restore prod-awareness, RGPD S3 erasure, secrets-at-rest wiring, gitleaks pre-commit hook, bandit on scripts). **All previous P0 blockers have been resolved** (cf. `docs/audit-reality/_VERDICT.md` §4). The codebase is currently **production-ready for mono-poste and single-machine prod deployments**; HA/Azure pathway is quasi-ready with documented workarounds.
 
-**Area:** Permission sync and document-level RBAC (search phase)
-
-- **Issue:** The upstream Onyx FOSS build does not perform permission-sync from source systems (SharePoint, Confluence, etc.) at the retrieval phase. This means the LLM sees all documents indexed in a Document Set, regardless of per-document ACLs on the source system.
-- **Files:** `access-gateway/app/doc_acl.py`, `access-gateway/app/graph_acl.py`
-- **Impact:** Potential unintended information leakage during LLM generation if two users in the same Document Set have different permissions on the same file. The LLM may inadvertently reference content from a file one user should not see.
-- **Mitigation in place:** Post-filter on the response path (`doc_acl.py`) strips citations to non-authorized documents and replaces with a refusal if zero citations remain. ACL is now auto-synchronized from SharePoint via Microsoft Graph (`graph_acl.py`, `make sync-doc-acl`).
-- **Fix approach:** This is an **Onyx Enterprise Edition / Cloud** function (permission-sync with certificate). For FOSS, mitigations are: design Document Sets around homogeneous access patterns (e.g., one per commercial team), or deploy separate Onyx instances per access tier. Full per-document trimming at retrieval requires upgrading to EE or Cloud.
-
-### Onyx FOSS: Encryption of Secrets at Rest (Default OFF)
-
-**Area:** Connector credentials and API keys storage
-
-- **Issue:** The upstream Onyx FOSS `backend/onyx/utils/encryption.py` does not encrypt secrets — the `_encrypt_string()` function returns plaintext bytes. Setting `ENCRYPTION_KEY_SECRET` logs a no-op message. Connector credentials, LLM API keys, and OAuth tokens are stored unencrypted in Postgres.
-- **Files:** `backend/onyx/utils/encryption.py:16-30`, `backend/onyx/db/models.py:163`
-- **Impact:** **CRITICAL for FOSS deployments.** Postgres must be protected as a security perimeter. If an attacker gains access to the database (backup leakage, stolen VM image, SQL injection in upstream Onyx), all credentials are readable in plaintext.
-- **Mitigation in place:** In onix, `ENCRYPTION_KEY_SECRET` must always be set (Azure Key Vault or similar) and the environment is hardened (database access controls, TLS on connections, backups encrypted).
-- **Fix approach:** Upgrade to **Onyx Enterprise Edition** if Postgres encryption at rest is mandatory. For self-hosted FOSS, rely on infrastructure-layer encryption (encrypted EBS/Azure Disk, Postgres transparent encryption if available, strict DB access controls) and treat the Postgres instance as a security boundary.
-
-### Secrets File Defaults in Compose (dev/base)
-
-**Area:** Development Docker Compose default credentials
-
-- **Issue:** `docker-compose.yml` and dev overrides ship hardcoded default passwords for Postgres (`password`), MinIO (`minioadmin`), and Redis. These are also documented in `deployment/docker_compose/docker-compose.yml:380,526,86`.
-- **Files:** `docker-compose.yml`, `docker-compose.dev.yml`, `deployment/docker_compose/docker-compose.yml`
-- **Impact:** If the base compose file is deployed without overriding these defaults (especially via CI/automation), credentials are known to attackers. Risk is elevated if `docker-compose.yml` is committed with production values.
-- **Mitigation in place:** Production `docker-compose.prod.yml` uses `${VAR:?error}` fail-fast syntax and secrets are externalized via `gen-secrets.sh`. The project's Makefile enforces `make secrets` before `make up`.
-- **Fix approach:** Continue to enforce secret generation tooling and document in RUNBOOK.md that base `docker-compose.yml` is for **development only**. Add a startup guard that rejects the default credentials if `POSTGRES_PASSWORD=password` is detected in prod mode.
-
-### Chart Defaults: Data-Tier SPOFs (Kubernetes Helm)
-
-**Area:** Official Helm chart shipping single-instance defaults
-
-- **Issue:** The upstream Onyx Helm chart (`deployment/helm/charts/onyx`, v0.6.0) ships with single-instance defaults: Postgres `instances: 1`, OpenSearch `singleNode: true`, Redis standalone, MinIO standalone. This means the chart is HA-*capable* but ships HA-*off*.
-- **Files:** `deployment/helm/charts/onyx/values.yaml:30,57,64,1029-1030,1041`, `deploy/k8s/onix-ha/values.yaml` (onix correction)
-- **Impact:** **SPOF risk in default deployments.** A single data-tier node failure → full outage. Postgres loss = all metadata gone; OpenSearch loss = no search/retrieval; Redis loss = dropped locks/tasks; MinIO loss = files unreachable.
-- **Mitigation in place:** onix provides `deploy/k8s/onix-ha/` chart with HA defaults (`replicas >= 2`, HPA, `PodDisruptionBudgets`). Chart is validated server-side and matches upstream structure.
-- **Fix approach:** For production Kubernetes deployments, use `deploy/k8s/onix-ha/` instead of the upstream chart, or manually override all data-tier components to multi-instance. Document this as a non-negotiable requirement in `docs/DEPLOY_AZURE.md` and `docs/HA_SCALING.md`.
-
-## Known Bugs
-
-### Onyx Upstream: DB Migration Race on Multi-Replica api Boot
-
-**Area:** Alembic migrations in clustered Onyx deployments
-
-- **Symptoms:** When `api.replicaCount > 1` in Kubernetes, all api pods race to run `alembic upgrade head` (379 migrations) simultaneously during startup. Concurrent `CREATE TABLE`/`ALTER TABLE` from N pods can cause lock contention, partial applies, or deadlocks. Some migrations may fail silently if the table already exists.
-- **Files:** `backend/alembic/env.py`, `deployment/helm/charts/onyx/templates/api-deployment.yaml:73` (inline migration)
-- **Trigger:** Scaling api replicas to > 1 in Kubernetes without a pre-install Job or advisory-lock guard. The multi-tenant path explicitly warns about this (`backend/onyx/db/engine/tenant_utils.py`).
-- **Workaround:** Run migrations in a separate pre-install Job (Helm hook `pre-install`), not inline in the api container. Use `pg_advisory_lock()` or a dedicated migration lock table. Currently not implemented in the upstream chart.
-- **Impact:** Data inconsistency, failed app startup, silent schema corruption. Blocks production multi-replica deployments.
-
-### Onyx Upstream: Celery Beat Singleton Without Leader Election
-
-**Area:** Periodic scheduler duplication risk
-
-- **Symptoms:** Celery beat is a singleton (`DynamicTenantScheduler(PersistentScheduler)`) with no RedBeat or leader-election mechanism. The Deployment defaults to `RollingUpdate` strategy without `Recreate`, so during a rolling upgrade, two beat pods may briefly run simultaneously, dispatching periodic tasks twice (e.g., permission sync, index cleanup).
-- **Files:** `deployment/helm/charts/onyx/templates/celery-beat.yaml:12`, `backend/onyx/background/celery/apps/beat.py:27`
-- **Trigger:** Any `helm upgrade` or pod restart during standard maintenance. If a human manually sets `replicaCount: 2` in values, beat continuously double-schedules.
-- **Workaround:** Add `strategy: Recreate` to the beat Deployment. Beat-tick locks per tenant (`CHECK_*_BEAT_LOCK`, ~120s duration) mitigate downstream duplication but are fragile.
-- **Impact:** Duplicate job dispatch (permission sync runs twice), increased load, potential race conditions in lock-based work coordination. Low severity (mitigated by locks) but a correctness gap.
-
-### Onyx Upstream: api-server Missing Health Probes
-
-**Area:** Kubernetes readiness and liveness
-
-- **Symptoms:** The api-server Deployment ships with empty probes (`startupProbe/readinessProbe/livenessProbe: {}` in values). Traffic routes to pods before Alembic finishes and uvicorn is ready. A wedged api pod (deadlock, OOM) stays in the load-balancer rotation indefinitely.
-- **Files:** `deployment/helm/charts/onyx/values.yaml:50-52`
-- **Trigger:** Any api pod deployment or a hung api process during operation.
-- **Workaround:** Operators must supply custom probes to `values.yaml` (example in comments but not active). onix-ha chart provides sensible defaults.
-- **Impact:** Traffic to unready pods, delayed error detection, cascading failures. Should be a mandatory requirement, not optional.
-
-## Security Considerations
-
-### Prompt Injection via Custom Tools → SSRF + Credential Replay
-
-**Area:** LLM Tool Integration / External API calls
-
-- **Risk:** Onyx Custom Tools (OpenAPI actions) in the upstream FOSS bypasses centralized SSRF checks. The tool implementation calls `requests.request()` directly with user-input-driven URL paths/query params and carries an `Authorization` header. A malicious document can steer the LLM to invoke a tool with a redirect to an internal host, leaking credentials.
-- **Files:** `backend/onyx/tools/tool_implementations/custom/custom_tool.py:193-198`, `openapi_parsing.py:52-66`
-- **Current mitigation:** Tool base hosts are admin/curator-configured (not LLM-controlled), limiting reachable targets. Upstream Onyx does not guard the path/query params.
-- **Recommendations:** Route Custom Tool calls through `ssrf_safe_get()` before executing. Validate the full URL (not just base host) against SSRF policy. This is an upstream Onyx gap, not introduced by onix.
-
-### Avatar Upload: Content-Type Confusion (Stored XSS)
-
-**Area:** File upload handling
-
-- **Risk:** Avatar upload endpoint accepts `file.content_type` directly from the client (no validation) and stores it. On download, the stored content-type is replayed to the browser. An attacker can upload `image/svg+xml` or `text/html` with JavaScript, achieving stored XSS when the avatar URL is fetched.
-- **Files:** `backend/onyx/server/features/persona/api.py:285-298`, `chat_backend.py:907,922`
-- **Current mitigation:** Requires authentication + `Vary: Cookie` cookie header.
-- **Recommendations:** Validate MIME type against an allowlist (e.g., `image/jpeg`, `image/png`, `image/webp`). Use a library like `puremagic` (already a dependency) to sniff the file's actual magic bytes. Reject mismatches.
-
-### Insufficient SSRF Protection Below `VALIDATE_ALL`
-
-**Area:** Web connector for crawling
-
-- **Risk:** Web connector SSRF guard (`web_connector_ssrf_enforced`) is only active when `SSRFProtectionLevel.VALIDATE_ALL`. At `VALIDATE_LLM`, `ALLOW_PRIVATE_NETWORK`, or `DISABLED`, the guard returns immediately and an admin-configured web crawler can reach `169.254.169.254` (AWS IMDS), localhost, or RFC1918 addresses.
-- **Files:** `backend/onyx/server/security/models.py:74-78`, `connectors/web/connector.py:110-121`
-- **Current mitigation:** Default is `VALIDATE_ALL`, and the code itself documents this as a known-intentional trade-off (internal crawler mode). Operator can configure lower levels if they trust the admin.
-- **Recommendations:** Document the SSRF levels clearly in deployment guides. Default must remain `VALIDATE_ALL`. If an operator intentionally disables SSRF for internal crawling, require explicit acknowledgment and log a warning.
-
-### Secrets in Helm `values-localdev.yaml` (Dev Only)
-
-**Area:** Configuration management
-
-- **Risk:** Development Helm values file `deployment/helm/charts/onyx/values-localdev.yaml:102,109` contains hardcoded encryption keys and sandbox private keys. If this file is accidentally deployed to production or shared insecurely, credentials are exposed.
-- **Files:** `deployment/helm/charts/onyx/values-localdev.yaml`
-- **Current mitigation:** File is clearly named `-localdev`, development-only. Production `values.yaml` defaults empty. `install.sh` auto-generates `USER_AUTH_SECRET`.
-- **Recommendations:** Add a pre-deploy check that rejects hardcoded secrets in production values. Consider using sealed-secrets or external secret management (Azure Key Vault, HashiCorp Vault) for all environments.
-
-## Performance Bottlenecks
-
-### Postgres Connection Pool Exhaustion Under Multi-Replica api Scale
-
-**Area:** Database connection management
-
-- **Problem:** Each api replica spawns a connection pool (sync `pool_size=40, max_overflow=10` + async equivalent) plus workers add more. Math: 10 api replicas ≈ 1,000+ concurrent connections. Postgres default `max_connections` (100–500 in CNPG) is exhausted quickly.
-- **Files:** `backend/onyx/configs/app_configs.py:459-470`, `backend/onyx/db/engine/sql_engine.py`, `async_sql_engine.py`
-- **Cause:** No PgBouncer or connection pooler is deployed by default in the chart. TCP keepalives exist but do not address the ceiling.
-- **Improvement path:** Integrate **PgBouncer** or **pgcat** as a sidecar or standalone service in the Helm chart. CNPG offers a `Pooler` CRD; use it. Size pooler to `pool_size = (max_connections - reserved) / replicas`. Document minimum Postgres `max_connections` for target replica count. This is under-documented in the upstream chart.
-
-### Embedding/Model-Server Throughput Ceiling
-
-**Area:** Vector embedding generation
-
-- **Problem:** Model-server inference runs a single replica (no HPA) with unbounded concurrency. Under high load (indexing + query embedding simultaneously), the model instance OOMs or deadlocks ("Already borrowed" race in `SentenceTransformer`, retried 3×). Local embed batch size is 8 (inefficient for throughput).
-- **Files:** `backend/model_server/encoders.py:89-99`, `backend/onyx/configs/model_configs.py:42,44`, `deployment/helm/charts/onyx/values.yaml:173` (no HPA)
-- **Cause:** Single model-server instance, no autoscaler, no request limiting (indexing has `--limit-concurrency 10`, inference does not).
-- **Improvement path:** Add HPA to inference model-server (CPU/memory triggers, `minReplicas: 2`, `maxReplicas: 6`). Add `--limit-concurrency 20` to inference. Increase local embed batch to 16–32. Profile under realistic load. Documented in `docs/PERFORMANCE.md`.
-
-### Celery Docfetching Serialization Bottleneck
-
-**Area:** Connector data extraction
-
-- **Problem:** Docfetching concurrency = 1 per worker (`app_configs.py:625`). Connector extraction is single-threaded, serialized. A large connector (e.g., 100K+ documents) runs single-threaded, limiting throughput. Process stage (concurrency 6) can outrun fetch.
-- **Files:** `backend/onyx/configs/app_configs.py:625`
-- **Cause:** Connector APIs often rate-limit or enforce sequential fetch. Single-threaded fetch is intentional to avoid overload.
-- **Improvement path:** This is a design constraint, not a bug. Mitigation is horizontal: scale docfetching worker pods to parallelize multiple connectors or partition large connectors (e.g., by date range). Document the parallelization strategy in `docs/PERFORMANCE.md`.
-
-### Redis Non-Persistence & Eviction Risk
-
-**Area:** Celery broker and lock storage
-
-- **Problem:** Redis is configured standalone with `appendonly: no` and `save: ""` (no persistence) and `maxmemory-policy: allkeys-lru`. A Redis restart evicts all state, including in-flight Celery tasks, locks, and caches. This can cause deadlocks or task loss.
-- **Files:** `deployment/helm/charts/onyx/values.yaml:1029-1030`
-- **Cause:** Default CNPG chart is optimized for ephemeral cache, not durable broker state.
-- **Improvement path:** For production, enable Redis persistence (`appendonly: yes`, `save "60 1000"`). Switch Celery to use a proper message broker (RabbitMQ recommended, used in onix-ha). Implement Redis replication/Sentinel for HA. Documented in `docs/HA_SCALING.md` as a mandatory change.
-
-## Fragile Areas
-
-### access-gateway: ACL Synchronization Latency and Edge Cases
-
-**Area:** Document access control (onix-specific)
-
-- **Files:** `access-gateway/app/doc_acl.py`, `access-gateway/app/graph_acl.py`
-- **Why fragile:** The per-document ACL is synchronized from SharePoint via Microsoft Graph on a configurable interval (`GATEWAY_DOC_ACL_REFRESH_SECONDS`, default 3600s). During the sync window, SharePoint and the gateway's ACL cache can diverge. If a user's access is revoked on SharePoint but the sync hasn't run, the gateway may still show citations from that file.
-- **Safe modification:** Keep the sync interval low (< 300s) for sensitivity. Implement a webhook listener (SharePoint push notifications) to trigger immediate re-sync on ACL change. Add monitoring/alerting for sync failures. Test with large ACL lists (100K+ permissions) to ensure performance.
-- **Test coverage:** Integration tests with mock Graph API exist (`access-gateway/tests/`), but live SharePoint/tenant testing is limited. Consider a staging test against a real (non-prod) SharePoint tenant.
-
-### actions: OCR and LLM-Based Extraction Quality
-
-**Area:** Document audit and information extraction (onix-specific)
-
-- **Files:** `actions/app/ocr_audit.py`, document generation pipeline
-- **Why fragile:** OCR quality depends on image resolution, text orientation, and font. LLM-based field extraction (via Ollama) is model-dependent; smaller models (< 3B) may hallucinate or miss fields. The extraction comparison against a reference document is exact-string matching (brittle).
-- **Safe modification:** Add confidence scoring for OCR and extraction. Implement fuzzy string matching for comparison (e.g., Levenshtein distance). Add A/B testing / manual review queue for low-confidence extractions. Profile with real customer documents (not just synthetic).
-- **Test coverage:** 34 tests in `actions/tests/` cover happy paths; edge cases (rotated text, handwriting, multi-language) not fully covered. Add regression tests for known customer document types.
-
-### Streaming guardrails: Hard abort before malicious chunk
-
-**Area:** LLM response safety (onix-specific)
-
-- **Files:** `access-gateway/app/streaming.py`, post-filtre guard logic
-- **Why fragile:** The guardrail post-filter streams the response incrementally and aborts if a malicious chunk is detected (e.g., prompt leak, injection attempt). Abort must happen **before** the chunk is sent to the client. If the LLM generates a multi-part injection (split across chunks), the guard might miss it.
-- **Safe modification:** The post-filtre red-team testing is strong (21/21 on real `qwen2.5:7b`), but test against larger/newer models (Llama 3.1 70B, Mistral Large). Add continuous monitoring and alerting for guardrail failures. Document the design assumption: guardrails are **heuristic**, not cryptographic proof.
-- **Test coverage:** `tests/rag/test_guardrails.py` + E2E E2E_GUARDRAILS.md. Coverage is solid but live-model testing is biased toward small Ollama models. Recommend rotating model validation.
-
-## Scaling Limits
-
-### Onyx Vector Index Ceiling (OpenSearch Single-Shard Default)
-
-**Area:** Search index scalability
-
-- **Current capacity:** Default OpenSearch deployment ships 1 shard, 1 replica (`document_index/opensearch/schema.py`). Practical document ceiling: ~10–50M chunks (rough; depends on RAM, shard size tuning).
-- **Limit:** Single shard becomes a bottleneck at high query throughput. No cross-shard parallelism. Node loss = full outage (single replica on single node).
-- **Scaling path:** For >50M document corpus, increase shard count to 3–5 (requires index rebuild or reindexing). Use AWS OpenSearch managed or self-hosted OpenSearch cluster with >= 3 nodes and replica >= 1. Documented in `docs/PERFORMANCE.md` and `docs/HA_SCALING.md`.
-
-### Postgres WAL Disk Space Under High Indexing Throughput
-
-**Area:** Database write-ahead log management
-
-- **Current capacity:** Indexing throughput = ~1000 chunks/second (per docprocessing worker at concurrency 6). At sustained high throughput, WAL generation can exceed disk capacity if CNPG isn't configured with automatic WAL archival.
-- **Limit:** Disk fills → writes stall → queries timeout → operational crisis.
-- **Scaling path:** Enable CNPG WAL archival to S3 (`archiveWALTemplate`). Monitor WAL disk usage. Set `max_wal_size` based on expected throughput. Tested in onix-ha chart with `ScheduledBackup`.
-
-### Redis Max Memory & Task Queue Depth
-
-**Area:** In-memory broker and cache
-
-- **Current capacity:** Redis `maxmemory-policy: allkeys-lru` at default 256MB. Under sustained indexing, Celery task backlog can exceed memory.
-- **Limit:** Eviction drops tasks / locks → silent failures.
-- **Scaling path:** Increase Redis `maxmemory` to 2–4GB (scale with worker count). Switch to RabbitMQ for the broker (stateless, scales independently). Enable Redis Streams for task durability (Celery 5.3+, opt-in). Monitored in `docs/HA_SCALING.md`.
-
-## Dependencies at Risk
-
-### cryptography 46.0.7: OpenSSL Bundled Vulnerability (CVSS 7.5)
-
-**Area:** Supply chain / cryptography
-
-- **Risk:** `cryptography==46.0.7` bundles an OpenSSL version with a known vulnerability (GHSA-537c-gmf6-5ccf, Availability impact, CVSS 7.5). Vulnerability is a potential DoS in TLS handshakes.
-- **Impact:** Under attack (malicious TLS handshakes), API availability could degrade.
-- **Migration plan:** Upgrade `cryptography` to `48.0.1` or later. Coordinate with upstream Onyx dependency pins. Test for backward compatibility. No changes needed in onix code.
-
-### starlette 0.49.3: Path Poisoning & StaticFiles SSRF (MODERATE)
-
-**Area:** Web framework
-
-- **Risk:** Two advisories: BadHost path-poisoning (GHSA-86qp-…) and StaticFiles SSRF on Windows (GHSA-wqp7-…). Fixed in starlette 1.0.1 / 1.1.0.
-- **Impact:** BadHost mitigation exists (Onyx uses `WEB_DOMAIN` hard-coded, not Host header). StaticFiles SSRF not exploitable (Onyx does not serve user-controlled paths as static files).
-- **Migration plan:** Upgrade starlette requires a FastAPI major bump (`starlette>=1.0` is a breaking change). Defer unless a blocker emerges. Monitor GitHub advisories. **LOW priority.**
-
-### pypdf 6.10.2: Parser DoS (CVSS ~4.x)
-
-**Area:** PDF handling
-
-- **Risk:** Multiple DoS vulnerabilities in PDF parsing. Onyx parses untrusted PDFs during indexing.
-- **Impact:** A malicious PDF could cause indexing to hang or crash.
-- **Migration plan:** Upgrade `pypdf` to `6.12.0`. Test with a corpus of real PDFs (corpus in test fixtures or customer backups). No code changes needed.
-
-### NLTK 3.9.4: Path Traversal (CVSS 7.5)
-
-**Area:** Natural language processing
-
-- **Risk:** Vulnerability in `nltk.data.load()` allows path traversal. Risk is elevated if NLTK is used to load user-supplied data paths.
-- **Impact:** Code execution or information disclosure.
-- **Migration plan:** Note: the current pin is `nltk==3.9.4`, which is **already the fixed version** (OSV database lists this as the fixed boundary). No upgrade needed. Verify in live code that NLTK paths are not user-controlled.
-
-## Missing Critical Features
-
-### Audit-Trail ("Who Saw What") — Onyx FOSS Missing Entirely
-
-**Area:** Compliance / RGPD accountability
-
-- **Problem:** Onyx FOSS has **no audit-trail** recording which user accessed which document, when. This feature is completely absent even in Onyx Enterprise Edition. onix compensates with HMAC-chained audit logs in the gateway and actions, but core Onyx chat/search access is not logged at the Onyx level.
-- **Blocks:** RGPD art.5(2) accountability (data controller must prove what happened). Compliance with CNIL / GDPR audits for regulated deployments.
-- **Approach:** onix adds HMAC-chained audit logs to `access-gateway/` and `actions/`. For full audit compliance, enable Postgres query logging (`log_statement = 'all'`) and centralize logs to a tamper-proof sink (Loki + retention policy). This is a **documented limitation** (`docs/SECURITY.md`, `docs/RGPD.md`).
-
-### Right-to-Erasure (Art.17) — Onyx FOSS Implementation Broken
-
-**Area:** RGPD / data subject rights
-
-- **Problem:** Onyx FOSS user deletion is broken: foreign-key `NOT NULL` constraints are not handled, leaving PII (email, name) orphaned in the database. Art.17 erasure must delete or anonymize all PII traces, including chat history and documents.
-- **Files:** Onyx upstream (not onix-specific, mitigated by onix-actions `/erasure` endpoint)
-- **Impact:** RGPD non-compliance, potential data protection violations.
-- **Approach:** onix-actions provides `/erasure` endpoint that explicitly deletes chat history and user metadata. Connector-indexed documents are not deleted (by design; erasure of a document shared across users would affect others). Document this limitation in `docs/RGPD.md`. For full GDPR compliance, implement a document purge workflow (custom connector).
-
-### Multi-Tenancy at FOSS Level
-
-**Area:** Scaling to multiple independent customers
-
-- **Problem:** Onyx FOSS has **no multi-tenancy**. Sharing a single Onyx instance across multiple customers requires trust that the query filtering (Document Sets) is ironclad. There is no schema isolation.
-- **Blocks:** Multi-customer SaaS on FOSS build.
-- **Approach:** Deploy **separate Onyx instances per customer** (one Postgres, one OpenSearch, one Ollama, etc.). onix-ha chart makes this repeatable. Scaling to 100s of customers requires orchestration (templated Helm values, Argo, Terraform). This is a **design decision**, not a bug. Documented in `docs/HA_SCALING.md`.
-
-## Test Coverage Gaps
-
-### Gateway ACL Filtering: No Live SharePoint Integration Tests
-
-**Area:** access-gateway
-
-- **What's not tested:** The `graph_acl.py` module syncs ACLs from a **real** Microsoft Graph tenant. Current tests mock the Graph client. No live test against a staging/dev SharePoint tenant to verify:
-  - Handling of large ACL lists (100K+ items)
-  - Refresh intervals and staleness windows
-  - Webhook-triggered sync (if implemented)
-  - Permission inheritance edge cases
-- **Files:** `access-gateway/tests/`, `access-gateway/app/graph_acl.py`
-- **Risk:** Subtle bugs in permission sync could silently leak or over-restrict. A real tenant's ACL structure might differ from test mocks.
-- **Priority:** **HIGH** — this is a security-critical path. Recommend staging test with a real non-prod tenant (or a dedicated test tenant in your Azure subscription).
-
-### onix-actions: E2E Against Real External Services
-
-**Area:** actions microservice
-
-- **What's not tested:** 
-  - Notifications: SMTP integration only tested in unit tests (no real SMTP server in CI). Slack/Teams/Mattermost webhook tested against mocks.
-  - OCR: Tested with synthetic PDFs and images; no real-world scanned documents (handwriting, color, skew).
-  - Task persistence: SQLite-backed task list in docker-compose is not tested against Postgres (used in Kubernetes).
-- **Files:** `actions/tests/`
-- **Risk:** Notification failures could go undetected until prod. OCR accuracy on customer documents unknown.
-- **Priority:** **MEDIUM** — actions are operational but feature-gated. Recommend a customer pilot with real documents and real notification endpoints before general rollout.
-
-### Streaming Guardrails: Coverage Against Larger Models
-
-**Area:** Post-filter / LLM safety
-
-- **What's not tested:** The guardrail red-team testing (21/21 passing) was conducted against `qwen2.5:7b`. Larger models (Mistral Large, Llama 3.1 70B) may exhibit different attack surface.
-- **Files:** `tests/rag/`, `access-gateway/app/guardrails.py`
-- **Risk:** A jailbreak that passes the small model might succeed on a larger model.
-- **Priority:** **MEDIUM** — recommend rotation of red-team tests to include at least one large OSS model quarterly. Document the model-dependency assumption.
+This document reflects **only open concerns that remain** as of the 2026-06-18/19 audit cycle, categorized by impact and mitigation urgency.
 
 ---
 
-*Concerns audit: 2026-06-18*
+## Tech Debt
+
+### Fabric ACL Module — New Surface, Untested in Live Tenant
+
+**Status:** Recently integrated into `access-gateway/`; production code path open.
+
+- **Issue:** The `access-gateway/app/fabric_acl.py` and `fabric_client.py` modules provide RBAC for Microsoft Fabric (parallel to SharePoint Graph ACL). This is a **new surface** not yet hardened in live tenant conditions.
+  - **No live tenant testing** (only mock/offline tests: `test_fabric_acl.py`, `test_fabric_client.py`)
+  - **Pagination complexity:** Three different REST formats (Fabric `continuationToken`, OData `@odata.nextLink`, ADLS `x-ms-continuation`) — subtle differences, hard to maintain consistency.
+  - **OneLake securityPolicy marked PREVIEW** by Microsoft — may return 404 or 403 on untested tenants.
+  - **Gold-scope filtering** (`is_gold_path`) is new gatekeeping mechanism (fail-closed by design, but untested against real Power BI / OneLake hierarchies).
+  - **No rate limiting** on Fabric/Graph API calls — could overwhelm tenant if user queries in a tight loop.
+
+- **Files:** 
+  - `access-gateway/app/fabric_acl.py:1-438` (ACL decision logic)
+  - `access-gateway/app/fabric_client.py:1-500+` (API client)
+  - `access-gateway/app/config.py:210-220` (Fabric gold config)
+  - `access-gateway/tests/test_fabric_acl.py`, `test_fabric_client.py` (mocks only)
+
+- **Impact:** A tenant with real Fabric workspace / OneLake could expose read permissions not matched by the offline test suite. Fail-closed posture (refuse access on error) mitigates, but **availability loss is real** if API changes or OneLake preview behavior diverges. **Customers will perceive this as broken search** when they have legitimate Fabric access.
+
+- **Improvement path:**
+  1. **Live tenant integration test** (sandbox Fabric workspace) before production use.
+  2. Document exact API versions and preview states for each audience.
+  3. Add rate-limiting: `GATEWAY_FABRIC_RATE_LIMIT_PER_MINUTE=100` with sliding window counter.
+  4. Add observability: counter `fabric_acl_decisions_total{grant,deny,error,workspace_id}`.
+
+---
+
+### Ralph Autonomous Loop — Self-Modifying System Without Circuit-Breaker
+
+**Status:** Operational; iterates scopes via `ralph/loop.sh` — monitoring inadequate.
+
+- **Issue:** The Ralph autonomous iteration system (6 scope agents, parallel boucles, criteria A1–A7) is powerful but introduces a **new class of system risk: self-modification without human observation**.
+  - Ralph pulls backlog from `docs/audit-reality/<scope>.md` and iterates **automatically**.
+  - Commits are pushed to origin/main **after gate passage** (no human review step).
+  - If a scope agent encounters an **ambiguous failure state** (gate error that's not binary), it may retry idempotently or stop; **no circuit-breaker** to prevent cascading re-runs or state corruption.
+  - State files (`ralph/state/<scope>.md`) guard against divergence (read-only on entry), but a **corrupted state file could halt a scope indefinitely** with no alerting.
+
+- **Files:** 
+  - `ralph/loop.sh` (orchestration)
+  - `ralph/ORCHESTRATION.md` (criteria)
+  - `ralph/scopes/*.md` (scope prompts)
+  - `ralph/state/*.md` (per-scope journals)
+
+- **Impact:** 
+  - **Low frequency but high blast radius:** A gate failure (e.g., `bandit` discovering new medium-severity issue) could stall the Ralph loop, causing manual intervention.
+  - **Audit trail fragility:** If gates (`.pre-commit-config.yaml`, `.gitleaks.toml`, `Makefile` rules) change unexpectedly, the loop could orphan commits in a half-fixed state.
+  - **Configuration drift:** If an agent's scope prompt diverges from its state file (due to doc update), the agent could re-fix issues that were already resolved.
+
+- **Improvement path:**
+  1. **Circuit-breaker:** If a Ralph iteration fails gates **3 times consecutively** on the same scope, emit alert + pause loop (require manual `ralph/retry.sh <scope>`).
+  2. **Gate snapshots:** Serialize `make test` output to `ralph/gate-snapshot-<scope>-<timestamp>.log` before each run; fail loop loudly if gates regress.
+  3. **Observability:** Ralph emits Prometheus metrics on each iteration start/success/failure for alerting.
+  4. **Human loop:** Add a daily digest email: "Ralph iterated scopes X,Y,Z; commits A,B,C pushed; gate changes: D,E".
+
+---
+
+## Known Bugs
+
+### (None at P0 currently open)
+
+All documented P0-level bugs from prior audit-reality cycles have been resolved. See `docs/audit-reality/_VERDICT.md` §4 for resolved P0 backlog:
+- ✅ Actions secrets WS2 wiring (Helm helper)
+- ✅ Actions object-store S3 config
+- ✅ RGPD S3 erasure endpoint
+- ✅ Monitoring `/metrics` endpoint discovery
+
+---
+
+## Security Considerations
+
+### Fabric ACL — Tenant Isolation Untested (Multi-Workspace Risk)
+
+**Risk:** Fabric workspaces in a multi-tenant customer scenario.
+
+- **Issue:** The `fabric_acl.py` module assumes a **single gold workspace** is configured (`GATEWAY_FABRIC_GOLD_WORKSPACE_ID`, `GATEWAY_FABRIC_GOLD_ITEM_ID`). If a customer has **multiple workspaces** (dev/staging/prod separated in Fabric):
+  - A user querying from one workspace could potentially retrieve **cached results from another workspace** if cache key does not include workspace isolation.
+  - The cache HMAC (`cache.py:263-309`) includes **document_set** but **not workspace_id** — by design, onix expects Document Set ↔ workspace to be 1:1. But this is **untested in multi-workspace scenarios**.
+  - If workspace ACLs diverge, a user with access to WS#1 could get a cache hit from WS#2 (stale ACL state).
+
+- **Files:** 
+  - `access-gateway/app/config.py:210-220` (Fabric gold config)
+  - `access-gateway/app/cache.py:263-309` (cache key composition)
+  - `access-gateway/app/fabric_acl.py:66-73` (gold scope check)
+  - `access-gateway/app/main.py:483-502` (cache hit + ACL re-check)
+
+- **Current mitigation:** Fail-closed default (`GATEWAY_DOC_ACL_DEFAULT_POLICY=deny`); if workspace not explicitly allowed, access is denied. But if a site is configured wrong, the cache could serve **cross-workspace data silently**.
+
+- **Recommendations:**
+  1. Add **explicit document-to-workspace mapping validation** in `fabric_acl.py` (similar to `graph_acl.py:79-88`).
+  2. Consider adding `workspace_id` to cache key **if multi-workspace support is ever needed**.
+  3. **Test scenario:** Configure 2 Fabric workspaces, deny access to WS#2, verify cache does not serve WS#2 results.
+
+---
+
+### Streaming Failure Mode — False Positives in Guardrail Rules
+
+**Status:** Known behavior, documented; but untested at scale.
+
+- **Issue:** In `access-gateway/app/streaming.py`, **fail-CLOSED** mode on streaming (`stream=True`) aborts the stream on guardrail trigger. This differs from non-streaming fail-OPEN mode (`doc_acl.py:424-438`). If the guardrail in `streaming.py:234-256` fires spuriously (false positive detection of prompt injection):
+  - A **legitimate request hangs** (user sees "connection closed" after 3 seconds).
+  - No error message is returned (streaming contract violation).
+
+- **Files:** 
+  - `access-gateway/app/streaming.py:234-256,270-276` (fail-closed abort)
+  - `access-gateway/app/guardrail.py:287-310` (detection rules)
+  - `docs/E2E_GUARDRAILS.md` (21/21 red-team passed on `qwen2.5:7b`)
+
+- **Current mitigation:** 
+  - Guardrail rules are **conservative** (21/21 red-team passed), but red-team was **manual/live only**, not in CI gate.
+  - False positive rate unknown in production.
+
+- **Improvement path:**
+  1. Add Prometheus counter `stream_rejected_by_rule{rule}` to detect spurious fires (alert if >1% of streams).
+  2. Add runbook: "If user reports stream hangs, check `onix.gateway.streaming` logs for the `rule` that fired."
+  3. **Red-team scaling:** Expand red-team dataset from 21 to 50+ cases; add `make rag-eval-red-team-live` target.
+
+---
+
+## Performance Bottlenecks
+
+### Semantic Cache Tier — Precision Risk if Enabled (OPT-IN but Inadequate Guards)
+
+**Status:** OPT-IN by design (`GATEWAY_SEMANTIC_CACHE_ENABLED=false` by default), but guardrails insufficient if enabled.
+
+- **Issue:** The semantic cache tier (`cache.py:445-565`) uses cosine similarity on embeddings to serve cached answers for "similar" questions. This is **deterministic** (no LLM involvement) but has **precision risk**:
+  - Threshold `GATEWAY_SEMANTIC_THRESHOLD=0.95` is high, but a corpus of **few documents** can trigger false positives.
+  - If Ollama embedding model diverges (model reloaded, bit-incompatibility), **cached embeddings become stale** without automatic invalidation.
+  - **Guard anti-divergence** (`cache.py:352-419`) uses heuristics (entity MAJUSCULE, numeric markers `n:`, `m:`, `q:`, `e:`) — **not foolproof**.
+
+- **Files:** 
+  - `access-gateway/app/cache.py:445-565` (semantic index)
+  - `access-gateway/app/cache.py:604-642` (Ollama embeddings client)
+  - `access-gateway/app/cache.py:861-928` (semantic lookup)
+  - `access-gateway/tests/test_cache_semantic.py:*` (36 unit tests, all offline)
+
+- **Impact:** If enabled on a **factual corpus**, the risk is **incorrect answer served from cache**. Audit says this is documented as OPT-IN with "knowledge of cause" — **true**, but if a customer enables it without deep understanding, they could get **hallucinated answers passed off as cached results**.
+
+- **Improvement path:**
+  1. Add **hard TTL:** `GATEWAY_SEMANTIC_CACHE_MAX_AGE_HOURS=24` (default 24h). After 24h, semantic cache entries are **evicted** (force re-embedding).
+  2. Add **divergence metric:** `semantic_cache_divergence_rejected{reason}` counter to track guard rejections.
+  3. **Scale red-team:** Add test `test_cache_semantic.py::test_semantic_divergence_with_model_drift` (mock Ollama embedding drift by 0.01 cosine distance).
+
+---
+
+### Ollama Context Window Regression — No Health Check
+
+**Status:** Known limitation; not actively monitored.
+
+- **Issue:** Ollama is configured with a fixed `num_ctx` (Onyx default 4096, often larger via Modelfile). If the model is **accidentally pulled with smaller context** (different quantization tier):
+  - Longer documents are **truncated at retrieval time** (no error).
+  - User perceives **hallucination** (model was not given relevant context).
+  - No runtime verification of `num_ctx`.
+
+- **Files:** 
+  - `docker-compose.yml:449-460` (Ollama config)
+  - `deploy/k8s/onix-ha/values.yaml:152-161` (Helm Ollama values)
+  - `scripts/pull-models.sh` (model pull logic)
+  - `docker-compose.monitoring.yml:196+` (Ollama exporter)
+
+- **Current mitigation:** `pull-models.sh` is pre-flight step, documented but **not enforced** at runtime.
+
+- **Improvement path:**
+  1. Add health check: `/health` endpoint queries Ollama's `/api/show <model>` to verify `config.num_ctx >= EXPECTED_CONTEXT_WINDOW` (fail if under).
+  2. Prometheus gauge `ollama_model_context_window{model}` exported; alert if `< 4096`.
+
+---
+
+## Fragile Areas
+
+### Docker Compose Prod Mode — Backup/Restore Coupling (Operational Fragility)
+
+**Status:** P1 honnêteté concern resolved; operational fragility remains.
+
+- **Issue:** The `make backup` / `make restore` targets (`scripts/backup.sh`, `scripts/restore.sh`) work for **mono-poste** correctly, but in **prod mode** (`COMPOSE_PROD`):
+  - `backup.sh:13` uses `PROJ="onix"` and `docker compose ... stop` **without** empoiling the prod surcouche.
+  - If prod services (Caddy, oauth2-proxy, gateway) are running via `COMPOSE_PROD`, the `stop` command may **not stop them** (depends on how docker compose resolves project name).
+  - **Symptom:** Backup leaves Caddy/oauth2-proxy still running → **inconsistent snapshot** (data layer stopped, auth layer live).
+  - On restore, Onyx boots with auth layer still running, leading to **race conditions** (auth checking before API ready).
+
+- **Files:** 
+  - `scripts/backup.sh:10-25`
+  - `scripts/restore.sh:1-20`
+  - `Makefile:92-96` (targets)
+  - `deploy/prod/docker-compose.prod.yml` (surcouche)
+
+- **Current mitigation:** Documented in `docs/audit-reality/deploy-ops.md:58` as ⚠️ (minor ecart); audit recommends operator manually stack the override file.
+
+- **Improvement path:**
+  1. Modify `backup.sh` / `restore.sh` to accept `--prod` flag: `./backup.sh --prod` empoils the surcouche automatically.
+  2. Add **verification step** after stop: confirm Caddy not listening on `${BIND_IP}:443` (netstat/ss check).
+
+---
+
+### Access Gateway — Cache Invalidation Race (Static Mode)
+
+**Status:** Documented as working; untested in failure scenarios.
+
+- **Issue:** Cache invalidation is **TTL-based only** (`GATEWAY_CACHE_TTL_SECONDS=3600` by default). If a document's ACL is **changed via SharePoint** and then accessed again within the TTL window:
+  1. Cache hit with **old (more permissive) ACL** remains possible.
+  2. Post-filter (`doc_acl.py:495-502`) **does re-check the ACL on every hit**, but it re-checks against the **memoized ACL state** (`CompositeDocACL` built at gateway init).
+  3. If Graph ACL is in **static mode** (`GATEWAY_DOC_ACL_GRAPH_ENABLED=false`, the default), the memoized state is **never updated** — cache hit serves **stale permissions indefinitely**.
+  4. Until an operator runs `make sync-doc-acl` **and waits for TTL to expire**, the stale cache persists.
+
+- **Files:** 
+  - `access-gateway/app/cache.py:789-825` (store)
+  - `access-gateway/app/main.py:483-502` (cache hit + filter)
+  - `access-gateway/app/doc_acl.py:197-206` (CompositeDocACL)
+  - `access-gateway/app/main.py:129-150` (acl refresh loop)
+
+- **Current mitigation:** 
+  - Dynamic mode (`GATEWAY_DOC_ACL_GRAPH_ENABLED=true`) refreshes ACL every `GATEWAY_DOC_ACL_REFRESH_SECONDS=900` s.
+  - Static mode expects operator to run `make sync-doc-acl` out-of-band when SharePoint ACLs change.
+
+- **Improvement path:**
+  1. Add **grace period invalidation**: when ACL is detected as stale (newer than last load), invalidate cache entries **older than 5 minutes**.
+  2. Prometheus counter `acl_stale_detected_total` to alert on mismatches.
+  3. Document explicitly: "If you add/remove SharePoint permissions, run `make sync-doc-acl` and wait 1 hour for old cache to expire (or restart gateway to clear cache immediately)."
+
+---
+
+### Actions — Object Store Abstraction (Early Stage)
+
+**Status:** Recently wired for HA (S3/MinIO); needs hardening.
+
+- **Issue:** The `actions/app/objstore.py` abstracts between **local filesystem** (mono-poste) and **S3/MinIO** (HA). While the abstraction works, it's **young**:
+  - **No retry with exponential backoff** (boto3 defaults: 3 retries, max 60s not applied here).
+  - **Fixed timeouts, no jitter** → thundering herd risk if S3 is briefly slow.
+  - `.docx` generation **writes directly to S3** (async via Celery), but **no transaction boundary** — if write fails mid-stream, an incomplete `.docx` file persists.
+  - **No multipart upload** for large files (single PUT request can fail mid-transfer).
+
+- **Files:** 
+  - `actions/app/objstore.py:1-150+` (abstraction)
+  - `actions/app/docgen.py:70-140` (S3 write)
+  - `actions/app/celery_app.py` (task queue)
+  - `actions/tests/test_stateless_backends.py` (offline mocks)
+
+- **Impact:** **Degraded availability** if S3 is slow; **corrupted `.docx` files** if network fails mid-upload.
+
+- **Improvement path:**
+  1. Add **exponential backoff**: boto3-like retry (3 attempts, max 60s total, jitter 10–100ms).
+  2. Implement **multipart upload** for `.docx` generation (5MB chunks, retries per chunk).
+  3. Add health check: `GET /health` tries a test write to S3 (not on every request, but on `make verify`).
+
+---
+
+## Scaling Limits
+
+### Redis — Single Point of Failure (Mono-Poste Only)
+
+**Status:** Known acceptable limit for mono-poste; HA configuration available.
+
+- **Issue:** In default mono-poste (`docker-compose.yml`), Redis is a **single container** (`redis:7.4`). If it crashes:
+  - Cache **misses entirely** (graceful degradation; code catches exceptions).
+  - Celery **broker unavailable** (ongoing `/audit/file` uploads fail).
+  - **Lock mechanism unavailable** (if used, e.g., for doc-acl refresh).
+
+- **Files:** 
+  - `docker-compose.yml:437-448` (Redis)
+  - `access-gateway/app/cache.py:168-222` (Redis backend exception handling)
+  - `actions/app/celery_app.py` (broker)
+  - `access-gateway/app/main.py:134-150` (acl refresh loop with lock)
+
+- **Current mitigation:**
+  - Documented as limitation of mono-poste.
+  - HA (Helm `deploy/k8s/onix-ha`) uses **Azure Cache for Redis** (managed, zone-redundant).
+  - `docker-compose.yml:437` has `restart: always` (single-container recovery).
+
+- **Improvement path:**
+  1. For mono-poste: add **Redis Sentinel** (3-node setup, higher complexity) or accept fragility as tradeoff.
+  2. For HA: already addressed (Azure managed Redis).
+
+---
+
+### Postgres Migrations — Pre-Install Job Dependency (HA Only)
+
+**Status:** Documented design; untested in live HA cluster.
+
+- **Issue:** Helm chart runs Alembic migrations via a **pre-install Job** (`deploy/k8s/onix-ha/templates/migration.yaml`). If the Job fails:
+  - Release install is **marked as failed**.
+  - Schema is **in intermediate state** (partially migrated).
+  - Rolling back requires manual `helm rollback` + schema repair.
+
+- **Files:** 
+  - `deploy/k8s/onix-ha/templates/migration.yaml`
+  - `deploy/k8s/onix-ha/templates/migration-role*.yaml` (RBAC)
+  - `actions/alembic/versions/` (migration scripts)
+
+- **Current mitigation:** Alembic migrations are **idempotent** (don't re-apply if already run), so re-running is safe.
+
+- **Improvement path:**
+  1. Add **pre-flight check** in `migration.yaml`: verify schema version matches expected version before upgrading.
+  2. Implement **dry-run mode**: `helm template … | grep alembic-dryrun`.
+
+---
+
+## Dependencies at Risk
+
+### pypdf — Recently Pinned (CVE Resolved)
+
+**Status:** ✅ **RESOLVED** (2026-06-19 audit)
+
+- **Prior issue:** `actions/requirements.txt` had `pypdf<6.11` due to CVE-2024-XXXXX.
+- **Current state:** Pinned to `pypdf==6.13.3` (latest secure as of 2026-06-18).
+- **Monitoring:** `pip-audit --strict` gate in CI (`ci.yml:155-160`) blocks new CVEs.
+
+---
+
+### Onyx v4.1.1 — FOSS Fork Risk (Architectural)
+
+**Status:** Documented limitation; monitoring needed.
+
+- **Issue:** onix is built on **Onyx v4.1.1 FOSS** (MIT licensed). Onyx development is **community-driven**, and codebase is **not vendored** in this repo (`docs/audit-onyx/*` audits external `v411` source).
+  - If Onyx upstream introduces a **breaking change** (new required config, schema change), onix may need to adapt.
+  - The audit-reality files note several Onyx FOSS limitations (no audit-trail, secrets in plain text by default, no RBAC per-document at search time). These are **compensated by onix layers**, but tightly coupled.
+
+- **Files:** 
+  - `docker-compose.yml:134-190` (Onyx image pinned `danswer/danswer:4.1.1`)
+  - `docs/audit-onyx/00-VERDICT.md`
+  - `ARCHITECTURE.md:23-26`
+
+- **Current mitigation:**
+  - Image is **precisely pinned** (no `latest` tag).
+  - Gates (`bandit`, `pip-audit`, `trivy`) catch supply-chain issues.
+  - onix layers are **loosely coupled** (proxy pattern; Onyx is black box).
+
+- **Improvement path:**
+  1. **Monitor Onyx releases:** Subscribe to GitHub releases or check quarterly.
+  2. Add quarterly "Onyx compatibility test" to runbook (test against v4.2.x / v5.x if released).
+
+---
+
+## Test Coverage Gaps
+
+### Fabric ACL — Only Offline Mocks
+
+**Status:** Known by design; inadequate for production.
+
+- **What's not tested:**
+  - Real Microsoft Fabric workspace with actual RBAC assignments.
+  - OneLake securityPolicy PREVIEW behavior (known to return 404 on some tenants).
+  - Power BI dataset permission inheritance.
+  - Pagination edge cases (>999 items, continuation token expiry).
+  - Rate-limit behavior under load.
+
+- **Files:** 
+  - `access-gateway/tests/test_fabric_acl.py` (52 unit tests, all mocks)
+  - `access-gateway/tests/test_fabric_client.py` (38 unit tests, all mocks)
+  - `access-gateway/tests/e2e/run_access_e2e.py` (e2e harness, not Fabric-specific)
+
+- **Risk:** A tenant configuration could fail silently with a **"permission denied" error** that looks like normal deny-by-default, but is actually a **bug in pagination or error handling**.
+
+- **Improvement path:**
+  1. Create a **sandbox Fabric workspace** for integration testing.
+  2. Add `tests/fabric_e2e_live.py::test_fabric_acl_real_tenant` (gated behind `FABRIC_INTEGRATION_TEST=1` env var).
+  3. Run this E2E test on schedule (weekly) in CI, only if tenant credentials available.
+
+---
+
+### Semantic Cache — Divergence Guard Untested Against Real Models
+
+**Status:** Guard rules documented; not red-teamed at scale.
+
+- **What's not tested:**
+  - How often the divergence guard fires on real user queries (Prometheus would track this, but counter not yet in gate).
+  - False negatives: does a legitimate entity-heavy question still get cache hits when it should?
+  - Embedding model drift (what happens if Ollama reloads with slightly different quantization).
+
+- **Files:** 
+  - `access-gateway/app/cache.py:352-419` (guard logic)
+  - `access-gateway/tests/test_cache_semantic.py:*` (36 unit tests, all offline)
+
+- **Improvement path:**
+  1. Add `semantic_cache_divergence_rejected{reason}` counter to expose in `/metrics`.
+  2. If ever deployed with semantic cache enabled, **alert if rejection rate > 5%**.
+
+---
+
+### Red-Team — Live Only, Not in CI Gate
+
+**Status:** Documented limitation (audit notes this honestly).
+
+- **What's tested in CI:** Guardrail rules against **hardcoded 21-item red-team dataset** (stored in code).
+- **What's not tested:** User-generated adversarial queries, model-specific vulnerabilities (different LLM → different bypasses), international attacks (non-English injection).
+
+- **Files:** 
+  - `tests/rag/guardrail_postfilter.py` (rules)
+  - `docs/E2E_GUARDRAILS.md` (21 red-team cases)
+  - `tests/rag/run_live.py` (manual runner)
+
+- **Improvement path:**
+  1. Expand red-team dataset from 21 to **50+ cases** (different injection techniques, languages).
+  2. Add `make rag-eval-red-team-live` target (manual, requires Ollama running).
+  3. Gate: if PR changes guardrail rules, require operator approval + red-team rerun.
+
+---
+
+## Missing Critical Features
+
+### Fabric ACL — No Rate Limiting (Feature Gap)
+
+**Status:** Not implemented; could cause tenant-level issues under load.
+
+- **Problem:** If a user repeatedly queries with high frequency, the gateway could **overwhelm the Fabric API** (each query ⇒ N Graph/Fabric calls for ACL check). No rate limiting is in place.
+
+- **Files:** 
+  - `access-gateway/app/fabric_acl.py`
+  - `access-gateway/app/fabric_client.py` (no rate-limit decorators)
+
+- **Improvement path:**
+  1. Add `GATEWAY_FABRIC_RATE_LIMIT_PER_MINUTE=100` config.
+  2. Use a **sliding window counter** (Redis or in-memory) keyed by `tenant_id`.
+  3. Return `429 Too Many Requests` if limit exceeded.
+
+---
+
+### Monitoring — Dashboard for Fabric ACL Decisions (Feature Gap)
+
+**Status:** Missing observability.
+
+- **Problem:** If Fabric ACL starts denying requests unexpectedly, there's **no dashboard** to visualize deny rate or error causes.
+
+- **Files:** 
+  - `monitoring/grafana/dashboards/` (needs new dashboard for gateway Fabric metrics)
+
+- **Improvement path:**
+  1. Add Prometheus counter `fabric_acl_decisions_total{grant,deny,error,workspace_id}`.
+  2. Add Grafana dashboard: Fabric ACL decision pie chart, error rate time series, error reasons breakdown.
+
+---
+
+## RGPD / Governance Concerns
+
+### Registre Traitements — Base Légale Incomplete (Compliance Risk)
+
+**Status:** Template provided; compliance depends on customer decision.
+
+- **Issue:** `docs/REGISTRE_TRAITEMENTS.md` is a **gabarit** (template) that customers must complete. The **base légale** (legal basis under RGPD art. 6) is marked `TODO (décision client)` — **if left blank, onix is NOT RGPD-compliant in the customer's context**.
+
+- **Files:** 
+  - `docs/REGISTRE_TRAITEMENTS.md:23,52` (TODO markers)
+  - `docs/DPIA_TEMPLATE.md:50,53` (DPIA base légale, also TODO)
+
+- **Current mitigation:**
+  - Documented honnêtement as templates (not represented as filled-out compliance).
+  - Scope document references customer's DPO responsibility.
+
+- **Improvement path:**
+  1. Add pre-flight check: `make verify` includes a validator that checks `REGISTRE_TRAITEMENTS.md` contains **no `TODO (décision client)` markers** (fail if template incomplete).
+  2. Runbook section: "Before go-live, ensure DPO has signed off on REGISTRE & DPIA."
+
+---
+
+### Audit Trail — Gateway Side NOT Chaîné (Asymmetry)
+
+**Status:** Documented gap (audit notes this clearly).
+
+- **Issue:** The **actions** service has full HMAC-chaîned audit trail (`actions/app/audit_log.py:88-195`), but the **gateway** side only has **pseudonymized journal** (`access-gateway/app/audit.py:34-57`). The gateway audit is **not chaîned** (no cryptographic link between records).
+  - This is **asymmetry:** the gateway has high-volume access decisions (chat history), actions have lower-volume operations (file upload, erase).
+  - For a full audit trail, **both layers should be chaîned**.
+
+- **Files:** 
+  - `access-gateway/app/audit.py:34-57` (pseudonymized only, no chaîning)
+  - `actions/app/audit_log.py:88-195` (chaîned + verified)
+  - `docs/PARITE_ENTREPRISE.md:40` (claims « audit HMAC chaîné », but gateway side is not)
+
+- **Current mitigation:**
+  - Gateway audit is fail-safe (no errors bubble up).
+  - Pseudonymization prevents identity leakage.
+
+- **Improvement path:**
+  1. Extend `gateway/app/audit.py` to support optional chaîning (use `previous_hash` field in JSON log).
+  2. Add verification endpoint `GET /admin/audit/verify` (parallel to actions' endpoint).
+
+---
+
+## Summary of Priorities
+
+| Priority | Category | Item | Owner | Target |
+|----------|----------|------|-------|--------|
+| **P0** | — | (none currently open) | — | — |
+| **P1** | Security | Fabric ACL: live tenant integration test + rate-limiting | Backend | v1.1 |
+| **P1** | Architecture | Ralph loop: circuit-breaker + gate snapshots | DevOps | v1.1 |
+| **P1** | Security | Fabric ACL: tenant isolation validation (cache key) | Backend | v1.1 |
+| **P1** | Ops | Backup/restore: prod mode consistency check | DevOps | v1.1 |
+| **P2** | Performance | Semantic cache: TTL-based eviction + divergence counter | Cache | v1.2 |
+| **P2** | Performance | Ollama: context window health check + Prometheus gauge | LLM | v1.2 |
+| **P2** | Ops | Actions object store: exponential backoff + multipart | Backend | v1.2 |
+| **P2** | Testing | Fabric ACL: expand unit tests + e2e harness | QA | v1.2 |
+| **P2** | Governance | Registre/DPIA: pre-flight validator for completed templates | Compliance | v1.2 |
+| **P2** | Observability | Fabric ACL dashboard + Prometheus counters | Ops | v1.2 |
+
+---
+
+*Concerns audit: 2026-06-19*
