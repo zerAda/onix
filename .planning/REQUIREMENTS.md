@@ -93,42 +93,42 @@ Exclusions explicites (anti-features) — documentées pour empêcher la dérive
 
 ## Traceability
 
-Mappage phase ↔ exigence. Rempli pendant la création de la roadmap.
+Mappage phase ↔ exigence. Rempli à la création de la roadmap (2026-06-19).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DEP-01 | TBD | Pending |
-| DEP-02 | TBD | Pending |
-| DEP-03 | TBD | Pending |
-| HARD-01 | TBD | Pending |
-| HARD-02 | TBD | Pending |
-| HARD-03 | TBD | Pending |
-| HARD-04 | TBD | Pending |
-| BKP-01 | TBD | Pending |
-| BKP-02 | TBD | Pending |
-| BKP-03 | TBD | Pending |
-| BKP-04 | TBD | Pending |
-| OBS-01 | TBD | Pending |
-| OBS-02 | TBD | Pending |
-| OBS-03 | TBD | Pending |
-| OBS-04 | TBD | Pending |
-| OBS-05 | TBD | Pending |
-| SEC-01 | TBD | Pending |
-| SEC-02 | TBD | Pending |
-| SEC-03 | TBD | Pending |
-| SEC-04 | TBD | Pending |
-| SEC-05 | TBD | Pending |
-| RGPD-01 | TBD | Pending |
-| RGPD-02 | TBD | Pending |
-| OPS-01 | TBD | Pending |
-| OPS-02 | TBD | Pending |
-| CICD-01 | TBD | Pending |
+| DEP-01 | Phase 1 | Pending |
+| DEP-02 | Phase 1 | Pending |
+| DEP-03 | Phase 1 | Pending |
+| HARD-01 | Phase 1 | Pending |
+| HARD-02 | Phase 1 | Pending |
+| HARD-03 | Phase 1 | Pending |
+| HARD-04 | Phase 1 | Pending |
+| OBS-01 | Phase 2 | Pending |
+| OBS-02 | Phase 2 | Pending |
+| OBS-03 | Phase 2 | Pending |
+| OBS-04 | Phase 2 | Pending |
+| OBS-05 | Phase 2 | Pending |
+| SEC-04 | Phase 2 | Pending |
+| BKP-01 | Phase 3 | Pending |
+| BKP-02 | Phase 3 | Pending |
+| BKP-03 | Phase 3 | Pending |
+| BKP-04 | Phase 3 | Pending |
+| OPS-01 | Phase 4 | Pending |
+| OPS-02 | Phase 4 | Pending |
+| CICD-01 | Phase 4 | Pending |
+| SEC-01 | Phase 5 | Pending |
+| SEC-02 | Phase 5 | Pending |
+| SEC-03 | Phase 5 | Pending |
+| SEC-05 | Phase 5 | Pending |
+| RGPD-01 | Phase 5 | Pending |
+| RGPD-02 | Phase 5 | Pending |
 
 **Coverage:**
 - v1 requirements: 26 total
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 26 ⚠️ (résolu à la création de la roadmap)
+- Mapped to phases: 26 ✓
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-06-18*
-*Last updated: 2026-06-18 after initial definition*
+*Last updated: 2026-06-19 — traceability filled after roadmap creation*
