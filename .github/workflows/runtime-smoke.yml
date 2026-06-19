@@ -1,0 +1,96 @@
+name: Runtime smoke (onix-actions)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUMÉE RUNTIME — comble le trou entre `ci.yml` (tests OFFLINE + scan d'image) et
+# l'absence de test « la pile démarre vraiment ». Ici on PROUVE, en Docker cloud
+# (runner GitHub, sans Ollama/OpenSearch), que l'IMAGE onix-actions réellement
+# construite DÉMARRE et SERT `/health` + `/metrics`. C'est léger (un seul service,
+# SQLite par défaut, Redis dégradé en mémoire) → faisable sur un runner hébergé.
+#
+# Ce que ça N'EST PAS : la pile complète (Onyx + Ollama + OpenSearch + Postgres +
+# MinIO) ni les tests tenant live — ceux-là demandent une machine dédiée
+# (cf. .devcontainer/ pour Codespaces ≥ 16 Go).
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "actions/**"
+      - ".github/workflows/runtime-smoke.yml"
+  pull_request:
+    paths:
+      - "actions/**"
+      - ".github/workflows/runtime-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actions-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      IMAGE: onix-actions:ci
+      # Identifiants factices : /health et /metrics ne les exigent pas, mais on
+      # démarre dans une config « prod-like » minimale (clé HMAC ≥ 32 chars pour
+      # éviter le repli SHA-256 silencieux de l'audit-trail).
+      ONIX_ACTIONS_API_KEY: ci-smoke-key
+      ONIX_ACTIONS_AUDIT_HMAC_KEY: ci-smoke-hmac-key-0123456789abcdef
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Même build local que ci.yml (cohérence) — image construite depuis actions/.
+      - name: Build de l'image onix-actions
+        run: docker build -t "$IMAGE" ./actions
+
+      - name: Démarrer le conteneur (SQLite, autonome)
+        run: |
+          docker run -d --name onix-actions \
+            -p 8100:8100 \
+            -e ONIX_ACTIONS_API_KEY \
+            -e ONIX_ACTIONS_AUDIT_HMAC_KEY \
+            "$IMAGE"
+
+      - name: Attendre /health (polling actif, pas de sleep aveugle)
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8100/health >/dev/null 2>&1; then
+              echo "onix-actions répond après ${i}s."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::onix-actions injoignable sur /health après 60s."
+          exit 1
+
+      - name: Vérifier /health (statut healthy)
+        run: |
+          body="$(curl -fsS http://127.0.0.1:8100/health)"
+          echo "health = $body"
+          echo "$body" | grep -q '"status"' && echo "$body" | grep -qi 'healthy' \
+            || { echo "::error::/health ne renvoie pas un statut healthy."; exit 1; }
+
+      - name: Vérifier /metrics (format Prometheus, métriques onix_*)
+        run: |
+          metrics="$(curl -fsS http://127.0.0.1:8100/metrics)"
+          echo "$metrics" | grep -q '^onix_' \
+            || { echo "::error::/metrics n'expose aucune métrique onix_*."; \
+                 echo "$metrics" | head -n 30; exit 1; }
+          echo "Métriques onix_* exposées :"
+          echo "$metrics" | grep '^onix_' | grep -v '^#' | head -n 10
+
+      - name: Journaux du conteneur (diagnostic en cas d'échec)
+        if: failure()
+        run: docker logs onix-actions || true
+
+      - name: Nettoyage
+        if: always()
+        run: docker rm -f onix-actions || true

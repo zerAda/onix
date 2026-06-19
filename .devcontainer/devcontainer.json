@@ -1,0 +1,44 @@
+// Dev container onix — environnement de développement Docker-capable.
+// But : pouvoir lancer la pile et les commandes `make` SANS installer Docker en
+// local (GitHub Codespaces dans le navigateur, ou VS Code Dev Containers).
+//
+// ⚠️ RAM : la pile COMPLÈTE (Onyx + Ollama + OpenSearch + Postgres + MinIO) demande
+// ~16–24 Go. Les suites OFFLINE (pytest / make rag-test) tournent sur une petite
+// machine ; pour `make up-local-prod`, choisir une machine Codespaces ≥ 16 Go
+// (cf. hostRequirements ci-dessous). Voir .devcontainer/README.md.
+{
+  "name": "onix",
+  // Image dev officielle Python 3.11 (Debian bookworm), utilisateur `vscode`.
+  "image": "mcr.microsoft.com/devcontainers/python:3.11-bookworm",
+
+  "features": {
+    // Docker-in-Docker : `docker` et `docker compose` disponibles DANS le conteneur
+    // → permet `make up`, `make up-local-prod`, `make monitor-up`, etc.
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+
+  // Demande une machine assez grande pour la pile complète. Codespaces honore ces
+  // contraintes au choix de la machine ; un compte limité peut ne pas offrir 16 Go
+  // — dans ce cas, seules les suites offline sont garanties.
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "16gb",
+    "storage": "32gb"
+  },
+
+  // `make` est requis par le workflow du dépôt (cible-pivot unique). L'image Python
+  // ne le garantit pas → on l'installe à la création.
+  "onCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends make",
+
+  // Ports usuels de la pile (Onyx web, onix-actions, access-gateway, Grafana, Prometheus).
+  "forwardPorts": [3000, 8100, 8200, 3001, 9090],
+  "portsAttributes": {
+    "3000": { "label": "Onyx web" },
+    "8100": { "label": "onix-actions" },
+    "8200": { "label": "access-gateway" },
+    "3001": { "label": "Grafana" },
+    "9090": { "label": "Prometheus" }
+  },
+
+  "remoteUser": "vscode"
+}

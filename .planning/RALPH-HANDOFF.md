@@ -60,7 +60,8 @@
 
 | Req | Statut | Fichier(s) | Delta | Prio |
 |-----|--------|-----------|-------|------|
-| **SEC-02** | 🟡🤖 | `tests/rag/test_red_team.py`, `Makefile` (`rag-test-live`), CI | Rendre le red-team **re-jouable et enregistré sur le modèle de production** (pas un transcript statique hors CI). Dépendance : modèle prod pullé. | P1 |
+| **RAGAS-FIX** | ⬜ | `tests/rag/live_harness.py:38`, `tests/rag/conftest.py`, nouveau `tests/rag/prompt_loader.py` | **Le gate qualité nightly est cassé à 100 % (n'a JAMAIS évalué).** Cause : collision de nom `conftest` — `live_harness.py:38` fait `from conftest import read_prompt_block`, mais sous `python -m ragas_eval.runner` Python résout `conftest` vers `tests/rag/ragas_eval/conftest.py` (qui n'a pas `read_prompt_block`) → `ImportError` → le runner sort en code 2 en **0 s** (les 2 dernières nuits, identique). pytest reste vert car il charge le bon conftest → le trou est invisible en CI. **Fix** : extraire `read_prompt_block`/`read_prompt_markdown`/`load_dataset` dans un module normal `tests/rag/prompt_loader.py`, le ré-exporter depuis `conftest.py` (les tests `from conftest import …` restent verts), et importer depuis `prompt_loader` dans `live_harness.py`. Vérifier ensuite avec `cd tests/rag && python -m ragas_eval.runner` (doit atteindre la phase d'éval, plus l'`ImportError`). Repro/diagnostic complet : investigation 2026-06-19. | **P0** |
+| **SEC-02** | 🟡🤖 | `tests/rag/test_red_team.py`, `Makefile` (`rag-test-live`), CI | Rendre le red-team **re-jouable et enregistré sur le modèle de production** (pas un transcript statique hors CI). Dépendance : modèle prod pullé. **Bloqué de fait par RAGAS-FIX** (le chemin live RAGAS ne démarre pas). | P1 |
 
 ## Scope `security-governance` (agrégateur)
 
