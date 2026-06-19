@@ -4,9 +4,9 @@
 
 ## Project Reference
 
-**Core Value:** La sécurité et la gouvernance doivent être *prouvables* à un auditeur (RBAC + ACL par-document + garde-fous déterministes + audit inviolable) — aucun cloisonnement franchi, aucune décision d'accès non journalisée.
+**Core Value:** La sécurité et la gouvernance doivent être *prouvables* à un auditeur (RBAC + ACL par-document + garde-fous déterministes + audit inviolable).
 
-**Current Focus:** Phase 1 — CVE Remediation + Credential & Preflight Guard
+**Current Focus:** Phase 1 — CVE upstream + Gardes de démarrage prod (re-scopé post-sync)
 
 ---
 
@@ -15,19 +15,19 @@
 | Field | Value |
 |-------|-------|
 | Phase | 1 |
-| Phase Name | CVE Remediation + Credential & Preflight Guard |
+| Phase Name | CVE upstream + Gardes de démarrage prod |
 | Plan | None (planning not yet started) |
-| Status | Not started |
-| Milestone | onix go-live mono-poste sécurisé |
+| Status | Re-baselined — ready for plan/execute decision |
+| Milestone | onix go-live mono-poste sécurisé (v1.0) |
 
-**Progress:** `[ ] [ ] [ ] [ ] [ ]` — 0/5 phases complete
+**Progress:** `[ ] [ ] [ ] [ ] [ ]` — 0/5 phases ; 3/26 reqs déjà satisfaits (DEP-02, OBS-01, SEC-04)
 
 ```
-Phase 1: CVE Remediation + Credential & Preflight Guard  ← CURRENT
-Phase 2: Observabilite Completion + Alerting
-Phase 3: Backup / Restore Hardening
-Phase 4: systemd Boot Framing + Runbook
-Phase 5: Security Proof — ACL Live Test + Audit Trail + RGPD Evidence
+Phase 1: CVE upstream + Gardes de démarrage prod   ← CURRENT
+Phase 2: Observabilité par défaut + Alerting
+Phase 3: Sauvegarde/Restauration durcie
+Phase 4: systemd Boot + Runbook + Release
+Phase 5: Dossier de preuve sécurité
 ```
 
 ---
@@ -39,64 +39,69 @@ Phase 5: Security Proof — ACL Live Test + Audit Trail + RGPD Evidence
 | Phases total | 5 |
 | Phases complete | 0 |
 | Requirements total | 26 |
-| Requirements complete | 0 |
+| Requirements done | 3 (✅ DEP-02, OBS-01, SEC-04) |
+| Requirements partial | 13 |
+| Requirements open | 10 |
 | Plans created | 0 |
-| Plans complete | 0 |
 
 ---
 
 ## Accumulated Context
 
+### Re-baseline (2026-06-19)
+
+Le dépôt local était **73 commits en retard** sur `origin/main` (POC initial bâti sur un snapshot périmé). Actions menées :
+1. **Sync** — rebase des 6 commits `.planning/` sur `origin/main` (sans conflit ; `.planning/` non touché par origin).
+2. **Re-map** — `.planning/codebase/` régénéré contre le vrai arbre (nouveau : module **Fabric**, boucle **Ralph**, refonte monitoring, `preflight-prod.sh`).
+3. **Audit re-baseline** — les 26 reqs v1 vérifiées contre le code synchronisé : **3 DONE, 13 PARTIAL, 10 OPEN**. ROADMAP/REQUIREMENTS re-scopés en « finir/câbler/prouver ».
+
 ### Key Decisions Logged
 
 | Decision | Rationale |
 |----------|-----------|
-| Phase ordering: CVE first | Gate pip-audit cassé = tout test ultérieur suspect |
-| OBS avant BKP | Les alertes ACL-sync / garde-fou génèrent des preuves opérationnelles pour les phases 3–5 |
-| SEC-04 (ACL refresh 300s) en Phase 2 | Dépendance observabilité : l'alerte ACL-sync est sans valeur si l'intervalle est 3600s |
-| CICD-01 en Phase 4 | La release pipeline se raccorde naturellement au runbook go-live et aux artefacts de boot systemd |
-| Phase 5 = agrégateur terminal | Ne peut être assemblée qu'après que toutes les preuves amont (CVE vert, ACL live, audit-trail, effacement) sont produites |
+| Re-baseline avant toute exécution | Le POC était sur une base périmée de 73 commits ; exécuter aurait dupliqué des PR fusionnées |
+| DEP-01 reformulé | `cryptography` absent de la couche onix ; le vrai CVE est dans l'image Onyx upstream (à épingler/scanner ou accepter en risque résiduel) |
+| Phase order conservé (1→5) | Toujours valide ; chaque phase passe de « construire » à « finir/prouver » |
 
-### External Dependencies (Escalade requise)
+### External Dependencies & Environment Gaps
 
-- **SEC-01 — SharePoint ACL live test** : requiert un tenant Azure/SharePoint non-production. Seul item ne pouvant s'exécuter en isolation. **Escalader en Jour 1 de Phase 5.** Si bloqué > 2–3 jours = bloqueur go-live.
-- **SEC-02 — Red-team prod model** : requiert que le modèle de production soit pullé sur la machine cible avant l'exécution de `make rag-test-live`.
+- 🔑 **SEC-01** — tenant Azure/SharePoint+Fabric non-prod (révocation live). Escalader Jour 1 de Phase 5.
+- 🤖 **SEC-02** — modèle de production pullé pour le red-team.
+- 🐳 **Docker indisponible sur la machine de planification** — les critères dépendant du runtime (HARD-04 acceptance, BKP-01 restore-drill, exécutions live) ne peuvent pas être *prouvés* ici, seulement codés.
+
+### Coordination / Risks
+
+- 🤖 **Boucle Ralph active** (`ralph/loop.sh`, `ralph/ORCHESTRATION.md`) — `origin` est développé par un exécuteur autonome. **Ne pas lancer `/gsd-autonomous` en parallèle** sans coordination (scopes disjoints / pause Ralph), sinon conflits.
+- ⚠️ **Mensonge doc↔code** — `docs/audit-reality/deploy-ops.md:58` prétend « pg_dump à chaud ✅ » alors que `backup.sh` fait un tar à froid du volume. À corriger (BKP-02) — viole « zéro mock présenté comme réel ».
 
 ### Known Constraints
 
-- Timeline : < 1 mois (go-live visé)
-- Machine unique Docker Compose — pas de Kubernetes ce cycle
-- Souveraineté : inférence 100 % locale, aucun appel cloud, `DISABLE_TELEMETRY=true`
-- FOSS vs EE : distinguer explicitement dans tout artefact de preuve
-- Qualité : `make test` doit rester vert en permanence
+- Timeline : < 1 mois. Machine unique Docker Compose (pas de K8s). Souveraineté : LLM 100 % local, télémétrie OFF.
+- `make test` doit rester vert. FOSS vs EE : distinguer explicitement.
 
 ### Todos Across Phases
 
-- [ ] Vérifier identité de commit Git (`a.zeriri@gerep.fr`) avant tout commit de phase
-- [ ] Synchroniser `main` local avec `origin/main` (en retard de ~73 commits, fast-forward possible) avant Phase 1
-- [ ] Escalader accès tenant non-prod SharePoint dès le début de Phase 5
-- [ ] Planifier migration Promtail → Grafana Alloy pour le prochain milestone (Promtail EOL févr. 2026)
+- [x] ~~Synchroniser `main` local avec `origin/main`~~ — fait (rebase, 2026-06-19)
+- [ ] Décider : exécuter les phases ici (sans vérif Docker) vs. déléguer à la boucle Ralph vs. exécuter sur une machine Docker
+- [ ] Escalader accès tenant non-prod SharePoint+Fabric (Phase 5)
+- [ ] Corriger le mensonge doc↔code pg_dump (BKP-02) + `update-scope-docs` deploy-ops
+- [ ] Confirmer identité de commit Git (`a.zeriri@gerep.fr`)
 
 ### Blockers
 
-Aucun bloqueur actif. Dépendance externe SEC-01 à escalader en temps voulu.
+Aucun bloqueur dur. Décision en attente : modalité d'exécution (cf. todos).
 
 ---
 
 ## Session Continuity
 
-**Last updated:** 2026-06-19 (roadmap creation)
-**Next action:** `/gsd-plan-phase 1` — décomposer Phase 1 en tâches exécutables
+**Last updated:** 2026-06-19 (re-baseline post-sync)
+**Next action:** Décision utilisateur sur la modalité d'exécution, puis `/gsd-plan-phase 1` (ou délégation Ralph).
 
 ### Resume Context
 
-Roadmap créée à partir de :
-- `.planning/PROJECT.md` — périmètre, contraintes, hors-scope
-- `.planning/REQUIREMENTS.md` — 26 exigences v1 (DEP/HARD/BKP/OBS/SEC/RGPD/OPS/CICD)
-- `.planning/research/SUMMARY.md` + `FEATURES.md` — structure 5 phases confirmée, ordre de build validé
-
-Structure de phases adoptée telle que recommandée par la recherche (SUMMARY.md §Implications for Roadmap), avec SEC-04 déplacé en Phase 2 (dépendance observabilité naturelle) et CICD-01 en Phase 4 (raccordement runbook go-live).
+Re-baseline complet : dépôt synchronisé sur `origin/main`, carte de code rafraîchie, 26 reqs auditées (3 faites). ROADMAP.md + REQUIREMENTS.md reflètent le travail réellement restant (23 reqs : 13 partiels, 10 ouverts). Exécution non démarrée — en attente de décision sur la modalité (Docker/Ralph).
 
 ---
 
-*State initialized: 2026-06-19*
+*State re-baselined: 2026-06-19*
