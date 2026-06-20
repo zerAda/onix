@@ -30,18 +30,19 @@
 - **Acceptance** : `cd tests/rag && python -m ragas_eval.runner` atteint la vérif Ollama (plus d'ImportError) ; `pytest tests/rag` reste vert.
 - **Vérif** : offline (l'échec ET le fix se manifestent à l'import — pas de Docker/Ollama).
 
-### M7 · Passerelle : confiance aveugle en `X-OIDC-Claims` *(NOUVEAU — à VÉRIFIER d'abord)*
-- **Scope** access-gateway · **Routing** VERIFY → PR_BRANCH · **Effort** M · **Value** HIGH (candidat non-vérifié par la boucle — priorité de vérification Cycle 2)
-- **Problème (allégué)** : l'identité RBAC (oid/upn/groups) est lue *verbatim* de l'en-tête `X-OIDC-Claims` (`identity.py:140-143` via `main.py:252-258`), **sans aucune preuve in-app** que la requête a transité par oauth2-proxy/nginx. Anti-spoof = 2 lignes de config edge seulement (`Caddyfile:72`, `nginx.prod.conf`). Donc : tout accès direct à `access-gateway:8200` sur `onix-net` (autre conteneur compromis, SSRF, port publié par erreur) peut forger `X-OIDC-Claims` et **usurper n'importe quel utilisateur/groupe** → bypass RBAC+cache+doc-ACL. Et le `docker-compose.yml` de base déploie la passerelle **sans** Caddy/oauth2-proxy.
-- **Plan (si confirmé)** : ajouter un contrôle in-app — secret partagé `GATEWAY_TRUSTED_PROXY_SECRET` (comparaison constant-time) injecté par nginx/oauth2-proxy, OU signature HMAC des claims (oid|upn|exp) au hop proxy, vérifiée dans `resolve_principal`. Secret configuré mais absent/invalide → 401 (fail-closed). Default-off localhost dev. Test : `X-OIDC-Claims` forgé sans secret → 401.
-- **Fichiers** : `access-gateway/app/identity.py`, `main.py`, `config.py`, `docs/SECURITY.md`, tests
-- **Agent** : d'abord `Explore` (vérifier), puis `gsd-executor` · **Skills** : `update-scope-docs` (access-gateway)
-- **Acceptance** : requête forgée sans secret → 401 ; chemin légitime inchangé ; suite gateway verte.
-- **⚠️ Note orchestrateur** : ce candidat n'a PAS été vérifié adversariellement (la boucle a calé avant). **Vérifier en premier au Cycle 2** — si confirmé, c'est probablement le P0 sécurité le plus important du lot.
+*(M7 vérifié par l'orchestrateur le 2026-06-21 → reclassé P1 défense-en-profondeur, voir plus bas.)*
 
 ---
 
 ## P1 — provabilité, fiabilité, honnêteté
+
+### M7 · Passerelle : aucune preuve in-app que `X-OIDC-Claims` vient du proxy de confiance *(NOUVEAU — VÉRIFIÉ)*
+- **Scope** access-gateway · **Routing** PR_BRANCH · **Effort** M · **Value** MEDIUM (défense-en-profondeur ; exploitabilité conditionnée à la position réseau)
+- **Vérifié (2026-06-21)** : `resolve_principal` (`identity.py:140-142`) fait confiance à `X-OIDC-Claims` *verbatim* ; **aucun** secret proxy / signature de claims dans `access-gateway/app` (les seuls HMAC = pseudonymisation audit + clé cache). **CONFIRMÉ.** MAIS le scout a **surévalué** : la passerelle n'est déployée QUE dans `deploy/prod/docker-compose.prod.yml:312` (absente du compose de base — la claim « base sans oauth2-proxy » est fausse) ; `:8200` est **exposé conteneur sur `onix-net`, non publié sur l'hôte** (`:325 - "8200"`) ; Caddy (`Caddyfile:72 request_header -X-OIDC-Claims`) + nginx (`nginx.prod.conf:130-133`) **suppriment et re-posent** l'en-tête (anti-usurpation explicite, auteurs conscients `:208`).
+- **Risque résiduel réel** : un attaquant **déjà sur `onix-net`** (2e conteneur compromis, SSRF, port `:8200` publié par erreur) peut forger l'en-tête et usurper n'importe qui — la frontière de confiance la plus critique n'a **aucun contrôle in-app fail-closed** qu'un auditeur puisse exhiber.
+- **Plan** : ajouter un contrôle in-app — secret `GATEWAY_TRUSTED_PROXY_SECRET` (comparaison constant-time) injecté par nginx/oauth2-proxy, OU signature HMAC des claims (oid|upn|exp+freshness) au hop proxy vérifiée dans `resolve_principal`. Secret configuré mais absent/invalide → 401 (fail-closed). Default-off localhost dev. Test : `X-OIDC-Claims` forgé sans secret → 401.
+- **Fichiers** : `access-gateway/app/identity.py`, `main.py`, `config.py`, `deploy/prod/nginx.prod.conf` (injecter le secret), `docs/SECURITY.md`, tests
+- **Agent** : `gsd-executor` · **Skills** : `update-scope-docs` (access-gateway) · **Vérif** : offline (pytest gateway).
 
 ### M3 · ACL Fabric non câblée dans le filtre de citations *(NOUVEAU ×2)*
 - **Scope** access-gateway · **Routing** ROUTE_TO_RALPH · **Effort** M · **Value** HIGH
@@ -130,7 +131,7 @@
 ---
 
 ## Candidats non-vérifiés (la boucle a calé avant Verify) — à traiter en priorité Cycle 2
-- **M7** (gateway trusted-header) — *potentiellement P0*, vérifier en premier.
+- **M7** (gateway trusted-header) — ✅ **vérifié** par l'orchestrateur (2026-06-21) → reclassé P1 défense-en-profondeur (non-P0 : exposition gated réseau, edge déjà durci).
 - `obs-acl-audit-silent-failure` → fusionné dans **M15**.
 - `fabric-acl-unwired-runtime` + `fabric-doc-overclaims` → fusionnés dans **M3** + **M14**.
 - `ci-pin-actions-by-sha` → fusionné dans **M12** ; `ci-cosign-sign-and-attest` → = CICD-01 (Ralph).
