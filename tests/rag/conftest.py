@@ -12,45 +12,29 @@ Deux modes :
   contre une vraie API Onyx et applique les assertions mustContain /
   mustNotContain sur la réponse. Les tests live sont *skipped* si l'env n'est
   pas configuré, donc la recette hors-LLM reste verte sans LLM.
+
+NB (correctif M2) : les helpers de lecture (`read_prompt_block`, etc.) vivent
+désormais dans `prompt_loader.py` (module normal, importable hors pytest) et sont
+**ré-exportés** ci-dessous. C'est `live_harness` qui les importe via
+`prompt_loader` — surtout PAS via `conftest`, dont le nom est ambigu sous
+`python -m ragas_eval.runner` (collision avec `ragas_eval/conftest.py`).
 """
 from __future__ import annotations
 
-import json
 import os
-import re
-from pathlib import Path
 
 import pytest
 
-# ── Localisation des artefacts (chemins absolus, robustes au cwd) ──────────
-_HERE = Path(__file__).resolve().parent
-_REPO_ROOT = _HERE.parent.parent
-PROMPT_PATH = _REPO_ROOT / "prompts" / "agent_commercial_systeme.md"
-EXAMPLES_PATH = _REPO_ROOT / "prompts" / "exemples_questions.md"
-DATASET_PATH = _HERE / "dataset_eval.json"
-
-
-def read_prompt_markdown() -> str:
-    """Contenu brut (markdown complet) du fichier de prompt système."""
-    return PROMPT_PATH.read_text(encoding="utf-8")
-
-
-def read_prompt_block() -> str:
-    """Le bloc de prompt à copier dans Onyx (contenu entre la 1re paire de ```).
-
-    C'est ce bloc — et non le markdown d'accompagnement — qui constitue le
-    contrat de sécurité collé dans l'agent. On le teste isolément pour qu'un
-    garde-fou déplacé hors du bloc fasse échouer la recette.
-    """
-    md = read_prompt_markdown()
-    m = re.search(r"```(?:\w+)?\n(.*?)\n```", md, re.DOTALL)
-    assert m, "Bloc de prompt (``` … ```) introuvable dans agent_commercial_systeme.md"
-    return m.group(1)
-
-
-def load_dataset() -> dict:
-    with DATASET_PATH.open(encoding="utf-8") as f:
-        return json.load(f)
+# Ré-export des helpers de lecture (définis dans prompt_loader.py) pour que les
+# tests existants `from conftest import read_prompt_block, ...` restent verts.
+from prompt_loader import (  # noqa: F401  (ré-export volontaire)
+    DATASET_PATH,
+    EXAMPLES_PATH,
+    PROMPT_PATH,
+    load_dataset,
+    read_prompt_block,
+    read_prompt_markdown,
+)
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────

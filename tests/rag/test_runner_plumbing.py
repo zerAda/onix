@@ -99,3 +99,31 @@ def test_write_markdown_mentions_both_rates(monkeypatch, tmp_path):
     assert "run_live.py --markdown" in text
     # Traçabilité : la version Ollama est renseignée (réelle ou dégradée proprement).
     assert "Version Ollama" in text
+
+
+def test_runner_module_path_has_no_conftest_import_error():
+    """Anti-régression M2 (RAGAS-FIX) : `python -m ragas_eval.runner` ne doit PAS
+    planter à l'import sur la collision de nom `conftest`.
+
+    Avant le fix, `live_harness.py` faisait `from conftest import read_prompt_block` ;
+    sous `python -m ragas_eval.runner`, `conftest` se résolvait vers
+    `tests/rag/ragas_eval/conftest.py` (sans ce symbole) → `ImportError`, et le
+    runner sortait en code 2 AVANT toute éval (le gate nightly n'évaluait jamais).
+    pytest restait vert (il charge le bon conftest), masquant le trou.
+
+    On lance le runner en SOUS-PROCESSUS depuis `tests/rag/`, SANS Ollama : il doit
+    atteindre la vérif de joignabilité (sortie 2 « Ollama injoignable »), donc NE
+    PAS contenir d'ImportError sur `read_prompt_block`. Offline, aucun Ollama requis.
+    """
+    import subprocess
+
+    here = Path(__file__).resolve().parent
+    proc = subprocess.run(  # nosec B603 - args fixes, pas de shell
+        [sys.executable, "-m", "ragas_eval.runner"],
+        cwd=str(here), capture_output=True, text=True, timeout=60,
+    )
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    assert "read_prompt_block" not in combined, (
+        "régression M2 : le runner échoue encore sur l'import conftest :\n" + combined
+    )
+    assert "ImportError" not in combined, combined

@@ -24,18 +24,23 @@
 |---|---|
 | ✅ CONFORME | 31 |
 | ⚠️ ÉCART MINEUR | 7 |
-| ❌ ÉCART MAJEUR | 2 |
+| ❌ ÉCART MAJEUR | 0 |
 | 🕳️ DOC-SANS-CODE | 1 |
 | 🔇 CODE-SANS-DOC | 2 |
-| ❔ NON VÉRIFIABLE | 4 |
+| ❔ NON VÉRIFIABLE | 6 |
 | **Total affirmations tracées** | **47** |
 
-> **⚠️ Correction 2026-06-21** (boucle orchestrateur) : la synthèse était trop clémente.
-> Le gate live RAGAS (`make rag-eval` / `rag-eval-ci`) **ne démarre pas** (ImportError,
-> exit 2 — voir lignes 51-52, reproduit) → **2 écarts majeurs, pas 0**. Cause méthode :
-> ces lignes étaient certifiées en LISANT le `Makefile` (cf. `:7` « aucune exécution »),
-> jamais en l'exécutant. Règle ajoutée : une claim d'exécution runtime ne peut être ✅
-> que si un run/transcript est attaché ; sinon ❔ NON VÉRIFIABLE.
+> **⚠️ Correction 2026-06-21** (boucle orchestrateur, 2 passes) :
+> **Passe 1 (audit)** — le gate live RAGAS (`make rag-eval` / `rag-eval-ci`) **ne démarrait pas**
+> (ImportError de collision `conftest`, exit 2, reproduit) → il n'avait **jamais** évalué une réponse.
+> **Passe 2 (correctif M2)** — corrigé : `read_prompt_block`/`read_prompt_markdown`/`load_dataset`
+> extraits dans `tests/rag/prompt_loader.py` ; `live_harness.py:38` importe désormais via
+> `prompt_loader` (plus via `conftest`). Vérifié localement : `python -m ragas_eval.runner` exécute
+> l'éval (plus d'ImportError), `pytest tests/rag` = **158 passed**, + test anti-régression
+> `test_runner_plumbing.py::test_runner_module_path_has_no_conftest_import_error`.
+> **Statut** : le runner DÉMARRE, mais **aucun run live n'est encore attaché** → lignes 51-52 = ❔
+> NON VÉRIFIABLE (pas ✅) tant qu'un transcript live n'est pas joint. Règle : une claim d'exécution
+> runtime ne peut être ✅ que si un run/transcript est attaché.
 >
 > **Synthèse honnêteté** : scope **largement honnête** (hormis le gate live ci-dessus). Aucun autre mock présenté
 > comme réel détecté. Les limites (variance du juge, retrieval Onyx non booté,
@@ -55,8 +60,8 @@
 | Seuils gate défaut 0.90 / 0.70 / 0.85 surchargeables `ONIX_RAGAS_MIN_*` | ✅ | `metrics.py:104-108` (defaults), `runner.py:68-89` (env-override) | Exact. |
 | Runner sort en code non nul si gate échoue | ✅ | `runner.py:310` (`return 0 if gate.passed else 1`) | Conforme. |
 | Offline CI : `pytest -q tests/rag/ragas_eval` (juge mocké) | ✅ | `ragas_eval/test_ragas_eval.py`, `conftest.py` ; juge injectable `runner.py:94-101` | Tests offline présents. |
-| LIVE : `make rag-eval` (Ollama ≥ 7B) | ❌ | `Makefile:148-149` (`python -m ragas_eval.runner`) | **Corrigé 2026-06-21** : NE DÉMARRE PAS — exit 2 `ImportError: cannot import name 'read_prompt_block' from 'conftest'` (collision `tests/rag/ragas_eval/conftest.py`) AVANT toute éval. Reproduit. Cf. M2/RAGAS-FIX. |
-| `make rag-eval-ci` = runner `--json` + `compare_scores` vs baseline (gate absolu OU régression) | ❌ | `Makefile:166-173` | **Corrigé 2026-06-21** : le runner sort en code 2 (ImportError, cf. ligne LIVE), `scores.json` jamais écrit → `compare_scores` échoue sur fichier manquant → nightly `exit 1`. Le gate **n'a jamais évalué** une réponse. |
+| LIVE : `make rag-eval` (Ollama ≥ 7B) | ❔ | `Makefile:148-149` (`python -m ragas_eval.runner`) | **M2 corrigé (2026-06-21)** : l'ImportError de collision `conftest` est résolu (`tests/rag/prompt_loader.py`) → le runner DÉMARRE et exécute l'éval (vérifié local : plus d'ImportError, `pytest tests/rag` = 158 passed). ❔ NON VÉRIFIABLE tant qu'aucun run live/transcript n'est attaché pour prouver les scores. |
+| `make rag-eval-ci` = runner `--json` + `compare_scores` vs baseline (gate absolu OU régression) | ❔ | `Makefile:166-173` | **M2 corrigé (2026-06-21)** : le runner démarre (plus d'exit-2-ImportError) ; `rc` propagé conforme au code. ❔ tant qu'un run nightly sain n'est pas archivé (le gate fonctionne mécaniquement mais n'a pas encore de mesure live attachée). |
 | Workflow nightly `schedule`+`workflow_dispatch`, jamais `pull_request` | ✅ | `ragas-nightly.yml:27-44` | Aucun trigger `pull_request`. Exact. |
 | `golden_fr.json` = 2 items dégradés (G07 halluciné, G08 hors-sujet) | ✅ | `golden_fr.json:104-136` (G07 chiffres inventés ; G08 contextes BETA/RH/veille) | Exact. |
 | Planchers nightly réalistes 0.55/0.55/0.70 (set complet + juge 1b) | ✅ | `ragas-nightly.yml:77-79` | Exact. |

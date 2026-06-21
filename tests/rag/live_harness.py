@@ -35,7 +35,10 @@ import urllib.parse
 import urllib.request
 from typing import Callable, Dict, List, Optional
 
-from conftest import read_prompt_block
+# Import via `prompt_loader` (module normal) et NON `conftest` : sous
+# `python -m ragas_eval.runner`, le nom `conftest` se résout vers
+# `ragas_eval/conftest.py` (sans ce symbole) → ImportError, runner mort. (M2)
+from prompt_loader import read_prompt_block
 
 # ───────────────────────────────────────────────────────────────────────────
 # Configuration (env) — endpoint OpenAI-compatible d'Ollama.
