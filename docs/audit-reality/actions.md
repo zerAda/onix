@@ -81,6 +81,8 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 | Repli estimation `chars/4` quand pas de ground truth | ✅ | `llm.py:286-295`, `main.py:447-457` | marqué `measured=False` honnêtement |
 | Limite honnête : `cache_tokens_saved` gateway reste estimé (Onyx médie) | ❔ | doc FINOPS §5 ; concerne `access-gateway`/Onyx | hors scope code actions ; honnêteté correcte |
 | Tests FinOps (mesuré/estimé/coût/bout-en-bout) | ✅ | `test_finops_tokens.py` (11 tests) | mocks `httpx.post` clairement étiquetés (pas de mock présenté comme réel) |
+| Budget = total **CUMULATIF** (toute la table, pas une fenêtre des N derniers events) | ✅ | `usage_tracker.summary()` (agrégat SQL non borné) ; **corrigé M19 (2026-06-21)** — avant : `SUM` sur `ORDER BY … DESC LIMIT 1000` → sous-comptage sans borne ; rég. `test_api.py::test_summary_cost_is_cumulative_not_windowed` | `by_type`/`by_status` restent une vue récente bornée par `limit` |
+| Budget = **observationnel** (calculé, PAS appliqué) | ❔ | `cost_tracker.check_budget` calcule un niveau consommé en affichage ; aucun chemin ne bloque une requête ; types `budget_warning_triggered`/`service_emergency_stopped` **réservés et non émis** (commenté `usage_tracker.py`) | honnête : non présenté comme une boucle d'enforcement active (M19 ; enforcement = mission future) |
 
 ---
 

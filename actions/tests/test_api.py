@@ -123,6 +123,31 @@ def test_usage_and_summary(client):
     assert s.json()["total_events"] >= 1
 
 
+def test_summary_cost_is_cumulative_not_windowed(client):
+    """M19 (FinOps) : le total budget `estimated_cost_eur` doit couvrir TOUS les
+    événements, pas seulement la fenêtre des `limit` plus récents.
+
+    Avant le correctif, `summary()` sommait le coût sur `ORDER BY ... DESC LIMIT
+    limit`, donc au-delà de `limit` événements le budget devenait une fenêtre
+    glissante (sous-comptage sans borne). On insère 5 événements à 1.0 € et on
+    appelle `summary(limit=2)` : la somme doit valoir 5.0 (cumul), pas 2.0.
+    """
+    import app.usage_tracker as ut  # module rechargé par la fixture `client`
+
+    for i in range(5):
+        ut.track(
+            "cost_estimated",
+            estimated_cost_eur=1.0,
+            timestamp_utc=f"2026-01-01T00:00:0{i}Z",
+        )
+
+    s = ut.summary(limit=2)  # fenêtre de ventilation < nombre d'événements
+    assert s["estimated_cost_eur"] == 5.0  # cumul réel (valait 2.0 avant le fix)
+    assert s["total_events"] >= 5
+    # La ventilation by_type reste bornée à la fenêtre récente (limit=2).
+    assert sum(s["by_type"].values()) == 2
+
+
 def test_cost_estimate_and_budget(client, monkeypatch):
     monkeypatch.setenv("ONIX_RATE_CARD", '{"audit_request": 0.5}')
     monkeypatch.setenv("ONIX_BUDGET_EUR", "10")

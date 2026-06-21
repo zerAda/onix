@@ -35,6 +35,12 @@ VALID_EVENT_TYPES = {
     "user_unblocked",
     "service_emergency_stopped",
 }
+# Honnêteté (Rule #1) : le budget FinOps est aujourd'hui **observationnel** —
+# `cost_tracker.check_budget` calcule un niveau (ok/warning/exceeded) consommé en
+# affichage, mais AUCUN chemin ne le fait appliquer (pas de blocage). Les deux
+# types ci-dessous (`budget_warning_triggered`, `service_emergency_stopped`) sont
+# donc **réservés** pour un futur hook d'enforcement et **ne sont pas encore émis**.
+# Ne pas les présenter comme une boucle d'enforcement active (cf. mission M19).
 
 _VALID_STATUS = {"ok", "error", "blocked", "skipped"}
 
@@ -169,55 +175,62 @@ def track(event_type: str, **kwargs: Any) -> Dict[str, Any]:
 
 
 def summary(limit: int = 1000) -> Dict[str, Any]:
-    """Agrégats : total, par type, par statut, coût estimé cumulé."""
+    """Agrégats d'usage.
+
+    TOTAUX FinOps **CUMULATIFS** (coût budget, tokens, nombre d'événements) = toute
+    la table, JAMAIS tronqués. (Correctif M19 : un `LIMIT` sur ces sommes
+    transformait le budget en **fenêtre glissante** des `limit` derniers événements
+    — au-delà de `limit` événements la dépense était sous-comptée sans borne et ne
+    pouvait jamais atteindre « exceeded » de façon fiable.)
+
+    La ventilation `by_type` / `by_status` porte, elle, sur les `limit` événements
+    les plus récents (vue d'activité récente, bornée pour le coût mémoire).
+    """
     with _connect() as conn:
+        # Totaux cumulatifs (budget + tokens + comptage) — agrégat SQL non borné.
+        # Ground truth (tokens_measured=1, Ollama eval_count) vs estimé (chars/4).
+        agg = conn.execute(
+            "SELECT COUNT(*) AS n,"
+            " COALESCE(SUM(estimated_cost_eur), 0) AS cost,"
+            " COALESCE(SUM(estimated_tokens_input), 0) AS tin,"
+            " COALESCE(SUM(estimated_tokens_output), 0) AS tout,"
+            " COALESCE(SUM(CASE WHEN COALESCE(tokens_measured,0)<>0"
+            "                   THEN estimated_tokens_input ELSE 0 END), 0) AS m_in,"
+            " COALESCE(SUM(CASE WHEN COALESCE(tokens_measured,0)<>0"
+            "                   THEN estimated_tokens_output ELSE 0 END), 0) AS m_out,"
+            " COALESCE(SUM(CASE WHEN COALESCE(tokens_measured,0)=0"
+            "                   THEN estimated_tokens_input ELSE 0 END), 0) AS e_in,"
+            " COALESCE(SUM(CASE WHEN COALESCE(tokens_measured,0)=0"
+            "                   THEN estimated_tokens_output ELSE 0 END), 0) AS e_out,"
+            " COALESCE(SUM(CASE WHEN COALESCE(tokens_measured,0)<>0"
+            "                   AND (estimated_tokens_input>0 OR estimated_tokens_output>0)"
+            "                   THEN 1 ELSE 0 END), 0) AS m_evt"
+            " FROM usage_events"
+        ).fetchone()
+        # Ventilation par type/statut sur les `limit` événements les plus récents.
         rows = conn.execute(
-            "SELECT event_type, status, estimated_cost_eur, estimated_tokens_input,"
-            " estimated_tokens_output, tokens_measured FROM usage_events"
+            "SELECT event_type, status FROM usage_events"
             " ORDER BY timestamp_utc DESC LIMIT ?",
             (int(limit),),
         ).fetchall()
     by_type: Dict[str, int] = {}
     by_status: Dict[str, int] = {}
-    total_cost = 0.0
-    total_in = 0
-    total_out = 0
-    # FinOps : ventilation MESURÉ (Ollama eval_count) vs ESTIMÉ (chars/4) pour que
-    # le client distingue les chiffres « ground truth » des heuristiques.
-    measured_in = 0
-    measured_out = 0
-    estimated_in = 0
-    estimated_out = 0
-    measured_events = 0
     for r in rows:
         by_type[r["event_type"]] = by_type.get(r["event_type"], 0) + 1
         by_status[r["status"]] = by_status.get(r["status"], 0) + 1
-        total_cost += float(r["estimated_cost_eur"] or 0.0)
-        t_in = int(r["estimated_tokens_input"] or 0)
-        t_out = int(r["estimated_tokens_output"] or 0)
-        total_in += t_in
-        total_out += t_out
-        if int(r["tokens_measured"] or 0):
-            measured_in += t_in
-            measured_out += t_out
-            if t_in or t_out:
-                measured_events += 1
-        else:
-            estimated_in += t_in
-            estimated_out += t_out
     return {
-        "total_events": len(rows),
+        "total_events": int(agg["n"]),
         "by_type": by_type,
         "by_status": by_status,
-        "estimated_cost_eur": round(total_cost, 6),
-        "estimated_tokens_input": total_in,
-        "estimated_tokens_output": total_out,
+        "estimated_cost_eur": round(float(agg["cost"] or 0.0), 6),
+        "estimated_tokens_input": int(agg["tin"] or 0),
+        "estimated_tokens_output": int(agg["tout"] or 0),
         # Ground truth vs heuristique (cf. docs/FINOPS.md).
         "tokens": {
-            "measured_input": measured_in,
-            "measured_output": measured_out,
-            "estimated_input": estimated_in,
-            "estimated_output": estimated_out,
-            "measured_events": measured_events,
+            "measured_input": int(agg["m_in"] or 0),
+            "measured_output": int(agg["m_out"] or 0),
+            "estimated_input": int(agg["e_in"] or 0),
+            "estimated_output": int(agg["e_out"] or 0),
+            "measured_events": int(agg["m_evt"] or 0),
         },
     }
