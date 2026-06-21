@@ -2,6 +2,7 @@
 
 **Généré :** 2026-06-21 par la boucle chief-orchestrator (scout → verify adversarial → spec).
 **Cycle 1 :** 6 scouts → 24 candidats → 15 vérifiés → **14 confirmés** (+ 9 non-vérifiés, 1 rejeté).
+**✅ Livré sur `main` (2026-06-21, CI verte, commit `3298729`)** : **M12** (toutes les actions SHA-pinnées + Dependabot + faux « SBOM attached to release » corrigé), **M5a** (mensonge doc pg_dump corrigé), **M14** (fausses « ✅ conforme » RAGAS corrigées). **M7** vérifié → reclassé P1 défense-en-profondeur. Reste : M1, M2, M3, M4, M6, M8–M11, M13, M15, M16.
 **Routing :** `SAFE_INLINE` = je peux le faire ici (hors-scope Ralph, pas de Docker) · `PR_BRANCH` = livrer en PR relue · `ROUTE_TO_RALPH` = code de scope que la boucle Ralph possède · `NEEDS_DOCKER`/`NEEDS_TENANT` = preuve impossible sur cette machine.
 
 > **Règle.** Toute modif de code d'un scope (`access-gateway/`, `actions/`, `tests/rag/`+`prompts/`, `monitoring/`, `deploy/`+`nginx/`) déclenche le gate `docs-freshness` → MAJ `docs/scopes/<scope>.md` + `docs/audit-reality/<scope>.md` + `ralph/state/<scope>.md` via `/update-scope-docs`. `.github/`, `.devcontainer/`, `.planning/`, `ralph/` ne sont PAS des scopes → modifiables sans ce gate. `make test` doit rester vert ; honnêteté (« zéro mock présenté comme réel ») non négociable.
