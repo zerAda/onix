@@ -182,4 +182,19 @@ Tout le reste touche un scope Ralph (→ Ralph) ou exige Docker/tenant pour la p
 - **Streaming** : `_hard_violation` (`streaming.py:137-152`) omet `confirms_inaccessible_resource` (règle d'exfiltration confirmant l'existence d'un dossier tiers), déféré au post-filtre soft de fin de flux → le texte confirmant *streame* avant l'override d'autorité. Le module documente ce trade-off pour les règles « soft » ; à revoir si cette règle d'exfil mérite le hard-path. (scout : secondaire).
 
 ---
-*Programme chief-orchestrator. Cycle 1 (M1–M16) + Cycle 2 (M17–M19). Méta & auto-amélioration : `ORCHESTRATOR-LOG.md`.*
+
+# Cycle 3 — 2026-06-21 (vérif M7 + balayage honnêteté compliance)
+
+> M7 vérifié (confirmé, MEDIUM, voir bloc M7). Puis sweep honnêteté : croisement des docs DPO (`RGPD.md`/`DPIA_TEMPLATE.md`/`REGISTRE_TRAITEMENTS.md`) contre l'audit **du dépôt lui-même** (`audit-onyx/`) + le code. La dérive est **spécifique aux docs DPO** (`audit-reality/` reste honnête).
+
+### M20 · Docs DPO : 4 contrôles présentés « en place » que l'audit/le code du dépôt contredisent *(NOUVEAU — honnêteté compliance)*
+- **Scope** security-governance (docs) · **Routing** **PR_BRANCH + revue DPO** (docs régulateur — ne PAS hot-patch) · **Effort** S–M · **Value** HIGH (honnêteté ; exposition réglementaire)
+- **F1 (HIGH)** : `RGPD.md:44-46` + `DPIA_TEMPLATE.md:71` présentent `ENCRYPTION_KEY_SECRET` comme un **chiffrement secrets au repos** (art.32) « imposé au boot ». Mais le déploiement est **Onyx FOSS** où `_encrypt_string` est l'identité (no-op) — confirmé par l'audit du dépôt `audit-onyx/50-rgpd-governance.md:127-133` ET `SECURITY.md:68-69`. → ajouter le caveat FOSS-vs-EE que le reste du repo maintient (la clé garantit la *présence*, pas le chiffrement ; vrai AES = EE) ; aligner sur l'item Out-of-Scope déjà honnête.
+- **F2 (HIGH)** : `REGISTRE_TRAITEMENTS.md:59` annonce un **journal d'accès** `document_accessed`/`rag_search_executed` (qui-a-vu-quoi, art.5(2)). Mais le chemin RAG réel (access-gateway) n'émet **jamais** ces events ; `record_rag_search` a **zéro appelant prod** (seulement un test). → corriger le Registre (le trail couvre les flux OCR/docgen actions, **pas** la lecture RAG/document) OU câbler l'émission côté gateway (= OBS/SEC backlog). C'est précisément le gap que l'audit qualifie de quasi-disqualifiant.
+- **F3 (MED)** : `RGPD.md:60-63` « efface **toutes les traces** … y compris les `.docx` » alors que `retention.py:208-214` fait un **rapprochement best-effort par nom de fichier** que le code lui-même disclaim (`audit-reality/actions.md:116` le caveat ; la doc DPO non). → aligner le mot « toutes » sur la réalité best-effort.
+- **F4 (LOW-MED)** : `DPIA_TEMPLATE.md:64` liste « identité vérifiée (HMAC/JWT) » sous « **déjà en place** » alors que `:98` (§5) demande de l'**activer** (off par défaut, fail-open clé de service). → contradiction interne ; marquer « mécanisme présent, OFF par défaut → activer en prod ».
+- **Fichiers** : `docs/RGPD.md`, `docs/DPIA_TEMPLATE.md`, `docs/REGISTRE_TRAITEMENTS.md`, `docs/audit-reality/security-governance.md`
+- **Agent** : `gsd-doc-writer` + **revue DPO obligatoire** · **Vérif** : relecture humaine (compliance) — pas de test auto. · **Vérifié OK par le sweep** (ne PAS « corriger ») : chaîne HMAC `admin_audit` (réelle, fallback SHA-256 disclosé), `make destroy`, purge TTL n'altère pas l'audit.
+
+---
+*Programme chief-orchestrator. Cycle 1 (M1–M16) + Cycle 2 (M17–M19) + Cycle 3 (M7 vérifié, M20). Méta & auto-amélioration : `ORCHESTRATOR-LOG.md`.*

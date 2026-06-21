@@ -62,4 +62,21 @@ Les vérificateurs ont aussi **honnêtement dégradé** des items (credential-gu
 **Bilan boucle (2 cycles)** : 19 missions cataloguées (dont ~10 nouvelles hors backlog) ; **5 corrections réellement livrées + CI-vertes** (M2, M5a, M12, M13, M14) ; 0 collision Ralph ; honnêteté tenue (sévérités bornées, claims non vérifiables marquées).
 
 ---
-*Prochain : Cycle 3 (vérifier M7 ; balayage honnêteté compliance ; fix-and-verify M17/M19) — ou router M17–M19 vers Ralph.*
+
+## Cycle 3 — 2026-06-21
+
+**Fix-and-verify M19** (avant ce cycle) : budget cumulatif livré + test de régression + CI verte (`1961e7e`) → la boucle livre désormais du **code de scope vérifié**, pas seulement docs/CI. **6e correction livrée.**
+
+**Vérif M7** (X-OIDC trust) : **CONFIRMÉ** contre le code vivant — `resolve_principal` fait confiance à l'en-tête *verbatim*, **zéro** secret proxy/signature dans `config.py` ; anti-usurpation = uniquement l'edge (`Caddyfile:72` strip, base compose sans passerelle). **Sévérité bornée honnêtement à MEDIUM** (le scout floattait critique) : exploit gated réseau interne (SSRF/conteneur co-résident) ou cliff AKS (`values-azure.yaml:133` : strip non garanti par le chart). Plus haute valeur sécurité ouverte → fix in-app fail-closed (mission M7, PR_BRANCH).
+
+**Balayage honnêteté compliance** (1 agent synchrone, lecture seule) : docs DPO (`RGPD.md`/`DPIA`/`REGISTRE`) croisés contre `audit-onyx/` + code → **4 nouveaux écarts** (M20), au-delà de M18. Le plus grave : `ENCRYPTION_KEY_SECRET` vendu comme chiffrement au-repos art.32 alors que le FOSS le rend no-op (contredit par l'audit DU dépôt). Constat clé : la dérive d'honnêteté est **isolée aux docs DPO** ; `audit-reality/` reste honnête. L'agent a aussi **confirmé OK** (chaîne HMAC, `make destroy`, purge TTL) → pas de faux positif.
+
+### Méta-critique → Cycle 4 (si repris)
+1. **Le sweep d'honnêteté est un filon riche et bon marché** (1 agent, 4 écavés HIGH/MED) — étendre à `SECURITY.md` / `PARITE_ENTREPRISE.md` / `ARCHITECTURE.md` vs `audit-onyx/` + `audit-reality/`.
+2. **Pattern systémique** : les claims FOSS-vs-EE et OFF-par-défaut sont honnêtes dans `audit-reality/`/`SECURITY.md` mais perdent leur caveat dans les docs **destinées à un tiers** (DPO/régulateur/commercial). Cibler spécifiquement les docs « outward-facing ».
+3. **Reste à router vers Ralph** : M1, M3, M4, M15, M17 (+ M19-enforcement, M20-DPO) — code de scope / docs régulateur, hors mandat orchestrateur.
+
+**Bilan boucle (3 cycles)** : **20 missions cataloguées** (dont ~11 nouvelles hors backlog) ; **6 corrections livrées + CI-vertes** (M2, M5a, M12, M13, M14, M19) ; M7 vérifié+borné ; 0 collision Ralph ; honnêteté tenue de bout en bout (y compris l'auto-vérification du nightly RAGAS et le bornage de sévérité de M7).
+
+---
+*Prochain : router le reste vers Ralph (M1/M3/M4/M15/M17/M20) — ou Cycle 4 (sweep honnêteté étendu aux docs outward-facing).*
