@@ -1,0 +1,13 @@
+# Dependabot — garde les GitHub Actions épinglées à jour.
+# Complément du SHA-pinning : les actions sont épinglées par commit SHA (immuable,
+# anti-compromission type tj-actions/changed-files) ; Dependabot propose les montées
+# de version en PR relue (et met à jour le SHA + le commentaire de version).
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"

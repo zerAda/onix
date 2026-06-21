@@ -22,15 +22,22 @@
 
 | Classe | Nombre |
 |---|---|
-| ✅ CONFORME | 33 |
+| ✅ CONFORME | 31 |
 | ⚠️ ÉCART MINEUR | 7 |
-| ❌ ÉCART MAJEUR | 0 |
+| ❌ ÉCART MAJEUR | 2 |
 | 🕳️ DOC-SANS-CODE | 1 |
 | 🔇 CODE-SANS-DOC | 2 |
 | ❔ NON VÉRIFIABLE | 4 |
 | **Total affirmations tracées** | **47** |
 
-> **Synthèse honnêteté** : scope **remarquablement honnête**. Aucun mock présenté
+> **⚠️ Correction 2026-06-21** (boucle orchestrateur) : la synthèse était trop clémente.
+> Le gate live RAGAS (`make rag-eval` / `rag-eval-ci`) **ne démarre pas** (ImportError,
+> exit 2 — voir lignes 51-52, reproduit) → **2 écarts majeurs, pas 0**. Cause méthode :
+> ces lignes étaient certifiées en LISANT le `Makefile` (cf. `:7` « aucune exécution »),
+> jamais en l'exécutant. Règle ajoutée : une claim d'exécution runtime ne peut être ✅
+> que si un run/transcript est attaché ; sinon ❔ NON VÉRIFIABLE.
+>
+> **Synthèse honnêteté** : scope **largement honnête** (hormis le gate live ci-dessus). Aucun autre mock présenté
 > comme réel détecté. Les limites (variance du juge, retrieval Onyx non booté,
 > prompt seul insuffisant sur 7B) sont **explicitement** documentées dans les docs
 > elles-mêmes. Le principal point de vigilance n'est pas un mensonge mais un
@@ -48,8 +55,8 @@
 | Seuils gate défaut 0.90 / 0.70 / 0.85 surchargeables `ONIX_RAGAS_MIN_*` | ✅ | `metrics.py:104-108` (defaults), `runner.py:68-89` (env-override) | Exact. |
 | Runner sort en code non nul si gate échoue | ✅ | `runner.py:310` (`return 0 if gate.passed else 1`) | Conforme. |
 | Offline CI : `pytest -q tests/rag/ragas_eval` (juge mocké) | ✅ | `ragas_eval/test_ragas_eval.py`, `conftest.py` ; juge injectable `runner.py:94-101` | Tests offline présents. |
-| LIVE : `make rag-eval` (Ollama ≥ 7B) | ✅ | `Makefile:148-149` (`cd tests/rag && ONIX_LIVE_OLLAMA=1 python -m ragas_eval.runner`) | Exact. |
-| `make rag-eval-ci` = runner `--json` + `compare_scores` vs baseline (gate absolu OU régression) | ✅ | `Makefile:166-173` | Échoue si l'un OU l'autre casse (`rc` propagé). Conforme. |
+| LIVE : `make rag-eval` (Ollama ≥ 7B) | ❌ | `Makefile:148-149` (`python -m ragas_eval.runner`) | **Corrigé 2026-06-21** : NE DÉMARRE PAS — exit 2 `ImportError: cannot import name 'read_prompt_block' from 'conftest'` (collision `tests/rag/ragas_eval/conftest.py`) AVANT toute éval. Reproduit. Cf. M2/RAGAS-FIX. |
+| `make rag-eval-ci` = runner `--json` + `compare_scores` vs baseline (gate absolu OU régression) | ❌ | `Makefile:166-173` | **Corrigé 2026-06-21** : le runner sort en code 2 (ImportError, cf. ligne LIVE), `scores.json` jamais écrit → `compare_scores` échoue sur fichier manquant → nightly `exit 1`. Le gate **n'a jamais évalué** une réponse. |
 | Workflow nightly `schedule`+`workflow_dispatch`, jamais `pull_request` | ✅ | `ragas-nightly.yml:27-44` | Aucun trigger `pull_request`. Exact. |
 | `golden_fr.json` = 2 items dégradés (G07 halluciné, G08 hors-sujet) | ✅ | `golden_fr.json:104-136` (G07 chiffres inventés ; G08 contextes BETA/RH/veille) | Exact. |
 | Planchers nightly réalistes 0.55/0.55/0.70 (set complet + juge 1b) | ✅ | `ragas-nightly.yml:77-79` | Exact. |

@@ -45,7 +45,7 @@ jobs:
       ONIX_ACTIONS_AUDIT_HMAC_KEY: ci-smoke-hmac-key-0123456789abcdef
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # Même build local que ci.yml (cohérence) — image construite depuis actions/.
       - name: Build de l'image onix-actions

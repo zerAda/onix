@@ -5,7 +5,9 @@ name: CD
 # Déclenchement MANUEL (workflow_dispatch) ou sur tag de version `v*`.
 #
 # Supply-chain : l'image est SCANNÉE (trivy) AVANT push ; un SBOM (syft) est
-# généré et archivé en artefact (et attaché à la release si déclenchée par tag).
+# généré et archivé en ARTEFACT de workflow. NB : aucun job `gh release` n'existe,
+# donc le SBOM n'est PAS attaché à une GitHub Release (corrigé 2026-06-21 : la
+# mention « attaché à la release » était fausse). Voir backlog M12 (signature cosign).
 on:
   workflow_dispatch:
     inputs:
@@ -32,10 +34,10 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
       tags: ${{ steps.meta.outputs.tags }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       # Décide si l'on pousse : tag v* OU dispatch avec push=true.
       - name: Déterminer le mode push
@@ -49,7 +51,7 @@ jobs:
 
       - name: Métadonnées (tags + labels OCI)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.IMAGE }}
           tags: |
@@ -61,7 +63,7 @@ jobs:
 
       - name: Login GHCR
         if: steps.mode.outputs.push == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -69,7 +71,7 @@ jobs:
 
       # Build local (chargé dans le démon) pour scanner AVANT de pousser.
       - name: Build de l'image (local, pour scan)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./actions
           load: true
@@ -79,7 +81,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy — scan de l'image candidate (CRITICAL/HIGH bloquant)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: onix-actions:candidate
@@ -93,7 +95,7 @@ jobs:
       - name: Build & push (taggé + digesté)
         id: build
         if: steps.mode.outputs.push == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./actions
           push: true
@@ -119,7 +121,7 @@ jobs:
 
       # --- SBOM (syft) : généré sur l'image candidate locale ------------------
       - name: Génération du SBOM (syft, SPDX + CycloneDX)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: onix-actions:candidate
           format: spdx-json
@@ -127,7 +129,7 @@ jobs:
           artifact-name: sbom.onix-actions.spdx.json
 
       - name: SBOM — format CycloneDX (complémentaire)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: onix-actions:candidate
           format: cyclonedx-json
@@ -135,7 +137,7 @@ jobs:
           artifact-name: sbom.onix-actions.cdx.json
 
       - name: Archiver les SBOM en artefacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sbom-onix-actions
           path: |
