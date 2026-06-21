@@ -33,7 +33,33 @@ Les vérificateurs ont aussi **honnêtement dégradé** des items (credential-gu
 - *Spec* : conserver, mais ne lancer Spec que si Verify a tenu ; sinon l'orchestrateur rédige les specs inline (fait au Cycle 1).
 - *Taille* : `parallel` cappé à ~10 ; viser une complétion < 5 min de session active.
 
-**État** : MISSIONS.md livré. Aucun code de scope modifié par l'orchestrateur. 3 missions exécutables ici sans risque (M5a, M12, M14) — en attente de feu vert.
+**État** : MISSIONS.md livré.
+
+### Exécutions livrées entre Cycle 1 et Cycle 2 (mergées sur `main`, CI verte)
+- **M5a / M12 / M14** (`3298729`) — 3 mensonges doc corrigés (pg_dump, faux « SBOM attached to release », fausses « ✅ conforme ») + toutes les actions GitHub SHA-pinnées + Dependabot.
+- **M2** (`b4d3a4e`) — gate RAGAS ressuscité (collision `conftest` → `prompt_loader.py`), **vérifié localement** (`pytest tests/rag` = 158 passed ; runner exécute l'éval), + test anti-régression.
+- **M13** (`798cde1`) — boucle Ralph durcie : gates de sécurité (bandit/gitleaks/pip-audit) avant commit, commit scopé (plus de `git add -A`), disjoncteurs, refus arbre sale + verrou ; README réconcilié. `bash -n` OK.
 
 ---
-*Prochain : Cycle 2 (prompts améliorés ci-dessus) — ou exécuter M5a/M12/M14.*
+
+## Cycle 2 — 2026-06-21
+
+**Pipeline** : 3 scouts **synchrones** (appels `Agent` directs, PAS de workflow background) → blind spots Cycle 1 : cache RBAC-safe, RGPD-Onyx, FinOps/streaming. → **3 trouvailles NOUVELLES** (M17–M19) + 1 secondaire (streaming exfil). Dédup via liste d'exclusion : **zéro re-signalement** d'item Cycle 1.
+
+**Validation des méta-améliorations Cycle 1** :
+- ✅ #1 (survivre à l'idle) — scouts synchrones : **aucun stall** (le background avait calé 2×).
+- ✅ #2 (dédup) — la liste d'exclusion a marché : aucune redite.
+- ✅ #5 (blind spots) — les 3 dimensions ajoutées ont chacune produit du neuf (incohérence clé-cache/portée ; doc DPO fausse vs audit-onyx ; budget tronqué + non-enforced).
+
+**Trouvailles** : M17 cache↔portée (justesse, MED) ; M18 doc RGPD DPO contredite par l'audit du dépôt (HIGH honnêteté) + chemin d'effacement Onyx réalisable ; M19 budget fenêtre-1000 + observe-only (events morts).
+
+### Méta-critique → améliorations Cycle 3
+1. **Coût** : chaque scout a consommé ~100–135k tokens (lectures profondes). Cycle 3 : borner les lectures (cibler 4–6 fichiers/scout) ou un 1er passage `Explore` (moins cher) avant lecture profonde.
+2. **Classe d'amélioration révélée par M18** : « honnêteté des docs compliance vs `audit-onyx/` ». Lancer un **balayage dédié** : croiser CHAQUE affirmation de `DPIA_TEMPLATE.md` / `RGPD.md` / `REGISTRE_TRAITEMENTS.md` contre `docs/audit-onyx/` — d'autres contradictions DPO-facing probables.
+3. **M7 toujours non vérifié** (gateway X-OIDC trusted-header) — le vérifier reste la plus haute valeur sécurité ouverte ; le faire en tête de Cycle 3.
+4. **Passer du « trouver » au « livrer offline »** : M17 (cache) et M19 (budget) sont **vérifiables offline** (pytest) — un cycle « fix-and-verify » sur l'un d'eux (PR scopée + scope-docs) prouverait la boucle de bout en bout sur du code de scope, pas seulement des docs/CI.
+
+**Bilan boucle (2 cycles)** : 19 missions cataloguées (dont ~10 nouvelles hors backlog) ; **5 corrections réellement livrées + CI-vertes** (M2, M5a, M12, M13, M14) ; 0 collision Ralph ; honnêteté tenue (sévérités bornées, claims non vérifiables marquées).
+
+---
+*Prochain : Cycle 3 (vérifier M7 ; balayage honnêteté compliance ; fix-and-verify M17/M19) — ou router M17–M19 vers Ralph.*

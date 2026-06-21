@@ -151,4 +151,34 @@
 Tout le reste touche un scope Ralph (→ Ralph) ou exige Docker/tenant pour la preuve.
 
 ---
-*Programme Cycle 1 — chief-orchestrator. Méta & améliorations Cycle 2 : voir `ORCHESTRATOR-LOG.md`.*
+
+# Cycle 2 — 2026-06-21 (3 scouts synchrones, blind spots Cycle 1)
+
+> Découvert par scout direct (cache RBAC-safe / RGPD-Onyx / FinOps-streaming), dédupliqué contre Cycle 1. 3 trouvailles NOUVELLES, sévérité bornée honnêtement par les scouts (aucune n'est un bypass d'ACL franc).
+
+### M17 · Cache : la portée de récupération côté client est absente de la clé *(NOUVEAU)*
+- **Scope** access-gateway · **Routing** ROUTE_TO_RALPH (ou PR_BRANCH) · **Effort** S · **Value** MEDIUM (justesse, **pas** une fuite ACL)
+- **Problème** : `make_cache_key` (`cache.py:299-309`) ne hache que `(schéma, périmètre **autorisé** trié, locale, message normalisé)`. Mais le client peut restreindre via `retrieval_options.filters.document_set` ; `onyx_proxy.enforce_document_sets` (`:64-77`) calcule `effective = intersection(demandé, autorisé)` — souvent un **sous-ensemble strict**. La réponse (scopée à `effective`) est stockée sous la clé du périmètre **autorisé complet** (`main.py:485-490`) → une requête ultérieure même-périmètre sans filtre obtient la réponse plus étroite (et inversement). Les autres `retrieval_options` (num_hits, time_cutoff, tags) sont aussi relayés à Onyx mais absents de la clé. **Pas** un franchissement d'ACL (le filtre par-doc `main.py:495-502` tourne à chaque hit), mais une incohérence cache↔requête (justesse). Le tier sémantique (`_perimeter_partition:337-346`) partage le défaut.
+- **Plan** : inclure dans l'identité de cache un hash canonique de la **portée de récupération effective** (les `retrieval_options` assainis, dont `document_set` = `effective`) via `extras` ; OU, par défaut sûr, traiter la présence d'un `document_set`/`retrieval_options` explicite comme un `should_bypass` (ne pas cacher les récupérations paramétrées). Documenter dans `docs/CACHE.md` que la clé couvre `(périmètre, locale, message[, portée])`. Test : 2 requêtes même-périmètre, `document_set` différent → pas de collision.
+- **Fichiers** : `access-gateway/app/cache.py`, `main.py`, `docs/CACHE.md`, `access-gateway/tests/test_integration_cache_acl.py`
+- **Agent** : `gsd-executor` · **Skills** : `update-scope-docs` (access-gateway) · **Vérif** : offline (pytest), pas de Docker.
+
+### M18 · RGPD Onyx : la doc DPO affirme un effacement cassé (honnêteté) + chemin d'effacement ciblé réalisable *(NOUVEAU)*
+- **Scope** security-governance (docs) + actions/deploy-ops (helper) · **Routing** doc **PR_BRANCH (revue DPO)** / helper ROUTE_TO_RALPH · **Effort** doc S / helper M · **Value** HIGH (honnêteté compliance)
+- **Problème (a, honnêteté)** : `docs/DPIA_TEMPLATE.md:54` (« Accès/rectification : admin Onyx ») et `docs/RGPD.md:52-53` (« Effacement via l'admin Onyx ») présentent à un DPO un contrôle **fonctionnel**, alors que l'audit **du dépôt lui-même** (`docs/audit-onyx/50-rgpd-governance.md:189-210`) montre que le hard-delete Onyx **échoue** dès que le sujet a un fichier/projet/clé API (FK `nullable=False` sans `ondelete`) → dégrade en soft-delete, PII conservée ; et **aucune** API de rectification n'est citée. Contradiction interne au dépôt, dans un document destiné au régulateur. **Problème (b, opportunité)** : l'audit énumère les **3 FK bloquantes exactes** + confirme que le chat CASCADE déjà → un helper d'effacement sujet ciblé est **réalisable** (≠ « `make destroy` tout »).
+- **Plan** : (a) ajouter un caveat honnête sourcé à l'audit dans les 2 docs DPO (« côté Onyx FOSS, hard-delete FK-cassé → soft-delete, PII conservée ; effacement fiable = `make destroy` tant qu'un correctif n'est pas livré ») — **revue DPO** car compliance-facing ; corriger la ligne `security-governance.md:83` (✅ ne vaut que pour la moitié actions). (b) Spike de vérif read-only du schéma Onyx **déployé** (l'audit s'appuie sur source non-vendorée, caveat §9) ; si confirmé, `scripts/onyx-erase-subject.sh` (style `backup.sh`) nullant les 3 child-rows + `delete_user_from_db` + scrub `SearchDoc.owners` + rapport de comptage. Docstring : « best-effort sur les tables auditées, PAS un art.17 prouvé exhaustif » (ne pas re-commettre le péché de (a)).
+- **Fichiers** : `docs/DPIA_TEMPLATE.md`, `docs/RGPD.md`, `docs/audit-reality/security-governance.md`, (helper) `scripts/onyx-erase-subject.sh`, `Makefile`
+- **Agent** : doc = `gsd-doc-writer` + revue DPO ; helper = `gsd-executor` (après spike `gsd-debugger`/`Explore`) · **Vérif** : la vérif schéma live exige l'image Onyx (Docker). · ⚠️ **sharpens RGPD-01** (non un doublon : RGPD-01 = « non outillé » ; ici = « doc DPO fausse » + « chemin enuméré »).
+
+### M19 · FinOps : budget tronqué à 1000 events + observe-only (events morts) *(NOUVEAU)*
+- **Scope** actions · **Routing** ROUTE_TO_RALPH · **Effort** S · **Value** MEDIUM (justesse + honnêteté ; mord dès qu'une rate-card est posée)
+- **Problème** : (1) `usage_tracker.summary()` agrège `estimated_cost_eur` sur `ORDER BY ... DESC LIMIT 1000` (`:171-179,195`) → au-delà de 1000 events (trivial), `spent_eur` devient une **fenêtre glissante**, pas le cumul ; le budget **sous-compte sans borne** et n'atteint jamais « exceeded » de façon fiable (gauges BUDGET_* incluses). (2) `check_budget` n'est **jamais** branché (grep : 2 appels, tous pour affichage) ; `_gate` n'applique que le kill-switch ; les types `budget_warning_triggered`/`service_emergency_stopped` sont **déclarés mais jamais émis** (`usage_tracker.py:33,36`) → un dépassement ne peut ni alerter ni stopper. Mock-as-real (events implorant une boucle d'enforcement inexistante).
+- **Plan** : (1) total budget via un agrégat dédié non-borné (`SELECT COALESCE(SUM(estimated_cost_eur),0) FROM usage_events`), garder le `LIMIT` pour la ventilation par type ; test régression > 1000 events. (2) soit **câbler l'enforcement** (hook dans `_gate`/dépendance des endpoints coûteux : `level=='exceeded'` + flag `ONIX_BUDGET_ENFORCE` → 403 + émettre `service_emergency_stopped` ; `warning` → `budget_warning_triggered`), soit **documenter « advisory »** et **supprimer** les 2 types morts.
+- **Fichiers** : `actions/app/usage_tracker.py`, `actions/app/cost_tracker.py`, `actions/app/main.py`, tests
+- **Agent** : `gsd-executor` · **Skills** : `update-scope-docs` (actions) · **Vérif** : offline (pytest), pas de Docker.
+
+### Secondaire (confiance moindre, à reclasser)
+- **Streaming** : `_hard_violation` (`streaming.py:137-152`) omet `confirms_inaccessible_resource` (règle d'exfiltration confirmant l'existence d'un dossier tiers), déféré au post-filtre soft de fin de flux → le texte confirmant *streame* avant l'override d'autorité. Le module documente ce trade-off pour les règles « soft » ; à revoir si cette règle d'exfil mérite le hard-path. (scout : secondaire).
+
+---
+*Programme chief-orchestrator. Cycle 1 (M1–M16) + Cycle 2 (M17–M19). Méta & auto-amélioration : `ORCHESTRATOR-LOG.md`.*
