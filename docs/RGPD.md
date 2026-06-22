@@ -41,9 +41,14 @@ Tout est sur des **volumes Docker locaux** — aucune externalisation.
 - **Traçabilité inviolable** (art. 5-2 accountability) : journal d'audit admin
   **chaîné HMAC** (tamper-evident) + endpoint de vérification
   (`actions/app/audit_log.py:88-195` ; `actions/app/main.py:872`).
-- **Chiffrement au repos des secrets connecteurs/LLM** : `ENCRYPTION_KEY_SECRET`
-  est désormais **généré et imposé au boot** (fail-loud si vide) — cf.
-  [`SECURITY.md`](../SECURITY.md) §5.
+- **Présence d'une clé de chiffrement des secrets** (`ENCRYPTION_KEY_SECRET`) :
+  **générée et imposée au boot** (fail-loud si vide). ⚠️ **FOSS vs EE (honnêteté
+  réglementaire)** : sur le déploiement **Onyx FOSS**, la fonction `_encrypt_string`
+  est l'**identité (no-op)** — la clé garantit la *présence* du dispositif et la
+  cohérence de rotation, **PAS** un chiffrement AES réel au repos (art. 32), qui
+  relève d'Onyx **EE**. Cf. [`SECURITY.md`](../SECURITY.md) §5 et
+  `docs/audit-onyx/50-rgpd-governance.md`. → Pour un chiffrement art. 32 **effectif**
+  des secrets en FOSS : chiffrement disque/volume (LUKS / Azure Disk Encryption).
 
 ## 4. Droits des personnes & rétention
 
@@ -57,9 +62,12 @@ On distingue **deux couches** (cf. [`SECURITY_RGPD_ACTIONS.md`](SECURITY_RGPD_AC
     politique d'exploitation (durée de conservation des chats/index).
 - **Couche applicative `onix-actions`** (audit OCR, docgen, tâches, usage) — la
   rétention et l'effacement art. 17 y sont **réellement implémentés** :
-  - **Effacement ciblé (art. 17)** : `POST /admin/retention/erase` efface
-    toutes les traces d'un sujet (par identifiant en clair → hashé, ou par hash),
-    y compris les `.docx` du sujet en mode S3
+  - **Effacement ciblé (art. 17)** : `POST /admin/retention/erase` efface les
+    traces d'un sujet (par identifiant en clair → hashé, ou par hash). ⚠️ Pour les
+    `.docx` du sujet en mode S3, le rapprochement est **best-effort par nom de
+    fichier** — le code lui-même le disclaim (cf. `docs/audit-reality/actions.md`) :
+    un document dont le nom **ne porte pas** l'identifiant peut **échapper** à
+    l'effacement automatique (à compléter par une purge manuelle si besoin).
     (`actions/app/retention.py:153-209` `erase_subject` ; endpoint
     `actions/app/main.py:924-931`). Le journal d'audit chaîné est **préservé**
     (il ne contient que des hash).

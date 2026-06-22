@@ -56,7 +56,7 @@
 
 | Rubrique | Contenu |
 |---|---|
-| **Finalité** | Administration du service (kill-switch, activation/désactivation de fonctions, blocage d'utilisateurs) et **journalisation de sécurité** (audit des actions admin, journal d'accès `document_accessed` / `rag_search_executed`). |
+| **Finalité** | Administration du service (kill-switch, activation/désactivation de fonctions, blocage d'utilisateurs) et **journalisation de sécurité** (audit des actions admin **chaîné HMAC**). ⚠️ **Honnêteté (art. 5-2)** : les helpers `document_accessed`/`rag_search_executed` (« qui-a-vu-quoi ») **existent dans le code mais ne sont PAS émis** sur le chemin RAG réel — l'access-gateway ne les appelle pas et `record_rag_search` n'a **aucun appelant prod** (seulement un test). Le journal d'accès couvre donc aujourd'hui les **flux `onix-actions`** (OCR/docgen/tâches/usage), **PAS** la lecture RAG/document. → à câbler côté gateway pour un trail de lecture complet (backlog OBS/SEC). |
 | **Base légale** | Intérêt légitime (sécurité du SI, traçabilité) / obligation de sécurité (art. 32). |
 | **Catégories de personnes** | Administrateurs ; utilisateurs (via traces d'accès **hashées**). |
 | **Catégories de données** | Identifiants **hashés** (admin, cible, utilisateur) ; horodatages ; action/portée/résultat ; motif **redacté**. **Aucune donnée en clair.** |

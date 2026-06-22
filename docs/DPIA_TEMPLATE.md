@@ -61,14 +61,14 @@
 | Mesure | Mise en œuvre (preuve `fichier:ligne`) |
 |---|---|
 | Redaction PII (logs + champs libres) | `actions/app/safe_logger.py:44-157` (JWT/IBAN/NIR/email/CB/tél) + anti-CRLF |
-| Authentification | Clé de service + **identité vérifiée** (HMAC/JWT) `actions/app/caller_identity.py:94-120` ; **clé admin séparée** obligatoire `actions/app/security.py:177-209` |
+| Authentification | Clé de service + **clé admin séparée obligatoire** (`actions/app/security.py:177-209`). ⚠️ **Identité vérifiée appelant (HMAC/JWT)** (`actions/app/caller_identity.py:94-120`) : **mécanisme présent mais OFF par défaut** (`ONIX_ACTIONS_REQUIRE_CALLER_IDENTITY=false`, fail-open via clé de service) → **à activer en prod** (cf. §5). |
 | Contrôle d'accès / quota | Gating admin (kill-switch/flags/blocage) **fail-closed** ; rate-limit par appelant (`actions/app/security.py`) |
 | Traçabilité inviolable | Journal d'audit **chaîné HMAC** + vérification `actions/app/audit_log.py:88-195` ; endpoint `actions/app/main.py:872` |
 | Chiffrement en transit | **STARTTLS** SMTP exigé `actions/app/notify.py:114-135` ; egress **https-only** + anti-SSRF `actions/app/dlp.py:88-150` |
 | Contrôle des flux sortants | **DLP allowlist** (webhook/tasks) `actions/app/dlp.py:88-150`, deny-all par défaut |
 | Limitation de conservation | **Purge TTL** configurable (`ONIX_RETENTION_DAYS`, défaut 365 j) `actions/app/retention.py:57-119` |
-| Effacement | **Effacement ciblé par sujet** (hash, + `.docx`/S3) `actions/app/retention.py:153-209` |
-| Chiffrement secrets connecteurs (au repos, base Onyx) | `ENCRYPTION_KEY_SECRET` **généré + imposé au boot** : `scripts/gen-secrets.sh:80`, `docker-compose.yml:59,118` (`:?`), `env.template:50` |
+| Effacement | **Effacement ciblé par sujet** (hash) `actions/app/retention.py:153-209` ; ⚠️ `.docx`/S3 = **best-effort par nom de fichier** (un doc non nommé d'après le sujet peut échapper à l'effacement) |
+| Présence clé secrets connecteurs (base Onyx) | `ENCRYPTION_KEY_SECRET` **généré + imposé au boot** : `scripts/gen-secrets.sh:80`, `docker-compose.yml:59,118` (`:?`), `env.template:50`. ⚠️ **FOSS** : `_encrypt_string` = **no-op (identité)** → garantit la *présence* du dispositif, **PAS** un chiffrement AES réel au repos (= Onyx EE). Art. 32 effectif = chiffrement disque (ligne ci-dessous). |
 | Souveraineté | 100 % local (Ollama/OpenSearch/MinIO), aucune télémétrie (`DISABLE_TELEMETRY=true`) |
 | Chiffrement au repos (disque hôte) | **TODO (décision client)** — recommandé : LUKS/BitLocker/FileVault sur l'hôte (non géré par l'outil) |
 

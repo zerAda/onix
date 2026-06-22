@@ -94,7 +94,12 @@
 | Journal d'audit chaîné HMAC + vérification | ✅ | `actions/app/audit_log.py:88-195` ; endpoint `main.py:872` | Réel. Repli SHA-256 si clé absente (toujours tamper-evident, sans garantie cryptographique). |
 | STARTTLS exigé (SMTP) | ✅ | `actions/app/notify.py:114-135` (défaut true, refus envoi en clair) | Réel ; non éprouvé contre un vrai serveur STARTTLS (test unitaire). |
 | Effacement ciblé `POST /admin/retention/erase` (art.17) | ✅ | `actions/app/main.py:924-931` → `retention.erase_subject:145-189` | Réel (DELETE par hash sujet). |
-| Identité d'appelant vérifiée (HMAC/JWT), clé admin séparée fail-closed | ✅ | `actions/app/caller_identity.py:94-120` ; `security.py:177-209` (403 si clé admin absente) | Réel, fail-closed par défaut. |
+| Identité d'appelant vérifiée (HMAC/JWT), clé admin séparée fail-closed | ✅/⚠️ | `actions/app/caller_identity.py:94-120` ; `security.py:177-209` (403 si clé admin absente) | **Clé admin** = fail-closed. **Identité appelant HMAC/JWT** = mécanisme présent mais **OFF par défaut** (`REQUIRE_CALLER_IDENTITY=false`, fail-open clé de service) — cf. M20-F4. |
+| **[M20-F1] Chiffrement secrets `ENCRYPTION_KEY_SECRET`** | ⚠️ **corrigé** | `RGPD.md:44`, `DPIA_TEMPLATE.md:71` | Présenté comme chiffrement art.32 « imposé au boot » → **caveat FOSS ajouté** : `_encrypt_string` = no-op (identité) ; la clé garantit la *présence*, **pas** l'AES réel (= EE). Aligné sur `SECURITY.md` + `audit-onyx/50-rgpd-governance.md`. |
+| **[M20-F2] Journal d'accès `document_accessed`/`rag_search_executed`** | ⚠️ **corrigé** | `REGISTRE_TRAITEMENTS.md:59` | Annoncé mais **non émis** sur le chemin RAG (gateway ne l'appelle pas ; `record_rag_search` 0 appelant prod) → caveat : le trail couvre les flux **actions** (OCR/docgen), **pas** la lecture RAG. |
+| **[M20-F3] Effacement « toutes les traces … .docx »** | ⚠️ **corrigé** | `RGPD.md:60`, `DPIA_TEMPLATE.md:70` | `.docx`/S3 = **best-effort par nom de fichier** (le code le disclaim) → « toutes » remplacé par le caveat best-effort. |
+| **[M20-F4] Identité vérifiée « déjà en place »** | ⚠️ **corrigé** | `DPIA_TEMPLATE.md:64` | Mécanisme présent mais **OFF par défaut** → marqué « à activer en prod (§5) ». |
+| **M20 — verdict final** | ⏳ **humain** | — | Corrections d'**honnêteté** appliquées sur PR branch (pas de hot-patch, conforme au routing). **Revue DPO obligatoire** avant publication régulateur — la compliance se valide par **relecture humaine**, pas de test auto. |
 
 ## `ARCHITECTURE.md` (racine) & `docs/ARCHITECTURE.md`
 
