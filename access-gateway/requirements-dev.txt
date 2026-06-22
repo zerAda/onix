@@ -1,3 +1,5 @@
 # Dépendances de test (non embarquées dans l'image).
 -r requirements.txt
-pytest==8.3.4
+# pytest relevé 8.3.4 → 9.0.3 pour purger CVE-2025-71176 (gate pip-audit --strict
+# = 0 CVE). Aligné sur tests/rag/requirements.txt (même cible 9.0.3, compat validée).
+pytest==9.0.3
