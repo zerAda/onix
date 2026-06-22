@@ -4,10 +4,11 @@ name: CD
 # `onix-actions` (taggée + digestée) vers GitHub Container Registry (GHCR).
 # Déclenchement MANUEL (workflow_dispatch) ou sur tag de version `v*`.
 #
-# Supply-chain : l'image est SCANNÉE (trivy) AVANT push ; un SBOM (syft) est
-# généré et archivé en ARTEFACT de workflow. NB : aucun job `gh release` n'existe,
-# donc le SBOM n'est PAS attaché à une GitHub Release (corrigé 2026-06-21 : la
-# mention « attaché à la release » était fausse). Voir backlog M12 (signature cosign).
+# Supply-chain : l'image est SCANNÉE (trivy) AVANT push, un SBOM (syft) est généré
+# et archivé en ARTEFACT, puis l'image poussée est SIGNÉE par **cosign keyless**
+# (OIDC Sigstore, par digest — CICD-01/M12). NB : aucun job `gh release` n'existe,
+# donc le SBOM n'est PAS attaché à une GitHub Release (la mention « attaché à la
+# release » était fausse, corrigée). Reste : épingler `cosign-installer` au SHA.
 on:
   workflow_dispatch:
     inputs:
@@ -23,6 +24,7 @@ permissions:
   contents: read
   packages: write          # push vers GHCR.
   security-events: write   # upload SARIF.
+  id-token: write          # OIDC : signature cosign keyless (Sigstore/Fulcio).
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/onix-actions
@@ -103,6 +105,20 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # --- Signature cosign KEYLESS (OIDC Sigstore) — CICD-01 / M12 -----------
+      # Signe l'image par DIGEST immuable avec l'identité OIDC du workflow : Fulcio
+      # délivre un certificat éphémère, Rekor journalise la signature → AUCUNE clé
+      # à gérer/stocker. Vérification côté consommateur :
+      #   cosign verify "$IMAGE@<digest>" \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/.+"
+      - name: Installer cosign
+        if: steps.mode.outputs.push == 'true'
+        uses: sigstore/cosign-installer@v3.7.0  # TODO supply-chain : épingler au SHA du tag (cohérence avec les autres actions)
+      - name: Signer l'image (cosign keyless, par digest)
+        if: steps.mode.outputs.push == 'true'
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
 
       - name: Récapitulatif (tags + digest)
         run: |

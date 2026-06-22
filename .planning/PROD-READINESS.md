@@ -4,7 +4,7 @@
 
 ## ⛔ VERDICT : NON-GO pour la production (mais Cycles 1+2 réduisent nettement l'écart)
 
-**Score : 0 GO · 4 PARTIAL · 3 NO-GO** (était 0/1/6 → 0/3/4 après C1). onix n'est **pas** encore « tout monté, vérifié et robuste » pour un go-live, mais les **Cycles 1 (sécurité) + 2 (fiabilité/observabilité)** ont fermé **7 blocages P0** (preuves ci-dessous). La couche logicielle est mature et bien testée *hors-ligne* ; restent (a) la **compliance + backup chiffré + supply-chain release** (Cycles 4), (b) le **mur RAG #12** (modèle/GPU, Cycle 3), et (c) **la pile complète exercée runtime** (boot prouvé sain sur Azure, cf. RUNTIME-EVIDENCE.md).
+**Score : 0 GO · 5 PARTIAL · 2 NO-GO** (était 0/1/6 → 0/3/4 après C1 → 0/4/3 après C2 → cosign passe la supply-chain en PARTIAL). onix n'est **pas** encore « tout monté, vérifié et robuste » pour un go-live, mais les **Cycles 1 (sécurité) + 2 (fiabilité/observabilité)** ont fermé **7 blocages P0** (preuves ci-dessous). La couche logicielle est mature et bien testée *hors-ligne* ; restent (a) la **compliance + backup chiffré + supply-chain release** (Cycles 4), (b) le **mur RAG #12** (modèle/GPU, Cycle 3), et (c) **la pile complète exercée runtime** (boot prouvé sain sur Azure, cf. RUNTIME-EVIDENCE.md).
 
 ### ✅ Cycle 2 — Fiabilité & observabilité : LANDÉ (branche `prod/cycle1-securite`, gates locaux verts)
 | Blocker | Fix | Preuve |
@@ -36,7 +36,7 @@ Gates locaux : `actions` 90✅/5⏭ · `gateway` 339✅ · `bandit` 0 medium+ ·
 | 4 | Fiabilité / backup / restore | ⛔ **NO-GO** | **#6** résilience restart : invariants `restart:always`/`start_period`/ordre **assertés** (Cycle 2). Restent BLOQUANTS : backup = tar à froid (pas `pg_dump`), **non chiffré** ; restore round-trip prouvé sain sur Azure mais pas de WAL/chiffrement. |
 | 5 | Observabilité / alerting | 🟡 **PARTIAL** (était NO-GO) | **M4 fermé** : alertes livrées pour de vrai (webhook rendu **fail-closed**, refus sans URL) ⇒ plus de no-op. Restent : couverture d'alertes sync-ACL/rupture-audit (OBS-03/05), monitoring OFF par défaut (OBS-02), livraison E2E `amtool` (runtime). |
 | 6 | Conformité (RGPD) | ⛔ **NO-GO** | 4 **mensonges** non corrigés dans les docs DPO (chiffrement FOSS no-op vendu comme art.32 ; journal « qui-a-vu-quoi » jamais émis sur le chemin RAG) ; effacement Onyx art.17 FK-cassé, non outillé. |
-| 7 | Supply chain / release | ⛔ **NO-GO** | Gate release ROUGE (CVE), images **non signées** (pas de cosign), base Docker non digest-pinnée, gitleaks téléchargé sans checksum. |
+| 7 | Supply chain / release | 🟡 **PARTIAL** (était NO-GO) | Gate CVE **repassé vert** (SUPPLY) ; images **signées cosign keyless** (CICD-01, `cd.yml`). Restent : épingler `cosign-installer` au SHA, base Docker digest-pinnée (M9), gitleaks checksum. |
 
 ## Blocages — chemin vers GO
 
