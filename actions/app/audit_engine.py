@@ -40,7 +40,8 @@ _FIELD_ALIASES: Dict[str, List[str]] = {
     "date_effet": ["date d effet", "date effet", "prise d effet", "effet"],
     "numero_contrat": [
         "numero de contrat", "numero contrat", "n contrat", "no contrat",
-        "numero police", "police", "contrat",
+        "numero police", "police", "numero dossier", "no dossier", "n dossier",
+        "contrat",
     ],
     "motif_operation": [
         "motif operation", "motif", "nature operation", "objet",
@@ -130,12 +131,23 @@ def extract_canonical_fields(ocr_result: dict) -> Dict[str, str]:
     (libellés arbitraires). Ne lève jamais."""
     out: Dict[str, str] = {}
     fields = ocr_result.get("fields", {}) if isinstance(ocr_result, dict) else {}
+    # Pour chaque champ canonique, on retient la MEILLEURE clé (étiquette exacte,
+    # ou la plus courte) et non la première rencontrée : ainsi « Client » l'emporte
+    # sur une phrase parasite (« …Assistant Client 360 ») qui contient « client ».
+    best_score: Dict[str, int] = {}
     for raw_key, raw_val in fields.items():
         canonical = alias_field(raw_key)
-        if canonical and canonical not in out:
-            value = _value_of(raw_val)
-            if value:
-                out[canonical] = value
+        if not canonical:
+            continue
+        value = _value_of(raw_val)
+        if not value:
+            continue
+        nk = _norm_key(raw_key)
+        exact = any(_norm_key(a) == nk for a in _FIELD_ALIASES[canonical])
+        score = 0 if exact else len(nk)  # plus petit = meilleure étiquette
+        if canonical not in out or score < best_score.get(canonical, 1 << 30):
+            out[canonical] = value
+            best_score[canonical] = score
     # Fallback géométrique dans les tableaux pour le plafond.
     if "plafond_hospitalisation" not in out:
         v = _find_in_tables(

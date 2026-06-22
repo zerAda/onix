@@ -102,6 +102,23 @@ def test_reconciliation_ecart_cotisation_via_si():
     assert cot["statut"] == "MISMATCH"
 
 
+def test_extraction_ignore_disclaimer_et_alias_dossier():
+    """Régression (contrat POC réel) : la phrase parasite « …Assistant Client 360 »
+    ne doit PAS écraser nom_client (étiquette exacte « Client » préférée), et
+    « Numero dossier » alimente numero_contrat."""
+    from app.audit_engine import extract_canonical_fields
+    ocr = {"fields": {
+        "DOCUMENT DE TEST (POC Assistant Client 360)": "donnees fictives",
+        "Client": "CLIENT BETA",
+        "Numero dossier": "BETA-201",
+        "Cotisation": "12 500 EUR / an",
+    }}
+    f = extract_canonical_fields(ocr)
+    assert f["nom_client"] == "CLIENT BETA"
+    assert f["numero_contrat"] == "BETA-201"
+    assert f["cotisation_annuelle"] == "12 500 EUR / an"
+
+
 def test_storage_token_fallback_statique(monkeypatch):
     from app.fabric_reference import _storage_token
     monkeypatch.delenv("ONIX_FABRIC_SP_CLIENT_ID", raising=False)
