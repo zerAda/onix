@@ -41,11 +41,32 @@ case "$OS" in
     CPU_MODEL="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo Apple)"
     bytes="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
     RAM_GB=$(( (bytes + 512 * 1024 * 1024) / 1024 / 1024 / 1024 )) ;;
-  *) echo "OS non géré ($OS). Sous Windows : detect-hardware.ps1"; exit 1 ;;
+  *)
+    # OS non géré (ex. MINGW/Git Bash) : on N'AVORTE QUE si la RAM n'est PAS
+    # forcée. Avec ONIX_FORCE_RAM_GB on calcule pour une machine CIBLE depuis
+    # n'importe quel OS (dimensionnement à distance + tests autonomes du calcul).
+    if ! { case "${ONIX_FORCE_RAM_GB:-}" in ''|*[!0-9]*) false ;; *) [ "${ONIX_FORCE_RAM_GB:-0}" -ge 1 ] ;; esac; }; then
+      echo "OS non géré ($OS). Sous Windows : detect-hardware.ps1"; exit 1
+    fi
+    CPU_MODEL="cible forcée (ONIX_FORCE_*)" ;;
 esac
 [ "$RAM_GB" -lt 1 ] && RAM_GB=1; [ "$CORES" -lt 1 ] && CORES=1
 
-if command -v nvidia-smi >/dev/null 2>&1; then
+# ---- Surcharges de TEST / dimensionnement à distance ------------------------
+# Permettent de calculer le profil pour une machine CIBLE depuis une autre (ou
+# de tester la logique sans toucher au vrai matériel). Fail-closed : une valeur
+# non entière > 0 est IGNORÉE (on garde la détection réelle) plutôt qu'avalée.
+# Non utilisés en exploitation normale (variables absentes = détection native).
+is_pos_int() { case "$1" in ''|*[!0-9]*) return 1 ;; *) [ "$1" -ge 1 ] ;; esac; }
+is_pos_int "${ONIX_FORCE_RAM_GB:-}"  && RAM_GB="$ONIX_FORCE_RAM_GB"
+is_pos_int "${ONIX_FORCE_CORES:-}"   && CORES="$ONIX_FORCE_CORES"
+
+if [ "${ONIX_FORCE_GPU:-}" = "none" ]; then
+  GPU_KIND="none"; GPU_NAME=""; VRAM_GB=0
+elif [ "${ONIX_FORCE_GPU:-}" = "nvidia" ]; then
+  GPU_KIND="nvidia"; GPU_NAME="NVIDIA (forcé ONIX_FORCE_GPU)"
+  is_pos_int "${ONIX_FORCE_VRAM_GB:-}" && VRAM_GB="$ONIX_FORCE_VRAM_GB"
+elif command -v nvidia-smi >/dev/null 2>&1; then
   GPU_KIND="nvidia"
   GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)"
   vram_mb="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1)"
@@ -55,7 +76,11 @@ elif [ "$OS" = "Darwin" ] && [ "$ARCH" = "arm64" ]; then
 elif command -v lspci >/dev/null 2>&1 && lspci 2>/dev/null | grep -qiE 'amd/ati|radeon'; then
   GPU_KIND="amd"; GPU_NAME="$(lspci 2>/dev/null | grep -iE 'vga|3d|display' | grep -iE 'amd|radeon' | head -n1 | cut -d: -f3-)"
 fi
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+# `docker info` purement INFORMATIF (champ DOCKER_GPU) : sans effet sur le profil
+# calculé. On le SAUTE si le matériel est forcé (dimensionnement à distance/tests)
+# ou via ONIX_SKIP_DOCKER=1 — évite un appel lent/bloquant au démon Docker.
+if [ -z "${ONIX_FORCE_GPU:-}" ] && [ "${ONIX_SKIP_DOCKER:-0}" != "1" ] \
+   && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   if [ "$GPU_KIND" = nvidia ] && docker info 2>/dev/null | grep -qi 'nvidia'; then DOCKER_GPU="oui"
   elif [ "$GPU_KIND" = nvidia ] && command -v nvidia-ctk >/dev/null 2>&1; then DOCKER_GPU="probable (nvidia-ctk présent)"; fi
 fi
@@ -110,7 +135,16 @@ AVAIL_OLLAMA=$(( RAM_GB - RES - BASE_ONYX )); [ "$AVAIL_OLLAMA" -lt 1 ] && AVAIL
 AVAIL=$(( RAM_GB - RES )); [ "$AVAIL" -lt 1 ] && AVAIL=1   # RAM utile globale (seuils PERF)
 
 # Plus gros modèle qui TIENT dans AVAIL_OLLAMA (CPU) ou la VRAM (GPU).
-# Besoin mémoire approx. en Go (poids quantifiés Q4 + contexte de travail).
+# -----------------------------------------------------------------------------
+# IMPORTANT (corrige le bug OOM #10, prouvé au runtime Azure) : le 2e nombre est
+# l'EMPREINTE RAM RÉELLE EN GÉNÉRATION, pas le simple poids quantifié sur disque.
+# Mesuré sur qwen2.5:14b (CPU, KV q8_0, gros num_ctx) : ~9 Go modèle + ~3 Go KV
+# + ~8 Go prompt-cache/buffers ≈ 20 Go ; un plafond à 12 Go faisait OOM-killer
+# (SIGKILL) llama-server sur un VRAI prompt RAG. On dimensionne donc au PIC réel,
+# avec une petite marge ajoutée plus bas. Règle empirique CPU : ≈ 1,5–1,8× le
+# poids Q4 (le KV + le prompt-cache dominent sur un contexte RAG long).
+#   1B≈3 · 3B≈5 · 7B≈12 · 14B≈22 · 32B≈40  (Go, CPU, contexte RAG réaliste).
+# En GPU les poids vont en VRAM → l'empreinte RAM HÔTE reste faible (≈ 4 Go).
 pick_model() {
   if [ "$USE_GPU" = 1 ]; then
     if   [ "$VRAM_GB" -ge 24 ]; then echo "qwen2.5:32b-instruct 22"
@@ -118,12 +152,14 @@ pick_model() {
     elif [ "$VRAM_GB" -ge 8 ];  then echo "llama3.1:8b 8"
     else echo "llama3.2:3b 4"; fi
   else
-    # CPU : choix sur AVAIL_OLLAMA (RAM réellement libre), pas la RAM brute.
-    # Sur 16 Go (AVAIL_OLLAMA≈7) → qwen2.5:7b (prudent) ; jamais 8b épinglé.
-    if   [ "$AVAIL_OLLAMA" -ge 18 ]; then echo "qwen2.5:14b-instruct 11"
-    elif [ "$AVAIL_OLLAMA" -ge 7 ];  then echo "qwen2.5:7b-instruct 6"
-    elif [ "$AVAIL_OLLAMA" -ge 4 ];  then echo "llama3.2:3b 4"
-    else echo "llama3.2:1b 2"; fi
+    # CPU : choix sur AVAIL_OLLAMA (RAM réellement libre), pas la RAM brute, et
+    # sur l'empreinte PIC réelle (anti-OOM). Un 14B exige ≥ ~22 Go libres pour
+    # Ollama (sinon il OOM en génération) → on ne le sélectionne qu'à ce seuil.
+    # Sur 16 Go (AVAIL_OLLAMA≈7) → llama3.2:3b (prudent) ; 7B veut ≥ ~12 Go.
+    if   [ "$AVAIL_OLLAMA" -ge 22 ]; then echo "qwen2.5:14b-instruct 22"
+    elif [ "$AVAIL_OLLAMA" -ge 12 ]; then echo "qwen2.5:7b-instruct 12"
+    elif [ "$AVAIL_OLLAMA" -ge 5 ];  then echo "llama3.2:3b 5"
+    else echo "llama3.2:1b 3"; fi
   fi
 }
 read -r MODEL MODEL_NEED <<EOF
@@ -134,10 +170,11 @@ OLLAMA_FLOOR=$([ "$LOW" = 1 ] && echo $((2*GB)) || echo $((3*GB)))
 if [ "$USE_GPU" = 1 ]; then
   OLLAMA_MEM=$((4*GB))                       # poids en VRAM → peu de RAM hôte
 else
-  # Plafond RAM Ollama (Mo) = besoin réel du modèle + 1 Go de mou de contexte,
-  # borné par ce qui reste (un modèle dépassant son plafond serait OOM-killed).
-  OLLAMA_MEM=$(( (MODEL_NEED + 1) * GB ))
-  [ "$OLLAMA_MEM" -gt "$(( (AVAIL_OLLAMA + 1) * GB ))" ] && OLLAMA_MEM=$(( (AVAIL_OLLAMA + 1) * GB ))
+  # Plafond RAM Ollama (Mo) = empreinte PIC réelle du modèle (MODEL_NEED inclut
+  # déjà KV + prompt-cache, cf. pick_model) + 2 Go de marge de sécurité, borné
+  # par ce qui reste réellement libre. Sous-dimensionner ici = SIGKILL (#10).
+  OLLAMA_MEM=$(( (MODEL_NEED + 2) * GB ))
+  [ "$OLLAMA_MEM" -gt "$(( AVAIL_OLLAMA * GB ))" ] && OLLAMA_MEM=$(( AVAIL_OLLAMA * GB ))
   [ "$OLLAMA_MEM" -lt "$OLLAMA_FLOOR" ] && OLLAMA_MEM=$OLLAMA_FLOOR
 fi
 
@@ -170,12 +207,24 @@ HEADROOM=$(( RAM_MB - SUM_LIMITS ))
 # --- COHÉRENCE modèle ↔ plafond Ollama ---------------------------------------
 # Si la garantie anti-OOM a rogné le plafond Ollama sous le besoin du modèle
 # choisi, on RÉTROGRADE le modèle pour qu'il tienne (sinon OOM-kill au chargement).
+# Seuils ALIGNÉS sur l'empreinte PIC réelle de pick_model (anti-OOM #10) :
+# 14B≈22 Go · 7B≈12 Go · 3B≈5 Go. On ne « promeut » un modèle que si le plafond
+# Ollama FINAL couvre réellement son pic de génération.
 if [ "$USE_GPU" != 1 ]; then
   om_gb=$(( OLLAMA_MEM / GB ))
-  if   [ "$om_gb" -ge 12 ]; then MODEL="qwen2.5:14b-instruct"
-  elif [ "$om_gb" -ge 7 ];  then MODEL="qwen2.5:7b-instruct"
-  elif [ "$om_gb" -ge 4 ];  then MODEL="llama3.2:3b"
+  if   [ "$om_gb" -ge 22 ]; then MODEL="qwen2.5:14b-instruct"
+  elif [ "$om_gb" -ge 12 ]; then MODEL="qwen2.5:7b-instruct"
+  elif [ "$om_gb" -ge 5 ];  then MODEL="llama3.2:3b"
   else MODEL="llama3.2:1b"; fi
+fi
+
+# --- AVERTISSEMENT fail-closed informatif (petite RAM) -----------------------
+# Si même le plus petit modèle CPU n'a pas son pic garanti (RAM vraiment juste),
+# on le DIT BRUYAMMENT (jamais d'avalement silencieux) : l'exploitant sait que la
+# génération peut OOM et doit réduire le contexte / ajouter de la RAM / un GPU.
+RAM_WARN=""
+if [ "$USE_GPU" != 1 ] && [ "$(( OLLAMA_MEM / GB ))" -lt 3 ]; then
+  RAM_WARN="RAM trop juste pour Ollama (plafond $(( OLLAMA_MEM / GB )) Go < 3 Go) : risque d'OOM en génération même sur llama3.2:1b. Ajoutez de la RAM, baissez OLLAMA_CONTEXT_LENGTH, ou utilisez un GPU."
 fi
 
 # --- Réglages Ollama liés à la RAM utile -------------------------------------
@@ -223,6 +272,7 @@ line
 [ "$GPU_KIND" = apple ] && { bold "  macOS : Docker n'accède pas au GPU → CPU en conteneur."; echo "  Pour le GPU Metal, lancez Ollama en NATIF (cf. docs/RUNBOOK.md)."; line; }
 [ "$USE_GPU" = 1 ] && bold "  PROFIL : GPU NVIDIA — lancez : make up GPU=1" || bold "  PROFIL : CPU"
 [ "$PERF_OK" = 1 ] && echo "  Ressources confortables → indexation dédiée possible : make up PERF=1"
+[ -n "$RAM_WARN" ] && { printf '\033[1;33m  ⚠ %s\033[0m\n' "$RAM_WARN"; }
 line
 
 emit() { printf '    %s=%s\n' "$1" "$2"; }

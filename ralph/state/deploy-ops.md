@@ -11,6 +11,9 @@
 | D4 | P2 | Durcissement Helm partiel (non-root/seccomp seulement gateway) | A5 | ✅ (seccomp partout ; non-root où l'image le permet) |
 | D4b | P2 | Durcissement Helm restant : NetworkPolicy OPT-IN + readOnlyRootFS OPT-IN | A3/A5 | ✅ (itér. 2 ; OPT-IN défaut OFF, rendu inchangé) |
 | D5 | P2 | RUNBOOK §7 : `inference_` vs `indexing_model_server` | A1 | ✅ |
+| D6 | P0 | **#10 OOM** : `make tune` fixait `OLLAMA_MEM_LIMIT=12g` < empreinte réelle 14B (~20 Go) → SIGKILL en génération | A4/A6 | ✅ (itér. 3 ; 14B → ≥24g, prouvé hors-runtime) |
+| D7 | P0 | **#9 provider** : `llm_provider` Onyx vide après déploiement → chat « No default LLM model found » | A1/A6 | ✅ (itér. 3 ; `seed-provider.sh` + cible `seed-provider`, idempotent fail-closed) |
+| D8 | P1 | **#6 résilience** : `restart: always` n'a pas rattrapé un kill api_server PENDANT l'init | A4/A6 | ◑ (itér. 3 ; invariants restart/healthcheck assertés en test + documentés ; reprise Docker = runtime only) |
 
 ## Journal
 | Itér. | Date | Item | Correctif | Gates | SHA |
@@ -24,6 +27,20 @@
 | 2 | 2026-06-18 | D4b | NetworkPolicy OPT-IN (`templates/networkpolicy.yaml`, default-deny ingress + allow par composant) ; `networkPolicy.enabled=false` défaut | lint OK ; tpl×3 défaut → NetworkPolicy=0 ; `--set …enabled=true` → 8 (9 si gateway) ; docs défaut=36 inchangé ; gitleaks 0 | 58ba627 |
 | 2 | 2026-06-18 | D4b | readOnlyRootFS OPT-IN access-gateway (rootfs RO + emptyDir /tmp) ; `accessGateway.readOnlyRootFilesystem=false` défaut ; PAS sur Onyx/Ollama/actions | lint OK ; OFF→rendu inchangé ; ON→securityContext+emptyDir rendus | 58ba627 |
 | 3 | 2026-06-22 | M7 | **Preuve de transit proxy (compose prod)** : `nginx.prod.conf` injecte `X-OIDC-Proxy-Secret` = `GATEWAY_PROXY_SHARED_SECRET` (monté en TEMPLATE + `NGINX_ENVSUBST_FILTER` pour ne substituer QUE cette variable ; `$vars` nginx intacts) + strip `X-OIDC-Proxy-Secret` sur `/api` et `/` ; `Caddyfile` strip l'en-tête au bord ; `docker-compose.prod.yml` câble l'env (nginx + access-gateway, `:?` requis) ; `env.prod.template` + `gen-secrets.sh` (case prod) génèrent le secret. Couvre le volet **compose/proxy** de l'anti-spoofing évoqué en D1 (le volet code gateway est dans scope access-gateway, M7). | `docker compose -f … config` **exit 0** (clés rendues) ; gitleaks attendu 0 (secret en env, pas en repo) | _voir commits_ |
+| 3 | 2026-06-22 | D6 | `detect-hardware.sh`+`.ps1` : empreinte modèle = PIC réel (KV+prompt-cache), pas poids Q4 ; 14B→24g/48-64 Go ; seuils sélection alignés (22/12/5) ; avert. fail-closed petite RAM ; surcharges `ONIX_FORCE_*`/`ONIX_SKIP_DOCKER` (test) | `test_detect_hardware_mem.py` (6 tests OK) ; 64 Go→24g, 32→14g, 16→5g, somme<RAM partout | (worktree) |
+| 3 | 2026-06-22 | D7 | `scripts/seed-provider.sh` + cible Make `seed-provider` (idempotent, fail-closed, auth admin par env) ; intégré au flux up-local-prod (message) | `test_seed_provider.py` (5 tests OK : idempotence, création, force, fail-closed, modèle chat) | (worktree) |
+| 3 | 2026-06-22 | D8 | Invariants restart/healthcheck des services critiques assertés (`docker-compose.prod-local.yml`) + documentés (#6) | `test_restart_policy.py` (4 tests OK) | (worktree) |
+
+## Runtime-only (dit honnêtement — pas « testé »)
+- **#10** : que le 14B se charge ET génère SANS OOM avec `OLLAMA_MEM_LIMIT=24g` —
+  prouvé une fois sur la VM (40g) ; le calcul corrigé donne 24g (≥ empreinte 20 Go)
+  mais le non-OOM à 24g précis reste à reconfirmer sur pile réelle.
+- **#9** : le CONTRAT exact de l'API admin Onyx (`/admin/llm/provider` champs/forme,
+  `/auth/login`) — le seed est codé d'après l'évidence runtime + l'API Onyx 4.x,
+  mais la persistance réelle en base `llm_provider` n'est validable qu'en live.
+- **#6** : la REPRISE Docker après un kill ciblé pendant l'init (course étroite) —
+  comportement du démon, non simulable sans démarrer la pile. On verrouille les
+  INVARIANTS de config (restart always + start_period + ordered start) en statique.
 
 ## Questions bloquantes / décisions structurantes
 - **D1 (ingress AKS)** : le forward-auth oauth2-proxy + l'anti-usurpation (strip
