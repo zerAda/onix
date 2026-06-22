@@ -143,23 +143,25 @@ AVAIL=$(( RAM_GB - RES )); [ "$AVAIL" -lt 1 ] && AVAIL=1   # RAM utile globale (
 # (SIGKILL) llama-server sur un VRAI prompt RAG. On dimensionne donc au PIC réel,
 # avec une petite marge ajoutée plus bas. Règle empirique CPU : ≈ 1,5–1,8× le
 # poids Q4 (le KV + le prompt-cache dominent sur un contexte RAG long).
-#   1B≈3 · 3B≈5 · 7B≈12 · 14B≈22 · 32B≈40  (Go, CPU, contexte RAG réaliste).
+#   gemma3:1b≈3 · gemma3:4b≈7 · gemma3:12b≈18 · gemma3:27b≈30  (Go, CPU, RAG réaliste).
 # En GPU les poids vont en VRAM → l'empreinte RAM HÔTE reste faible (≈ 4 Go).
 pick_model() {
+  # Famille GEMMA3 par défaut (chat) : gemma3 répond de façon SOURCEE a partir du
+  # contexte recupere (prouve live, RUNTIME-EVIDENCE #12) la ou qwen2.5:14b ratait
+  # le tool-calling agentique. Embedding par defaut = embeddinggemma (cf. emit).
   if [ "$USE_GPU" = 1 ]; then
-    if   [ "$VRAM_GB" -ge 24 ]; then echo "qwen2.5:32b-instruct 22"
-    elif [ "$VRAM_GB" -ge 12 ]; then echo "qwen2.5:14b-instruct 12"
-    elif [ "$VRAM_GB" -ge 8 ];  then echo "llama3.1:8b 8"
-    else echo "llama3.2:3b 4"; fi
+    if   [ "$VRAM_GB" -ge 24 ]; then echo "gemma3:27b 30"
+    elif [ "$VRAM_GB" -ge 12 ]; then echo "gemma3:12b 12"
+    elif [ "$VRAM_GB" -ge 8 ];  then echo "gemma3:4b 8"
+    else echo "gemma3:4b 4"; fi
   else
     # CPU : choix sur AVAIL_OLLAMA (RAM réellement libre), pas la RAM brute, et
-    # sur l'empreinte PIC réelle (anti-OOM). Un 14B exige ≥ ~22 Go libres pour
-    # Ollama (sinon il OOM en génération) → on ne le sélectionne qu'à ce seuil.
-    # Sur 16 Go (AVAIL_OLLAMA≈7) → llama3.2:3b (prudent) ; 7B veut ≥ ~12 Go.
-    if   [ "$AVAIL_OLLAMA" -ge 22 ]; then echo "qwen2.5:14b-instruct 22"
-    elif [ "$AVAIL_OLLAMA" -ge 12 ]; then echo "qwen2.5:7b-instruct 12"
-    elif [ "$AVAIL_OLLAMA" -ge 5 ];  then echo "llama3.2:3b 5"
-    else echo "llama3.2:1b 3"; fi
+    # sur l'empreinte PIC réelle (anti-OOM). gemma3:12b (8.1 Go Q4) exige ≥ ~18 Go
+    # libres pour Ollama (poids + KV + prompt-cache sur contexte RAG) ; gemma3:4b
+    # veut ≥ ~7 Go. Sur 16 Go (AVAIL_OLLAMA≈7) → gemma3:4b.
+    if   [ "$AVAIL_OLLAMA" -ge 18 ]; then echo "gemma3:12b 18"
+    elif [ "$AVAIL_OLLAMA" -ge 7 ];  then echo "gemma3:4b 7"
+    else echo "gemma3:1b 3"; fi
   fi
 }
 read -r MODEL MODEL_NEED <<EOF
@@ -208,14 +210,13 @@ HEADROOM=$(( RAM_MB - SUM_LIMITS ))
 # Si la garantie anti-OOM a rogné le plafond Ollama sous le besoin du modèle
 # choisi, on RÉTROGRADE le modèle pour qu'il tienne (sinon OOM-kill au chargement).
 # Seuils ALIGNÉS sur l'empreinte PIC réelle de pick_model (anti-OOM #10) :
-# 14B≈22 Go · 7B≈12 Go · 3B≈5 Go. On ne « promeut » un modèle que si le plafond
-# Ollama FINAL couvre réellement son pic de génération.
+# gemma3:12b≈18 Go · gemma3:4b≈7 Go · gemma3:1b≈3 Go. On ne « promeut » un modèle
+# que si le plafond Ollama FINAL couvre réellement son pic de génération.
 if [ "$USE_GPU" != 1 ]; then
   om_gb=$(( OLLAMA_MEM / GB ))
-  if   [ "$om_gb" -ge 22 ]; then MODEL="qwen2.5:14b-instruct"
-  elif [ "$om_gb" -ge 12 ]; then MODEL="qwen2.5:7b-instruct"
-  elif [ "$om_gb" -ge 5 ];  then MODEL="llama3.2:3b"
-  else MODEL="llama3.2:1b"; fi
+  if   [ "$om_gb" -ge 18 ]; then MODEL="gemma3:12b"
+  elif [ "$om_gb" -ge 7 ];  then MODEL="gemma3:4b"
+  else MODEL="gemma3:1b"; fi
 fi
 
 # --- AVERTISSEMENT fail-closed informatif (petite RAM) -----------------------
@@ -277,7 +278,7 @@ line
 
 emit() { printf '    %s=%s\n' "$1" "$2"; }
 echo "  Réglages optimaux pour CETTE machine :"; echo
-emit OLLAMA_MODELS_TO_PULL "$MODEL nomic-embed-text"
+emit OLLAMA_MODELS_TO_PULL "$MODEL embeddinggemma"
 emit OLLAMA_FLASH_ATTENTION 1
 emit OLLAMA_KV_CACHE_TYPE q8_0
 emit OLLAMA_KEEP_ALIVE "$KEEP_ALIVE"
@@ -322,7 +323,7 @@ set_force() { # set_force KEY VALUE (remplace ou ajoute ; secrets non touchés)
     awk -v k="$1" -v v="$2" -F= '$1==k{print k"="v; next}{print}' "$ENV_FILE" > "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
   else printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"; fi
 }
-set_force OLLAMA_MODELS_TO_PULL "$MODEL nomic-embed-text"
+set_force OLLAMA_MODELS_TO_PULL "$MODEL embeddinggemma"
 set_force OLLAMA_FLASH_ATTENTION 1
 set_force OLLAMA_KV_CACHE_TYPE q8_0
 set_force OLLAMA_KEEP_ALIVE "$KEEP_ALIVE"

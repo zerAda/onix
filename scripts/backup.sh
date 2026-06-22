@@ -45,6 +45,27 @@ case "$PROFILE" in
   *) echo "PROFILE inconnu: $PROFILE (attendu: base|prod|local-prod)" >&2; exit 1 ;;
 esac
 
+# --- Chiffrement FAIL-CLOSED (BKP-02) ----------------------------------------
+# Les archives contiennent TOUTES les données (PII, audit HMAC, docs) : elles
+# DOIVENT être chiffrées au repos. Passphrase via env `ONIX_BACKUP_PASSPHRASE`
+# (JAMAIS en repo). Sans passphrase → on REFUSE de produire un backup EN CLAIR
+# (avant même de toucher la stack), sauf override DEV `ONIX_BACKUP_ALLOW_PLAINTEXT=1`.
+ENCRYPT=1
+if [ -z "${ONIX_BACKUP_PASSPHRASE:-}" ]; then
+  if [ "${ONIX_BACKUP_ALLOW_PLAINTEXT:-0}" = "1" ]; then
+    ENCRYPT=0
+    echo "⚠ ONIX_BACKUP_PASSPHRASE absente + ONIX_BACKUP_ALLOW_PLAINTEXT=1 : backup EN CLAIR (DEV uniquement)." >&2
+  else
+    echo "✗ FAIL-CLOSED : ONIX_BACKUP_PASSPHRASE absente — refus de produire un backup NON CHIFFRÉ (BKP-02)." >&2
+    echo "  Définissez ONIX_BACKUP_PASSPHRASE (jamais en repo), ou ONIX_BACKUP_ALLOW_PLAINTEXT=1 en DEV." >&2
+    exit 1
+  fi
+fi
+if [ "$ENCRYPT" = 1 ] && ! command -v openssl >/dev/null 2>&1; then
+  echo "✗ FAIL-CLOSED : openssl introuvable — chiffrement impossible, refus." >&2
+  exit 1
+fi
+
 echo "→ Arrêt de la stack (cohérence)…"
 $DC "${DC_ARGS[@]}" stop
 
@@ -52,6 +73,13 @@ for v in $VOLS; do
   echo "→ Archivage $v"
   docker run --rm -v "${PROJ}_${v}:/v:ro" -v "$DEST:/b" alpine \
     sh -c "cd /v && tar czf /b/${v}.tgz ."
+  if [ "$ENCRYPT" = 1 ]; then
+    # AES-256-CBC + PBKDF2 (dérivation de clé salée). Le clair est SUPPRIMÉ aussitôt.
+    openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:ONIX_BACKUP_PASSPHRASE \
+      -in "$DEST/${v}.tgz" -out "$DEST/${v}.tgz.enc"
+    rm -f "$DEST/${v}.tgz"   # ne JAMAIS laisser le clair sur disque
+    echo "  chiffré → ${v}.tgz.enc"
+  fi
 done
 
 echo "→ Redémarrage…"

@@ -6,7 +6,9 @@ Pourquoi ces tests : le runtime Azure (cf. .planning/RUNTIME-EVIDENCE.md #10) a
 PROUVÉ que `make tune` sous-dimensionnait `OLLAMA_MEM_LIMIT` (12 Go) pour
 qwen2.5:14b dont l'empreinte RÉELLE en génération ≈ 20 Go → llama-server
 OOM-killé (SIGKILL) sur un vrai prompt RAG. On verrouille ici, hors-runtime, le
-contrat anti-OOM : un 14B retenu doit obtenir un plafond couvrant son pic réel.
+contrat anti-OOM : un modèle retenu (gemma3:12b par défaut, cf. #12) doit obtenir
+un plafond couvrant son pic réel — la machinerie est inchangée, seuls les seuils
+et la famille de modèles ont migré vers gemma3.
 
 Méthode : on EXÉCUTE le vrai script bash avec des surcharges `ONIX_FORCE_*`
 (détection matérielle simulée — pas de mock du calcul lui-même), on parse les
@@ -68,31 +70,31 @@ def run_profile(ram_gb, cores=8, gpu="none", vram_gb=0):
 @unittest.skipIf(_BASH is None, "bash indisponible (Git Bash requis) — test sauté proprement")
 class TestOllamaMemSizing(unittest.TestCase):
     # --- Cœur du bug #10 : la VM Azure (64 Go / 16 vCPU / CPU) ----------------
-    def test_azure_vm_14b_gets_safe_floor(self):
-        """64 Go CPU : doit retenir un 14B ET lui donner ≥ 24 Go (anti-OOM)."""
+    def test_azure_vm_gemma12b_gets_safe_floor(self):
+        """64 Go CPU : doit retenir gemma3:12b ET lui donner ≥ 18 Go (anti-OOM)."""
         s, out = run_profile(ram_gb=64, cores=16, gpu="none")
-        self.assertIn("14b", s["OLLAMA_MODELS_TO_PULL"],
-                      f"un 64 Go doit pouvoir servir un 14B. Profil:\n{out}")
+        self.assertIn("12b", s["OLLAMA_MODELS_TO_PULL"],
+                      f"un 64 Go doit pouvoir servir gemma3:12b. Profil:\n{out}")
         mem = _gb(s["OLLAMA_MEM_LIMIT"])
         self.assertGreaterEqual(
-            mem, 24.0,
-            f"REGRESSION #10 : OLLAMA_MEM_LIMIT={s['OLLAMA_MEM_LIMIT']} < 24g pour "
-            f"un 14B (empreinte réelle ~20 Go). Profil:\n{out}")
+            mem, 18.0,
+            f"REGRESSION #10 : OLLAMA_MEM_LIMIT={s['OLLAMA_MEM_LIMIT']} < 18g pour "
+            f"gemma3:12b (empreinte réelle ~18 Go). Profil:\n{out}")
 
-    def test_14b_never_below_real_footprint(self):
-        """Quel que soit le palier RAM, si un 14B est choisi son plafond ≥ 20 Go."""
+    def test_gemma12b_never_below_real_footprint(self):
+        """Quel que soit le palier RAM, si gemma3:12b est choisi son plafond ≥ 18 Go."""
         for ram in (48, 96):
             s, out = run_profile(ram_gb=ram, cores=16, gpu="none")
-            if "14b" in s["OLLAMA_MODELS_TO_PULL"]:
+            if "12b" in s["OLLAMA_MODELS_TO_PULL"]:
                 mem = _gb(s["OLLAMA_MEM_LIMIT"])
                 self.assertGreaterEqual(
-                    mem, 20.0,
-                    f"RAM={ram} : 14B avec plafond {s['OLLAMA_MEM_LIMIT']} < 20 Go.\n{out}")
+                    mem, 18.0,
+                    f"RAM={ram} : gemma3:12b avec plafond {s['OLLAMA_MEM_LIMIT']} < 18 Go.\n{out}")
 
     # --- Cohérence modèle ↔ plafond : jamais un gros modèle sous-alloué -------
     def test_model_fits_its_ceiling(self):
         """Le modèle retenu doit toujours tenir dans OLLAMA_MEM_LIMIT."""
-        need = {"1b": 3, "3b": 5, "7b": 12, "14b": 22, "32b": 40}
+        need = {"1b": 3, "4b": 7, "12b": 18, "27b": 30}
         for ram in (16, 32, 64):
             s, out = run_profile(ram_gb=ram, cores=8, gpu="none")
             model = s["OLLAMA_MODELS_TO_PULL"]

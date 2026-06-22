@@ -73,17 +73,18 @@ $availOllama = $ramGB - $res - $baseOnyx; if($availOllama -lt 1){ $availOllama =
 # Choix du modèle (mêmes seuils que le .sh) + EMPREINTE RAM RÉELLE en génération
 # (corrige le bug OOM #10 : le besoin = poids + KV q8_0 + prompt-cache, PAS le
 # seul poids Q4). CPU : 1B≈3 · 3B≈5 · 7B≈12 · 14B≈22 (Go). Cf. detect-hardware.sh.
-$modelNeed = 3; $model = "llama3.2:1b"
+# Famille GEMMA3 par defaut (chat, sourced sur CPU, cf. RUNTIME-EVIDENCE #12) ;
+# embedding par defaut = embeddinggemma. Empreintes PIC alignees sur detect-hardware.sh.
+$modelNeed = 3; $model = "gemma3:1b"
 if ($useGpu) {
-    if     ($vramGB -ge 24){ $model="qwen2.5:32b-instruct"; $modelNeed=22 }
-    elseif ($vramGB -ge 12){ $model="qwen2.5:14b-instruct"; $modelNeed=12 }
-    elseif ($vramGB -ge 8) { $model="llama3.1:8b";          $modelNeed=8  }
-    else                   { $model="llama3.2:3b";          $modelNeed=4  }
+    if     ($vramGB -ge 24){ $model="gemma3:27b"; $modelNeed=30 }
+    elseif ($vramGB -ge 12){ $model="gemma3:12b"; $modelNeed=12 }
+    elseif ($vramGB -ge 8) { $model="gemma3:4b";  $modelNeed=8  }
+    else                   { $model="gemma3:4b";  $modelNeed=4  }
 } else {
-    if     ($availOllama -ge 22){ $model="qwen2.5:14b-instruct"; $modelNeed=22 }
-    elseif ($availOllama -ge 12){ $model="qwen2.5:7b-instruct";  $modelNeed=12 }
-    elseif ($availOllama -ge 5) { $model="llama3.2:3b";          $modelNeed=5  }
-    else                        { $model="llama3.2:1b";          $modelNeed=3  }
+    if     ($availOllama -ge 18){ $model="gemma3:12b"; $modelNeed=18 }
+    elseif ($availOllama -ge 7) { $model="gemma3:4b";  $modelNeed=7  }
+    else                        { $model="gemma3:1b";  $modelNeed=3  }
 }
 
 $ollamaFloor = if($low){ 2*$GB } else { 3*$GB }
@@ -114,13 +115,12 @@ while ((SumLimits) -gt $fitTarget -and $guard -lt 512) {
 }
 $sumLimits = SumLimits
 # Cohérence modèle <-> plafond Ollama (CPU) : rétrograde si rogné sous le besoin.
-# Seuils alignés sur l'empreinte PIC réelle (anti-OOM #10) : 14B≈22 · 7B≈12 · 3B≈5.
+# Seuils alignés sur l'empreinte PIC réelle (anti-OOM #10) : gemma3:12b≈18 · 4b≈7 · 1b≈3.
 if (-not $useGpu) {
     $omGb = IDiv $ollamaMem $GB
-    if     ($omGb -ge 22){ $model = "qwen2.5:14b-instruct" }
-    elseif ($omGb -ge 12){ $model = "qwen2.5:7b-instruct" }
-    elseif ($omGb -ge 5) { $model = "llama3.2:3b" }
-    else                 { $model = "llama3.2:1b" }
+    if     ($omGb -ge 18){ $model = "gemma3:12b" }
+    elseif ($omGb -ge 7) { $model = "gemma3:4b" }
+    else                 { $model = "gemma3:1b" }
 }
 
 $profile   = if ($useGpu) { "GPU NVIDIA (via WSL2)" } else { "CPU" }
@@ -148,7 +148,7 @@ Line
 Write-Host "  VERDICT : profil recommandé = $profile" -ForegroundColor Green
 Write-Host "  Valeurs à reporter dans .env :"
 Write-Host ""
-Write-Host "    OLLAMA_MODELS_TO_PULL=$model nomic-embed-text"
+Write-Host "    OLLAMA_MODELS_TO_PULL=$model embeddinggemma"
 Write-Host "    OLLAMA_FLASH_ATTENTION=1"
 Write-Host "    OLLAMA_KV_CACHE_TYPE=q8_0"
 Write-Host "    OLLAMA_KEEP_ALIVE=$keepAlive"
