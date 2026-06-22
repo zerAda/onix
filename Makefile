@@ -442,7 +442,7 @@ bandit:
 
 pip-audit:
 	@command -v pip-audit >/dev/null 2>&1 || pip install --quiet pip-audit
-	@for req in actions/requirements.txt tests/rag/requirements.txt access-gateway/requirements.txt; do \
+	@for req in actions/requirements.txt tests/rag/requirements.txt access-gateway/requirements.txt access-gateway/requirements-dev.txt; do \
 	  [ -f "$$req" ] && { echo "→ pip-audit $$req"; pip-audit --requirement "$$req" --strict --progress-spinner off; } || true; \
 	done
 	@echo "✓ pip-audit : aucune CVE connue dans les dépendances épinglées."
