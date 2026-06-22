@@ -95,5 +95,17 @@ Première mesure RAGAS **LIVE avec un vrai juge ≥7B** (et non le seed scripté
 
 **Signal honnête** : un vrai juge strict donne **context_precision = 0.375 < 0.55** (le seuil absolu du nightly). Deux causes mêlées : (a) le golden set inclut **2 items volontairement dégradés** (G07 halluciné, G08 hors-sujet) qui tirent context_precision vers le bas par construction ; (b) gemma3 juge **plus strictement** que le seed (0.875). → À trancher : ajuster le seuil pour un juge strict, **ou** améliorer la précision de récupération (re-ranking / chunking), **ou** sortir les 2 items dégradés de l'agrégat. **Le baseline committé reste le seed scripté** (le test offline `test_baseline_is_reproducible_from_scripted_judge` exige la reproductibilité byte-level) ; pour adopter le baseline gemma3, lancer le nightly sur **runner self-hosted + gemma3** et rafraîchir baseline **ET** valeurs attendues du test offline.
 
+### SEC-01 — ACL **Fabric / SharePoint LIVE** contre le tenant réel GEREP (2026-06-22)
+
+Test E2E des ACL par-document de la gateway contre **Microsoft Fabric + Entra réels** (tenant GEREP `f7d2b917…`, token `az` de `a.zeriri@gerep.fr`, **read-only strict** — `FabricClient` est GET-only par conception).
+
+| Cible | Résultat LIVE | Preuve |
+|---|---|---|
+| **Fabric ACL (M3/SEC-01)** | ✅ **PASS E2E** | Le **`FabricClient` de la gateway** (auth az) appelle l'**API Fabric réelle** `GET /v1/workspaces/{Test}/roleAssignments` → 2 rôles réels (Dataviz.Gerep SP + Adel ZERIRI Admin). `fabric_acl.principal_has_read_role` décide : **GRANT** Adel (Admin) ✅, **DENY** oid inconnu ✅ (deny-by-default), **GRANT** via appartenance groupe ✅. |
+| **Résolution groupes Graph (identité)** | ✅ **LIVE** | `transitiveMemberOf` (Graph) résout **10 groupes Entra GEREP réels** (GRP-SEC-VPN-BST, Service IARD, Power Platform Administrator…) → le chemin d'identité de la gateway fonctionne contre l'annuaire réel. |
+| **SharePoint par-document (graph_acl)** | ⚠️ **non testable ici** | Site racine « GEREP Team Site » lisible (métadonnées), mais `GET /sites/{root}/drive/items` → **403** : le token `az` délégué n'a pas `Sites.Read.All`/`Files.Read.All`. Le live SharePoint par-doc exige une **app registration** avec ces permissions. Mécanisme offline-testé ; sa dépendance (résolution de groupes) est live-prouvée. |
+
+**Révocation** (grant→deny après retrait de rôle) : **non jouée** — exigerait une **écriture** (modifier un roleAssignment Fabric réel GEREP), proscrite par la posture read-only + sécurité. À tester sur un workspace jetable dédié.
+
 ---
-*Preuves collectées sur VM jetable (az run-command). VM **désallouée** après lecture (branche `prod/cycle1-securite` + modèles gemma3 conservés sur disque ; `az vm start` pour re-tester, `az group delete -n onix-test-rg` pour détruire).*
+*Preuves collectées sur VM jetable (az run-command) + tenant GEREP réel (read-only). VM **désallouée** après lecture (branche `prod/cycle1-securite` + modèles gemma3 conservés sur disque ; `az vm start` pour re-tester, `az group delete -n onix-test-rg` pour détruire).*
