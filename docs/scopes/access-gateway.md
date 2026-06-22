@@ -28,9 +28,10 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 | [`app/mapping.py`](../../access-gateway/app/mapping.py) | Mapping **groupe Entra → Document Set** (fichier JSON, `deny_if_no_match`). |
 | [`app/graph_client.py`](../../access-gateway/app/graph_client.py) | Graph app-only : `transitiveMemberOf` (groupes Entra d'un user). |
 | [`app/graph_acl.py`](../../access-gateway/app/graph_acl.py) | ACL par-doc **dérivée de SharePoint** (`fetch_item_principals` : users/groups/siteGroups en lecture), `GraphDocACL` (TTL). |
-| [`app/doc_acl.py`](../../access-gateway/app/doc_acl.py) | ACL statique (`doc_id → {users,groups}`) + composite (OR-merge avec Graph). Politique par défaut deny. |
+| [`app/doc_acl.py`](../../access-gateway/app/doc_acl.py) | ACL statique (`doc_id → {users,groups}`) + composite (OR-merge avec Graph **et Fabric**). Politique par défaut deny. |
 | [`app/fabric_client.py`](../../access-gateway/app/fabric_client.py) | Client **Fabric / OneLake / Power BI** (GET-only, 3 audiences, `is_gold_path` fail-closed, auth `az` injectable). |
 | [`app/fabric_acl.py`](../../access-gateway/app/fabric_acl.py) | `can_principal_read` **fail-closed**, gold-only (roleAssignments ∪ principalAccess OneLake). |
+| [`app/fabric_doc_acl.py`](../../access-gateway/app/fabric_doc_acl.py) | **[M3]** Adaptateur `FabricDocACL` (`DocACL`) : câble l'ACL Fabric au **filtre de citations**. `build_fabric_acl` pré-résout `{doc_id → _Entry}` (roleAssignments gold-only). OR-mergé via `CompositeDocACL`. Deny-by-default. |
 | [`app/cache.py`](../../access-gateway/app/cache.py) | Cache **RBAC-safe** (clé HMAC incluant le périmètre trié) + tier sémantique opt-in + garde anti-divergence. |
 | [`app/guardrail.py`](../../access-gateway/app/guardrail.py) | Post-filtre garde-fous sur la réponse de l'assistant. |
 | [`app/streaming.py`](../../access-gateway/app/streaming.py) | Relais **NDJSON** (`application/x-ndjson`) token-par-token + garde DUR incrémental + override final. |
