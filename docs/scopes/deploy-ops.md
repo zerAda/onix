@@ -7,7 +7,7 @@
 > **Sous-agent** : SRE / DevOps / IaC. **État** :
 > [`../../ralph/state/deploy-ops.md`](../../ralph/state/deploy-ops.md).
 >
-> 👤 **Owner** : SRE / DevOps / IaC · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
+> 👤 **Owner** : SRE / DevOps / IaC · 🗓️ **Dernière revue** : 2026-06-22 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 
@@ -23,7 +23,7 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 | Chemin | Rôle |
 |---|---|
 | [`../../docker-compose.yml`](../../docker-compose.yml) | Stack mono-poste durcie (base). Surcouches : `.gpu`, `.performance`, `.prod-local`, `.lan`. |
-| [`../../deploy/prod/`](../../deploy/prod/) | **Prod exposée** : `docker-compose.prod.yml` + `Caddyfile` (TLS auto) + `nginx.prod.conf` (oauth2-proxy → passerelle) + `env.prod.template`. |
+| [`../../deploy/prod/`](../../deploy/prod/) | **Prod exposée** : `docker-compose.prod.yml` + `Caddyfile` (TLS auto, strip `X-OIDC-*` au bord) + `nginx.prod.conf` (oauth2-proxy → passerelle ; **injecte `X-OIDC-Proxy-Secret` via envsubst** = preuve de transit anti-spoof M7) + `env.prod.template` (`GATEWAY_PROXY_SHARED_SECRET`). |
 | [`../../deploy/local-prod/`](../../deploy/local-prod/) | **Prod machine unique** : unit `onix.service` (systemd, boot) + README. |
 | [`../../deploy/k8s/onix-ha/`](../../deploy/k8s/onix-ha/) | **Chart Helm HA** (OpenSearch/Postgres/MinIO/Redis HA, HPA, Celery, gateway, GPU). |
 | [`../../deploy/azure/`](../../deploy/azure/) | **Azure/AKS** : `values-azure.yaml`, `bicep/` (IaC), README. |

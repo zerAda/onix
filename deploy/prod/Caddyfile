@@ -68,8 +68,11 @@
 	# avant tout routage. Seul nginx (hop interne) le (re)pose, et UNIQUEMENT à
 	# partir de l'identité VÉRIFIÉE par oauth2-proxy (cf. nginx.prod.conf). On
 	# neutralise aussi les en-têtes `X-Auth-Request-*` entrants (idem : ne doivent
-	# provenir que d'oauth2-proxy, jamais du client).
+	# provenir que d'oauth2-proxy, jamais du client), ainsi que la PREUVE DE TRANSIT
+	# `X-OIDC-Proxy-Secret` (anti-spoof M7) : seul le nginx interne l'ajoute, un
+	# client ne doit jamais pouvoir la présenter pour contourner le contrôle.
 	request_header -X-OIDC-Claims
+	request_header -X-OIDC-Proxy-Secret
 	request_header -X-Auth-Request-User
 	request_header -X-Auth-Request-Email
 	request_header -X-Auth-Request-Groups

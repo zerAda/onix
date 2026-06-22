@@ -129,11 +129,22 @@ services:
     ports: !reset []
     expose:
       - "80"
+    environment:
+      # Preuve de transit proxy (anti-spoof RBAC, M7) : injectée dans la conf nginx
+      # par envsubst au démarrage (image nginx, mécanisme /etc/nginx/templates).
+      # NGINX_ENVSUBST_FILTER restreint la substitution à CETTE seule variable :
+      # les $variables runtime de nginx ($host, $http_upgrade, …) restent intactes.
+      # MÊME valeur que GATEWAY_PROXY_SHARED_SECRET côté access-gateway (ci-dessous).
+      - GATEWAY_PROXY_SHARED_SECRET=${GATEWAY_PROXY_SHARED_SECRET:?definir GATEWAY_PROXY_SHARED_SECRET (cf. make secrets-prod / coffre) - preuve transit proxy anti-spoof}
+      - NGINX_ENVSUBST_FILTER=GATEWAY_PROXY_SHARED_SECRET
     volumes:
       # Variante prod : honore le X-Forwarded-Proto=https transmis par Caddy
       # (sinon Onyx verrait le hop interne en http → callbacks OIDC / cookies KO).
       - !reset []
-      - ./deploy/prod/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      # Monté comme TEMPLATE (et non conf.d direct) : l'entrypoint nginx exécute
+      # envsubst dessus → /etc/nginx/conf.d/default.conf, en n'y substituant QUE
+      # GATEWAY_PROXY_SHARED_SECRET (cf. NGINX_ENVSUBST_FILTER). Anti-spoof M7.
+      - ./deploy/prod/nginx.prod.conf:/etc/nginx/templates/default.conf.template:ro
       # Surcouche de branding GEREP : le !reset ci-dessus efface les volumes de la
       # base (dont ./nginx/branding), on le RE-monte donc explicitement en RO.
       # Servi via location /onix-branding/ (cf. nginx.prod.conf, docs/BRANDING_GEREP.md).
@@ -330,6 +341,14 @@ services:
       # réseau interne (l'autorité d'accès est la passerelle elle-même). Laisser
       # vide sauf si vous créez une clé API Onyx dédiée (Admin -> API Keys).
       - GATEWAY_ONYX_API_KEY=${GATEWAY_ONYX_API_KEY:-}
+      # --- Anti-spoof X-OIDC-Claims : preuve de transit par le proxy (M7) -------
+      # La passerelle REFUSE tout X-OIDC-Claims qui n'apporte pas X-OIDC-Proxy-Secret
+      # == cette valeur (comparaison temps constant). Seul le nginx interne de
+      # confiance l'injecte (cf. nginx.prod.conf + NGINX_ENVSUBST_FILTER). Un client
+      # atteignant la passerelle en direct ne peut donc PAS usurper une identité.
+      # MÊME valeur que côté service nginx. Fail-closed : si VIDE, la passerelle
+      # refuse (sauf GATEWAY_ALLOW_UNAUTHENTICATED_HEADER=true, DEV/TEST uniquement).
+      - GATEWAY_PROXY_SHARED_SECRET=${GATEWAY_PROXY_SHARED_SECRET:?definir GATEWAY_PROXY_SHARED_SECRET (cf. make secrets-prod / coffre) - preuve transit proxy anti-spoof}
       # --- Source des groupes Entra --------------------------------------------
       # PROD recommandé : 'graph'. oauth2-proxy fournit l'oid VÉRIFIÉ ; la
       # passerelle résout l'appartenance via Microsoft Graph (transitiveMemberOf,

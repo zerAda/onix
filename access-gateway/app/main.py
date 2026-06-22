@@ -240,19 +240,26 @@ async def metrics() -> Response:
 
 
 async def _principal_and_sets(
-    request: Request, x_oidc_claims: Optional[str], *, endpoint: str
+    request: Request,
+    x_oidc_claims: Optional[str],
+    *,
+    endpoint: str,
+    proxy_secret_header: Optional[str] = None,
 ):
     """Facteur commun : résout l'identité, ses groupes, et ses Document Sets.
 
     **Fail-closed** : toute impossibilité de résoudre l'identité (401) ou les
     groupes (502) est journalisée comme un DENY et propagée. La décision d'accès
     finale (allow/deny selon le périmètre) est journalisée par l'appelant.
+    Le secret de preuve proxy (X-OIDC-Proxy-Secret) est propagé à resolve_principal
+    pour l'anti-spoof : un X-OIDC-Claims sans preuve de transit proxy est rejeté.
     """
     settings = get_settings()
     try:
         principal = await resolve_principal(
             settings,
             oidc_claims_header=x_oidc_claims,
+            proxy_secret_header=proxy_secret_header,
             cache=request.app.state.cache,
             http_client=request.app.state.http,
         )
@@ -277,10 +284,12 @@ async def _principal_and_sets(
 async def authorized_document_sets(
     request: Request,
     x_oidc_claims: Optional[str] = Header(default=None, alias="X-OIDC-Claims"),
+    x_oidc_proxy_secret: Optional[str] = Header(default=None, alias="X-OIDC-Proxy-Secret"),
 ) -> dict[str, Any]:
     """Introspection : qui suis-je, mes groupes, mes Document Sets autorisés."""
     principal, authorized = await _principal_and_sets(
-        request, x_oidc_claims, endpoint="authorized-document-sets"
+        request, x_oidc_claims, endpoint="authorized-document-sets",
+        proxy_secret_header=x_oidc_proxy_secret,
     )
     decision = "allow" if authorized else "deny"
     log_access_decision(
@@ -306,6 +315,7 @@ async def authorized_document_sets(
 async def chat_send_message(
     request: Request,
     x_oidc_claims: Optional[str] = Header(default=None, alias="X-OIDC-Claims"),
+    x_oidc_proxy_secret: Optional[str] = Header(default=None, alias="X-OIDC-Proxy-Secret"),
 ) -> JSONResponse:
     """Proxy de recherche : force le filtre Document Set au périmètre autorisé,
     puis relaie la requête à Onyx et renvoie sa réponse."""
@@ -318,7 +328,8 @@ async def chat_send_message(
         raise HTTPException(status_code=400, detail="Le corps doit être un objet JSON.")
 
     principal, authorized = await _principal_and_sets(
-        request, x_oidc_claims, endpoint="chat/send-message"
+        request, x_oidc_claims, endpoint="chat/send-message",
+        proxy_secret_header=x_oidc_proxy_secret,
     )
 
     try:
@@ -513,6 +524,7 @@ async def chat_send_message(
 async def feedback(
     request: Request,
     x_oidc_claims: Optional[str] = Header(default=None, alias="X-OIDC-Claims"),
+    x_oidc_proxy_secret: Optional[str] = Header(default=None, alias="X-OIDC-Proxy-Secret"),
 ) -> dict[str, Any]:
     """Retour utilisateur (thumbs up/down) sur la dernière réponse.
 
@@ -525,7 +537,10 @@ async def feedback(
         raise HTTPException(status_code=404, detail="Feedback désactivé (métriques off).")
 
     # Résolution d'identité (fail-closed : pas de feedback anonyme).
-    await _principal_and_sets(request, x_oidc_claims, endpoint="feedback")
+    await _principal_and_sets(
+        request, x_oidc_claims, endpoint="feedback",
+        proxy_secret_header=x_oidc_proxy_secret,
+    )
 
     try:
         payload = await request.json()

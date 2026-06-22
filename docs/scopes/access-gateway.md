@@ -7,7 +7,7 @@
 > **Sous-agent** : sécurité plateforme (FastAPI/Redis). **État** :
 > [`../../ralph/state/access-gateway.md`](../../ralph/state/access-gateway.md).
 >
-> 👤 **Owner** : Sécurité plateforme (FastAPI/Redis) · 🗓️ **Dernière revue** : 2026-06-18 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
+> 👤 **Owner** : Sécurité plateforme (FastAPI/Redis) · 🗓️ **Dernière revue** : 2026-06-22 · 🔁 **Cadence de revue** : 120 j (cf. [registre](scopes.json)).
 
 Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.md).
 
@@ -24,7 +24,7 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 |---|---|
 | [`app/main.py`](../../access-gateway/app/main.py) | **Point d'entrée** FastAPI. Endpoints : `GET /health`, `GET /metrics`, `GET /v1/authorized-document-sets`, `POST /v1/chat/send-message` (force le filtre Document Set + relais Onyx + post-filtre), `POST /v1/feedback`. |
 | [`app/config.py`](../../access-gateway/app/config.py) | `Settings` 12-factor (env-only). Tout réglage : Onyx amont, source des groupes, Graph, Fabric/gold, cache, doc_acl, streaming. |
-| [`app/identity.py`](../../access-gateway/app/identity.py) | Extraction de l'identité vérifiée depuis `X-OIDC-Claims` (oid/upn/groups), cache TTL. |
+| [`app/identity.py`](../../access-gateway/app/identity.py) | Extraction de l'identité vérifiée depuis `X-OIDC-Claims` (oid/upn/groups), cache TTL. **Anti-spoof (M7)** : `_require_proxy_proof` exige une preuve de transit proxy (`X-OIDC-Proxy-Secret` == `GATEWAY_PROXY_SHARED_SECRET`, comparaison temps constant) AVANT de croire le moindre claim — fail-closed. |
 | [`app/mapping.py`](../../access-gateway/app/mapping.py) | Mapping **groupe Entra → Document Set** (fichier JSON, `deny_if_no_match`). |
 | [`app/graph_client.py`](../../access-gateway/app/graph_client.py) | Graph app-only : `transitiveMemberOf` (groupes Entra d'un user). |
 | [`app/graph_acl.py`](../../access-gateway/app/graph_acl.py) | ACL par-doc **dérivée de SharePoint** (`fetch_item_principals` : users/groups/siteGroups en lecture), `GraphDocACL` (TTL). |
@@ -62,6 +62,13 @@ python access-gateway/tests/e2e/run_access_e2e.py
   l'**ACL par-doc est ré-appliquée PAR requête** (jamais mutualisée). **Ne pas inverser.**
 - **Fail-closed** partout : identité absente → 401 ; aucun groupe mappé +
   `deny_if_no_match` → refus ; source ACL indisponible → on n'accorde pas.
+- **Preuve de transit proxy (anti-spoof, M7)** : `X-OIDC-Claims` n'est JAMAIS cru
+  verbatim. Le proxy de confiance (nginx interne) injecte `X-OIDC-Proxy-Secret` ;
+  la passerelle le compare en temps constant à `GATEWAY_PROXY_SHARED_SECRET`. Secret
+  configuré + preuve absente/fausse → 401. Secret **non** configuré → refus aussi,
+  sauf override DEV `GATEWAY_ALLOW_UNAUTHENTICATED_HEADER=true` (jamais en prod).
+  Le proxy doit **stripper** tout `X-OIDC-*` entrant client puis ré-injecter
+  (cf. `deploy/prod/Caddyfile` + `nginx.prod.conf`).
 - **Fabric = lecture seule, tables GOLD uniquement** (`is_gold_path`). Aucune méthode
   POST/PUT/DELETE ne doit exister dans `fabric_client.py`.
 - **siteGroups ≠ groupes Entra** : `graph_acl` capte `siteGroup.id` (entiers SharePoint)

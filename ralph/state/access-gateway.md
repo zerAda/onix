@@ -18,6 +18,7 @@
 | 1 | 2026-06-18 | G2 | CACHE.md §4 note « Comportement réel au démarrage » + §7 : dégradation gracieuse (cache OFF + log CRITICAL), pas d'arrêt ; **code inchangé** | 267 passed | _voir commits_ |
 | 1 | 2026-06-18 | G3 | RBAC.md §4.3 bis : `_READ_ROLES` liste blanche finie → faux refus possible (custom/localisé), fail-closed, extension par tenant ; **code inchangé** | 267 passed | _voir commits_ |
 | 1 | 2026-06-18 | G4 | DECISION_RBAC.md §6/§8 : « 52 tests »→**267** (comptage `pytest --collect-only` vérifié) | 267 passed | _voir commits_ |
+| 2 | 2026-06-22 | M7 | **Anti-spoof X-OIDC-Claims** (vuln : usurpation + bypass RBAC total via claims forgés en accès direct). `identity._require_proxy_proof` exige `X-OIDC-Proxy-Secret` == `GATEWAY_PROXY_SHARED_SECRET` (`hmac.compare_digest`) AVANT tout claim — fail-closed (secret absent → refus, sauf override DEV `GATEWAY_ALLOW_UNAUTHENTICATED_HEADER`). Câblé sur les 4 call-sites `main.py` (header `X-OIDC-Proxy-Secret`). Proxy : `nginx.prod.conf` injecte le secret (envsubst, `NGINX_ENVSUBST_FILTER`) + strip `X-OIDC-*`, `Caddyfile` strip `-X-OIDC-Proxy-Secret` au bord. Env : `env.prod.template` + `docker-compose.prod.yml` + `gen-secrets.sh`. TDD : tests échouent AVANT (signature/garde absentes), passent APRÈS. | identity+failclosed **18 passed** ; suite gateway **333 passed** ; bandit **0** | _voir commits_ |
 
 ## Notes itération 1
 - **Aucun changement de comportement de code** ce tour-ci (réconciliation doc-truth pure, règle n°1).
