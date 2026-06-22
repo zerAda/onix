@@ -28,7 +28,8 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 | [`../../deploy/k8s/onix-ha/`](../../deploy/k8s/onix-ha/) | **Chart Helm HA** (OpenSearch/Postgres/MinIO/Redis HA, HPA, Celery, gateway, GPU). |
 | [`../../deploy/azure/`](../../deploy/azure/) | **Azure/AKS** : `values-azure.yaml`, `bicep/` (IaC), README. |
 | [`../../nginx/`](../../nginx/) | `onyx.conf` (reverse-proxy mono-poste) + `branding/` (thème GEREP). |
-| [`../../scripts/`](../../scripts/) | `gen-secrets.sh`, `detect-hardware.sh/.ps1`, `pull-models.sh`, `preflight-local.sh`/`preflight-prod.sh`, `verify.sh`, `backup.sh`/`restore.sh`, `sync-doc-acl.py`, `setup-sharepoint-app.sh`/`setup-fabric-app.sh`. |
+| [`../../scripts/`](../../scripts/) | `gen-secrets.sh`, `detect-hardware.sh/.ps1` (tuning mémoire anti-OOM), `pull-models.sh`, `seed-provider.sh` (seed provider LLM Onyx, #9), `preflight-local.sh`/`preflight-prod.sh`, `verify.sh`, `backup.sh`/`restore.sh`, `sync-doc-acl.py`, `setup-sharepoint-app.sh`/`setup-fabric-app.sh`. |
+| [`../../scripts/tests/`](../../scripts/tests/) | Tests autonomes ops : `test_detect_hardware_mem.py` (calcul `OLLAMA_MEM_LIMIT` anti-OOM #10), `test_restart_policy.py` (politique restart services critiques #6), `test_seed_provider.py` (idempotence/fail-closed du seed #9). |
 
 ## 3. Commandes
 
@@ -37,7 +38,9 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 make tune && make secrets && make up && make verify
 make preflight-local                 # pré-vol AVANT make up
 # Production machine unique (durci)
-make up-local-prod && make verify
+make up-local-prod && make models && make seed-provider && make verify
+#   seed-provider : enregistre le provider Ollama dans Onyx (sinon chat MORT, #9).
+#   Identifiants admin par env : ONIX_ADMIN_EMAIL=... ONIX_ADMIN_PASSWORD=... (jamais en repo).
 # Prod exposée (Caddy TLS + OIDC)
 make config-prod                     # valide base + surcouche prod
 make secrets-prod && make up-prod
@@ -56,6 +59,20 @@ make clean-deep                      # clean + venvs Python locaux
   `bicep build` (Azure) — IaC valide, **incluse dans `make test`** (axe A6
   reproductibilité, cf. [`../../ralph/ORCHESTRATION.md`](../../ralph/ORCHESTRATION.md)).
 - `make verify` : contrôle de bout en bout d'une stack démarrée.
+- **Tests autonomes ops** (hors-runtime, lancés depuis `scripts/tests/`) —
+  verrouillent les fixes prouvés au runtime Azure
+  ([`../../.planning/RUNTIME-EVIDENCE.md`](../../.planning/RUNTIME-EVIDENCE.md)) :
+  `python -m unittest discover -s scripts/tests`
+  - `test_detect_hardware_mem.py` : un 14B obtient `OLLAMA_MEM_LIMIT` ≥ 24 Go sur
+    RAM suffisante (anti-OOM #10) ; somme des limites < RAM ; avertissement
+    fail-closed sur petite RAM. Pilote le **vrai** script via `ONIX_FORCE_*`.
+  - `test_restart_policy.py` : `restart: always` sur tous les services critiques
+    + `start_period` api_server ≥ 120 s + démarrage ordonné `service_healthy` (#6).
+  - `test_seed_provider.py` : idempotence (skip si provider présent), création si
+    absent, `ONIX_SEED_FORCE` met à jour, fail-closed sans identifiants (#9).
+  - **Non couvert (runtime only, dit honnêtement)** : le chargement réel du modèle
+    sans OOM, la reprise Docker après kill-pendant-init, et le contrat exact de
+    l'API admin Onyx (chemins/champs) ne sont validables que sur une vraie pile.
 
 ## 5. Invariants & pièges
 

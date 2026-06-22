@@ -47,6 +47,12 @@ Puis **bascule en overlay prod-local** (healthchecks + démarrage ordonné +
 ```bash
 make preflight-local   # prérequis : daemon Docker, vm.max_map_count, RAM, disque, ports, secrets
 make up-local-prod     # = docker compose -f docker-compose.yml -f docker-compose.prod-local.yml up -d
+make models            # tire les modèles Ollama (selon OLLAMA_MODELS_TO_PULL)
+# Crée d'abord le 1er compte (= admin) dans l'UI, puis enregistre le provider LLM :
+ONIX_ADMIN_EMAIL=admin@exemple.fr ONIX_ADMIN_PASSWORD='…' make seed-provider
+#   ↑ INDISPENSABLE : sans lui la table Onyx llm_provider reste vide → le chat
+#     échoue (« No default LLM model found »). Idempotent ; identifiants par env
+#     (jamais en repo). En OIDC d'entreprise : ONIX_ADMIN_API_KEY=… à la place.
 make verify            # santé de bout en bout (services, câblage Ollama interne, génération)
 ```
 

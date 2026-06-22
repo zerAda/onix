@@ -162,11 +162,13 @@ fichier/cible inexistant.
 
 | Affirmation | Classe | Preuve | Note |
 |---|---|---|---|
-| `make tune` écrit les réglages dans `.env` (réserve OS, baseline, modèle, limites anti-OOM) | ✅(cible)/❔(logique fine) | `Makefile:36-37` (`detect-hardware.sh --apply`) | Heuristiques internes de `detect-hardware.sh` non auditées en détail ici. |
+| `make tune` écrit les réglages dans `.env` (réserve OS, baseline, modèle, limites anti-OOM) | ✅ | `Makefile:36-37` (`detect-hardware.sh --apply`) ; logique testée `scripts/tests/test_detect_hardware_mem.py` | **Corrigé 2026-06-22 (#10)** : `pick_model` (`detect-hardware.sh:114-156`) sous-dimensionnait le besoin 14B (11 Go = poids Q4) ; la 2e colonne reflète désormais le PIC RÉEL en génération (KV q8_0 + prompt-cache : 14B≈22). `OLLAMA_MEM=(MODEL_NEED+2)g` (`:158-166`) → un 14B obtient ≥ 24 Go (était 12 Go → SIGKILL OOM). Seuils de sélection/rétrogradation alignés (22/12/5). |
 | `num_ctx` câblé : défaut serveur `OLLAMA_CONTEXT_LENGTH=8192`, gravé par `make models` (Modelfile num_ctx + temperature 0.2), répliqué en Helm `ollama.tuning` | ✅ | `docker-compose.yml:296-300` ; `scripts/pull-models.sh:37-78` (8192/12288/16384) ; `values.yaml:424-430` | Piège « 4096 tronque » traité partout. |
 | Réglages Ollama (`FLASH_ATTENTION`, `KV_CACHE_TYPE=q8_0`, `KEEP_ALIVE`, `NUM_PARALLEL`, `MAX_LOADED_MODELS`) | ✅ | `env.prod.template:252-258` ; `docker-compose.gpu.yml` (env) ; `values.yaml:424-430` | Compromis CPU/GPU documentés honnêtement. |
 | Capacité mesurée (qwen2.5:7b ~5,8 tok/s, 4 vCPU) | ❔ | `PERFORMANCE.md §2bis` | Mesure terrain non rejouable ici. Cohérente avec DEPLOY_AZURE gotcha Ollama CPU. |
-| Anti-OOM : somme des `*_MEM_LIMIT` < RAM physique | ❔ | logique `detect-hardware.sh` | Affirmation sur le script de tuning ; non re-dérivée ici. |
+| Anti-OOM : somme des `*_MEM_LIMIT` < RAM physique | ✅ | `detect-hardware.sh:158-182` (boucle de garantie) ; `test_detect_hardware_mem.py::test_sum_of_limits_below_ram` | Re-dérivé hors-runtime : sur 16/32/64 Go la somme reste < RAM (15.0/31.0/57.5 Go). |
+| **Seed provider LLM Onyx (#9)** : `make seed-provider` enregistre le provider Ollama dans Onyx (sinon `llm_provider` vide → chat « No default LLM model found ») | ✅(idempotence/fail-closed)/❔(API live) | `scripts/seed-provider.sh` ; `Makefile:seed-provider` ; `test_seed_provider.py` (5 tests) | **Ajout 2026-06-22.** Idempotent (skip si présent, `ONIX_SEED_FORCE=1` met à jour), fail-closed (api injoignable / pas d'admin / pas de modèle → exit≠0 bruyant), auth admin par env (email/mdp ou clé API). Contrat exact de l'API admin Onyx = **runtime only** (dit honnêtement). |
+| **Résilience restart services critiques (#6)** : `restart: always` + healthcheck `start_period` + démarrage ordonné `service_healthy` | ✅(config)/❔(reprise Docker) | `docker-compose.prod-local.yml:51-223` ; `test_restart_policy.py` (4 tests) | **Verrouillé 2026-06-22.** Assertions statiques : 10 services critiques en `always`, api_server `start_period≥120s` + deps `service_healthy`. La REPRISE après kill-pendant-init (course démon Docker) reste **runtime only**, dite telle quelle. |
 
 ---
 

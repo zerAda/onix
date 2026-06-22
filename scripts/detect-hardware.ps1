@@ -70,26 +70,29 @@ $minioMem = 512; $nginxMem = 256; $redisMem = 256
 $baseOnyx = ($heap + 1) + 2 + 1 + 2; if($baseOnyx -lt 6){ $baseOnyx = 6 }
 $availOllama = $ramGB - $res - $baseOnyx; if($availOllama -lt 1){ $availOllama = 1 }
 
-# Choix du modèle (mêmes seuils que le .sh) + besoin mémoire (Go).
-$modelNeed = 2; $model = "llama3.2:1b"
+# Choix du modèle (mêmes seuils que le .sh) + EMPREINTE RAM RÉELLE en génération
+# (corrige le bug OOM #10 : le besoin = poids + KV q8_0 + prompt-cache, PAS le
+# seul poids Q4). CPU : 1B≈3 · 3B≈5 · 7B≈12 · 14B≈22 (Go). Cf. detect-hardware.sh.
+$modelNeed = 3; $model = "llama3.2:1b"
 if ($useGpu) {
     if     ($vramGB -ge 24){ $model="qwen2.5:32b-instruct"; $modelNeed=22 }
     elseif ($vramGB -ge 12){ $model="qwen2.5:14b-instruct"; $modelNeed=12 }
     elseif ($vramGB -ge 8) { $model="llama3.1:8b";          $modelNeed=8  }
     else                   { $model="llama3.2:3b";          $modelNeed=4  }
 } else {
-    if     ($availOllama -ge 18){ $model="qwen2.5:14b-instruct"; $modelNeed=11 }
-    elseif ($availOllama -ge 7) { $model="qwen2.5:7b-instruct";  $modelNeed=6  }
-    elseif ($availOllama -ge 4) { $model="llama3.2:3b";          $modelNeed=4  }
-    else                        { $model="llama3.2:1b";          $modelNeed=2  }
+    if     ($availOllama -ge 22){ $model="qwen2.5:14b-instruct"; $modelNeed=22 }
+    elseif ($availOllama -ge 12){ $model="qwen2.5:7b-instruct";  $modelNeed=12 }
+    elseif ($availOllama -ge 5) { $model="llama3.2:3b";          $modelNeed=5  }
+    else                        { $model="llama3.2:1b";          $modelNeed=3  }
 }
 
 $ollamaFloor = if($low){ 2*$GB } else { 3*$GB }
 if ($useGpu) {
     $ollamaMem = 4*$GB
 } else {
-    $ollamaMem = ($modelNeed + 1) * $GB
-    if ($ollamaMem -gt (($availOllama + 1) * $GB)) { $ollamaMem = ($availOllama + 1) * $GB }
+    # Plafond = empreinte PIC réelle + 2 Go de marge, borné par la RAM libre.
+    $ollamaMem = ($modelNeed + 2) * $GB
+    if ($ollamaMem -gt ($availOllama * $GB)) { $ollamaMem = $availOllama * $GB }
     if ($ollamaMem -lt $ollamaFloor) { $ollamaMem = $ollamaFloor }
 }
 
@@ -111,11 +114,12 @@ while ((SumLimits) -gt $fitTarget -and $guard -lt 512) {
 }
 $sumLimits = SumLimits
 # Cohérence modèle <-> plafond Ollama (CPU) : rétrograde si rogné sous le besoin.
+# Seuils alignés sur l'empreinte PIC réelle (anti-OOM #10) : 14B≈22 · 7B≈12 · 3B≈5.
 if (-not $useGpu) {
     $omGb = IDiv $ollamaMem $GB
-    if     ($omGb -ge 12){ $model = "qwen2.5:14b-instruct" }
-    elseif ($omGb -ge 7) { $model = "qwen2.5:7b-instruct" }
-    elseif ($omGb -ge 4) { $model = "llama3.2:3b" }
+    if     ($omGb -ge 22){ $model = "qwen2.5:14b-instruct" }
+    elseif ($omGb -ge 12){ $model = "qwen2.5:7b-instruct" }
+    elseif ($omGb -ge 5) { $model = "llama3.2:3b" }
     else                 { $model = "llama3.2:1b" }
 }
 

@@ -5,6 +5,7 @@
 #   make secrets   génère les secrets forts dans .env
 #   make up        démarre tout (GPU=1 = profil GPU NVIDIA ; PERF=1 = haut débit)
 #   make models    (pré)télécharge les modèles Ollama
+#   make seed-provider  enregistre le provider Ollama dans Onyx (sinon chat mort, #9)
 #   make verify    contrôle de bout en bout (santé + câblage + génération)
 #   make preflight-local  pré-vol AVANT make up (prérequis du 1er lancement)
 #   make logs / ps / stats / down / restart / update / backup / restore / destroy
@@ -350,7 +351,7 @@ preflight-prod:
 # Démarrage type : make tune → make secrets → make preflight-local → make up-local-prod → make verify
 # =============================================================================
 COMPOSE_LOCAL_PROD := docker compose -f docker-compose.yml -f docker-compose.prod-local.yml
-.PHONY: config-local-prod up-local-prod down-local-prod restart-local-prod ps-local-prod logs-local-prod
+.PHONY: config-local-prod up-local-prod down-local-prod restart-local-prod ps-local-prod logs-local-prod seed-provider
 
 config-local-prod:
 	@$(COMPOSE_LOCAL_PROD) config -q && echo "✓ base + prod-local valide"
@@ -359,6 +360,16 @@ up-local-prod: secrets
 	@$(COMPOSE_LOCAL_PROD) up -d
 	@echo "→ Stack prod-local démarrée (healthchecks + démarrage ordonné + restart: always)."
 	@echo "  Accès testeurs : tailscale serve 3000 (TLS privé) — cf. docs/PROD_LOCAL.md §5."
+	@echo "  Étape suivante (sinon chat MORT) : make models && make seed-provider"
+	@echo "    (enregistre le provider Ollama dans Onyx — corrige le bug #9)."
+
+# SEED idempotent du provider LLM Ollama dans Onyx (corrige #9 : sans lui, la table
+# llm_provider reste vide → chat « No default LLM model found »). À lancer APRÈS
+# `make models` une fois la pile SAINE. Identifiants admin par env (jamais en repo) :
+#   ONIX_ADMIN_EMAIL=... ONIX_ADMIN_PASSWORD=... make seed-provider
+# (OIDC d'entreprise : ONIX_ADMIN_API_KEY=...). Idempotent : ne recrée pas si présent.
+seed-provider:
+	@bash scripts/seed-provider.sh
 
 down-local-prod:
 	@$(COMPOSE_LOCAL_PROD) down
