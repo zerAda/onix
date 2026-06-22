@@ -70,6 +70,9 @@ def env(tmp_path, mapping_file, monkeypatch):
     monkeypatch.setenv("GATEWAY_MAPPING_PATH", mapping_file)
     monkeypatch.setenv("GATEWAY_DENY_IF_NO_MATCH", "true")
     monkeypatch.setenv("GATEWAY_GROUP_CACHE_TTL", "0")
+    # Anti-spoof M7 : en TEST on tolère l'en-tête X-OIDC-Claims sans preuve proxy
+    # (override dev). Un test dédié (test_failclosed) exerce le refus en PROD.
+    monkeypatch.setenv("GATEWAY_ALLOW_UNAUTHENTICATED_HEADER", "true")
     return tmp_path
 
 

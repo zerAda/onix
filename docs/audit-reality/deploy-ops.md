@@ -1,6 +1,6 @@
 # Audit byte-by-byte — Documentation ↔ Réalité — Scope **Déploiement / HA / Ops**
 
-> **Date** : 2026-06-18 · **Auditeur** : agent SRE/DevOps/plateforme (lecture seule)
+> **Date** : 2026-06-22 (itér. M7 : preuve de transit proxy) · base 2026-06-18 · **Auditeur** : agent SRE/DevOps/plateforme (lecture seule)
 > **Méthode & légende** : [`README.md`](README.md) (✅ conforme · ⚠️ écart mineur ·
 > ❌ écart majeur · 🕳️ doc-sans-code · 🔇 code-sans-doc · ❔ non vérifiable).
 > **Règle de jeu n°1** (`AGENTS.md`) : *honnêteté > esbroufe, zéro mock présenté comme réel.*
@@ -43,7 +43,8 @@ fichier/cible inexistant.
 | Surcouche empilée, base non modifiée | ✅ | `Makefile:302` (`COMPOSE_PROD := … -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml`) | |
 | Caddy : HSTS 2 ans, X-Content-Type-Options, X-Frame-Options SAMEORIGIN, Referrer-Policy, Permissions-Policy, `-Server`/`-X-Powered-By` | ✅ | `deploy/prod/Caddyfile:46-61` | HSTS `max-age=63072000; includeSubDomains; preload` exact. |
 | Redirection 80→443 native | ❔/✅ | `Caddyfile:44` (site `{$ONYX_DOMAIN}` => HTTPS auto) | Comportement Caddy natif ; non exécuté ici (la doc le confirme via `caddy validate`). |
-| Anti-usurpation : Caddy supprime `X-OIDC-Claims` + `X-Auth-Request-*` entrants | ✅ | `Caddyfile:72-77` | Défense au bord. |
+| Anti-usurpation : Caddy supprime `X-OIDC-Claims` + `X-Auth-Request-*` entrants | ✅ | `Caddyfile:72-78` | Défense au bord ; inclut désormais `-X-OIDC-Proxy-Secret` (M7). |
+| **Preuve de transit proxy (anti-spoof M7)** : nginx injecte `X-OIDC-Proxy-Secret` (= `GATEWAY_PROXY_SHARED_SECRET`) sur le chemin chat ; monté en TEMPLATE + envsubst restreint (`NGINX_ENVSUBST_FILTER`) ; secret partagé avec la passerelle ; Caddy strip l'en-tête entrant au bord | ✅ | `deploy/prod/nginx.prod.conf` (`proxy_set_header X-OIDC-Proxy-Secret "${GATEWAY_PROXY_SHARED_SECRET}"` sur le chemin chat + strip sur `/api`,`/`) ; `docker-compose.prod.yml` (env nginx `GATEWAY_PROXY_SHARED_SECRET` + `NGINX_ENVSUBST_FILTER` + mount `/etc/nginx/templates/default.conf.template` ; env access-gateway `GATEWAY_PROXY_SHARED_SECRET`) ; `deploy/prod/Caddyfile:73` (`request_header -X-OIDC-Proxy-Secret`) ; `env.prod.template` + `scripts/gen-secrets.sh` (génère le secret) | Ferme la vuln d'usurpation : un client direct ne peut pas produire la preuve → 401 côté gateway (`identity._require_proxy_proof`). `docker compose config` OK. |
 | `/oauth2/*` → oauth2-proxy ; `/api/chat/send-message` → `forward_auth` puis nginx ; reste → nginx | ✅ | `Caddyfile:84-90`, `:102-124`, `:132-142` | Topologie §5bis exacte. |
 | nginx pose `X-OIDC-Claims` depuis identité vérifiée, route chat → `access-gateway:8200/v1/chat/send-message` | ✅ | `docker-compose.prod.yml:124-136` (montage `nginx.prod.conf`) ; routage détaillé dans `deploy/prod/nginx.prod.conf` (non ré-cité ligne à ligne) | Câblage présent. |
 | oauth2-proxy : image `v7.15.3`, `--set-xauthrequest`, `--user-id-claim=oid`, `--oidc-email-claim=upn`, interne (`expose 4180`) | ✅ | `docker-compose.prod.yml:225`, `:240-246`, `:231` | Version récente (CVE bypass auth corrigées). |

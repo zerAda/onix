@@ -29,6 +29,20 @@ class Settings:
     # "auto"    : claims si présents, sinon bascule sur Graph (gère l'overage OIDC)
     group_source: str
 
+    # --- Anti-spoof X-OIDC-Claims : preuve de transit par le proxy de confiance ---
+    # La passerelle ne fait JAMAIS confiance à X-OIDC-Claims verbatim : un client
+    # atteignant la gateway directement pourrait sinon forger {"oid":...,"groups":[...]}
+    # et usurper une identité (bypass RBAC total). Le reverse-proxy/IdP de confiance
+    # injecte donc un secret partagé dans l'en-tête X-OIDC-Proxy-Secret ; la gateway
+    # le compare en TEMPS CONSTANT (hmac.compare_digest) à cette valeur.
+    # Secret configuré + header absent/incorrect => IdentityError (refus).
+    proxy_shared_secret: str
+    # FAIL-CLOSED : si proxy_shared_secret est VIDE, la gateway REFUSE par défaut de
+    # faire confiance à X-OIDC-Claims (aucune preuve proxy possible). Cet override
+    # (GATEWAY_ALLOW_UNAUTHENTICATED_HEADER=true) lève le refus — RÉSERVÉ AU DEV/TEST
+    # local (jamais en prod : il rouvre la faille d'usurpation).
+    allow_unauth_header: bool
+
     # --- Microsoft Graph (mode graph/auto) ---
     graph_tenant_id: str
     graph_client_id: str
@@ -232,6 +246,11 @@ def get_settings() -> Settings:
         onyx_base_url=os.environ.get("GATEWAY_ONYX_BASE_URL", "http://api_server:8080").rstrip("/"),
         onyx_api_key=os.environ.get("GATEWAY_ONYX_API_KEY", "").strip(),
         group_source=os.environ.get("GATEWAY_GROUP_SOURCE", "auto").strip().lower(),
+        # Anti-spoof X-OIDC-Claims : secret partagé prouvant le transit par le proxy
+        # de confiance (cf. identity.resolve_principal). Vide => fail-closed (refus)
+        # sauf override dev explicite GATEWAY_ALLOW_UNAUTHENTICATED_HEADER=true.
+        proxy_shared_secret=os.environ.get("GATEWAY_PROXY_SHARED_SECRET", "").strip(),
+        allow_unauth_header=_bool("GATEWAY_ALLOW_UNAUTHENTICATED_HEADER", False),
         graph_tenant_id=graph_tenant_id,
         graph_client_id=graph_client_id,
         graph_client_secret=graph_client_secret,

@@ -132,11 +132,15 @@ case "$ENV_FILE" in
     ensure GATEWAY_AUDIT_SALT            rand 48
     ;;
 esac
-# Secret de cookie oauth2-proxy (PROD uniquement) : sessions OIDC chiffrées.
+# Secrets PROD uniquement (topologie nginx -> access-gateway -> Onyx).
 case "$ENV_FILE" in
   deploy/prod/*|*/deploy/prod/*)
     echo "Secrets prod (oauth2-proxy) :"
     ensure OAUTH2_PROXY_COOKIE_SECRET    rand 32
+    # Preuve de transit proxy (anti-spoof X-OIDC-Claims, M7) : MÊME valeur côté
+    # nginx (injecte X-OIDC-Proxy-Secret) et access-gateway (le compare). Sans lui,
+    # la passerelle refuse tout X-OIDC-Claims (fail-closed). Cf. docs/DEPLOY_PROD.md.
+    ensure GATEWAY_PROXY_SHARED_SECRET   rand 48
     ;;
 esac
 

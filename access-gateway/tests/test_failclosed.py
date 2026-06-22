@@ -16,8 +16,16 @@ from fastapi.testclient import TestClient
 from conftest import GROUP_NORD, claims
 
 
-def _build_client(monkeypatch, tmp_path, *, group_source, with_graph):
-    """Construit un TestClient avec un env choisi (mode/Graph), amont Onyx moqué."""
+def _build_client(
+    monkeypatch, tmp_path, *, group_source, with_graph, proxy_secret=None
+):
+    """Construit un TestClient avec un env choisi (mode/Graph), amont Onyx moqué.
+
+    Par défaut (``proxy_secret=None``) l'override dev anti-spoof est ACTIVÉ pour ne
+    pas exiger d'en-tête de preuve proxy : les tests historiques de fail-closed
+    (overage/identité) restent inchangés. Si ``proxy_secret`` est fourni, on exerce
+    le chemin PROD (secret partagé requis) pour prouver le rejet d'un X-OIDC-Claims
+    forgé sans preuve de transit proxy (M7)."""
     mapping = tmp_path / "group_map.json"
     mapping.write_text(
         json.dumps({"version": 1, "groups": {GROUP_NORD: {"document_sets": ["clients-nord"]}}}),
@@ -30,6 +38,14 @@ def _build_client(monkeypatch, tmp_path, *, group_source, with_graph):
     monkeypatch.setenv("GATEWAY_DENY_IF_NO_MATCH", "true")
     monkeypatch.setenv("GATEWAY_GROUP_CACHE_TTL", "0")
     monkeypatch.setenv("GATEWAY_AUDIT_SALT", "failclosed-salt")
+    if proxy_secret is None:
+        # Override dev : on tolère l'en-tête sans preuve proxy (cf. anti-spoof M7).
+        monkeypatch.setenv("GATEWAY_ALLOW_UNAUTHENTICATED_HEADER", "true")
+        monkeypatch.delenv("GATEWAY_PROXY_SHARED_SECRET", raising=False)
+    else:
+        # Chemin PROD : secret partagé requis, override dev désactivé.
+        monkeypatch.setenv("GATEWAY_PROXY_SHARED_SECRET", proxy_secret)
+        monkeypatch.setenv("GATEWAY_ALLOW_UNAUTHENTICATED_HEADER", "false")
     if with_graph:
         monkeypatch.setenv("GATEWAY_GRAPH_TENANT_ID", "tid")
         monkeypatch.setenv("GATEWAY_GRAPH_CLIENT_ID", "cid")
@@ -98,3 +114,73 @@ def test_no_identity_header_denies_and_no_plaintext_in_audit(monkeypatch, tmp_pa
         msg = rec.getMessage()
         assert "secret question" not in msg
         assert "contoso.fr" not in msg
+
+
+# --------------------------------------------------------------------------- #
+# Anti-spoof X-OIDC-Claims bout-en-bout (M7) : preuve de transit proxy requise #
+# --------------------------------------------------------------------------- #
+def test_forged_claims_without_proxy_secret_denied_401(monkeypatch, tmp_path):
+    """VULN M7 : un client forgeant X-OIDC-Claims (groupes admin) SANS transiter par
+    le proxy de confiance (donc sans X-OIDC-Proxy-Secret) doit être REFUSÉ (401),
+    jamais identifié/autorisé. C'est l'anti-usurpation RBAC."""
+    main = _build_client(
+        monkeypatch, tmp_path, group_source="claims", with_graph=False,
+        proxy_secret="secret-proxy-attendu",
+    )
+    with TestClient(main.app) as c:
+        r = c.post(
+            "/v1/chat/send-message",
+            json={"message": "x"},
+            headers={"X-OIDC-Claims": claims(oid="attacker", groups=[GROUP_NORD])},
+        )
+    assert r.status_code == 401  # preuve proxy absente -> refus dur
+
+
+def test_forged_claims_with_wrong_proxy_secret_denied_401(monkeypatch, tmp_path):
+    """Même attaque mais avec un X-OIDC-Proxy-Secret ERRONÉ => 401."""
+    main = _build_client(
+        monkeypatch, tmp_path, group_source="claims", with_graph=False,
+        proxy_secret="secret-proxy-attendu",
+    )
+    with TestClient(main.app) as c:
+        r = c.post(
+            "/v1/chat/send-message",
+            json={"message": "x"},
+            headers={
+                "X-OIDC-Claims": claims(oid="attacker", groups=[GROUP_NORD]),
+                "X-OIDC-Proxy-Secret": "mauvais-secret",
+            },
+        )
+    assert r.status_code == 401
+
+
+def test_claims_with_valid_proxy_secret_pass(monkeypatch, tmp_path):
+    """Avec le BON X-OIDC-Proxy-Secret (transit proxy prouvé), la requête passe :
+    on n'a pas cassé le chemin légitime. L'amont Onyx est moqué (aucun réseau)."""
+    main = _build_client(
+        monkeypatch, tmp_path, group_source="claims", with_graph=False,
+        proxy_secret="secret-proxy-attendu",
+    )
+
+    class _R:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = "{}"
+
+        def json(self):
+            return {"answer": "ok"}
+
+    async def _fake_post(url, json=None, headers=None, **kwargs):  # noqa: A002
+        return _R()
+
+    with TestClient(main.app) as c:
+        monkeypatch.setattr(main.app.state.http, "post", _fake_post)
+        r = c.post(
+            "/v1/chat/send-message",
+            json={"message": "x"},
+            headers={
+                "X-OIDC-Claims": claims(oid="legit", groups=[GROUP_NORD]),
+                "X-OIDC-Proxy-Secret": "secret-proxy-attendu",
+            },
+        )
+    assert r.status_code == 200

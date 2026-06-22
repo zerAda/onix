@@ -20,6 +20,7 @@ La comparaison/identité repose sur `oid` (objectId Entra, stable) sinon `sub`/U
 """
 from __future__ import annotations
 
+import hmac as _hmac
 import json
 import logging
 import time
@@ -125,18 +126,51 @@ class _TTLCache:
         self._store.clear()
 
 
+def _require_proxy_proof(settings: Settings, proxy_secret_header: Optional[str]) -> None:
+    """ANTI-SPOOF (fail-closed) : prouve que la requête a transité par le proxy de
+    confiance AVANT de faire confiance au moindre claim de X-OIDC-Claims.
+
+    Sans cette garde, un client atteignant la gateway en direct pourrait forger
+    `{"oid":"...","groups":["<guid-admin>"]}` → usurpation d'identité + bypass RBAC
+    total. Le proxy de confiance ajoute `X-OIDC-Proxy-Secret: <secret>` ; on le
+    compare en TEMPS CONSTANT (hmac.compare_digest, anti-timing) au secret partagé.
+
+    * Secret configuré : header absent OU incorrect → IdentityError (refus).
+    * Secret NON configuré : refus aussi (aucune preuve possible), SAUF override
+      dev explicite GATEWAY_ALLOW_UNAUTHENTICATED_HEADER=true.
+    """
+    expected = (settings.proxy_shared_secret or "").strip()
+    if expected:
+        presented = (proxy_secret_header or "").strip()
+        if not presented or not _hmac.compare_digest(presented, expected):
+            raise IdentityError(
+                "Preuve proxy invalide/absente : X-OIDC-Claims rejeté (anti-spoof). "
+                "La requête n'a pas transité par le reverse-proxy de confiance."
+            )
+    elif not settings.allow_unauth_header:
+        raise IdentityError(
+            "GATEWAY_PROXY_SHARED_SECRET non configuré : refus de faire confiance à "
+            "X-OIDC-Claims (fail-closed, anti-spoof). Définir le secret partagé proxy, "
+            "ou GATEWAY_ALLOW_UNAUTHENTICATED_HEADER=true en dev/test UNIQUEMENT."
+        )
+
+
 async def resolve_principal(
     settings: Settings,
     *,
     oidc_claims_header: Optional[str],
+    proxy_secret_header: Optional[str] = None,
     cache: Optional[_TTLCache] = None,
     http_client: Optional[httpx.AsyncClient] = None,
 ) -> Principal:
     """Résout l'identité + groupes selon GATEWAY_GROUP_SOURCE.
 
-    Lève IdentityError si l'identité est inconnue, GraphError si l'appel Graph
-    échoue alors qu'il est requis.
+    Lève IdentityError si l'identité est inconnue OU si la preuve de transit par le
+    proxy de confiance (X-OIDC-Proxy-Secret) est absente/invalide (anti-spoof),
+    GraphError si l'appel Graph échoue alors qu'il est requis.
     """
+    # Anti-spoof EN PREMIER : on rejette avant même de parser/croire les claims.
+    _require_proxy_proof(settings, proxy_secret_header)
     claims = parse_oidc_claims(oidc_claims_header)
     if not claims:
         raise IdentityError("Identité absente : en-tête X-OIDC-Claims requis (SSO OIDC).")

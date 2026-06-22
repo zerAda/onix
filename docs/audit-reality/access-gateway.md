@@ -1,6 +1,6 @@
 # Audit byte-by-byte — Documentation ↔ Réalité — Scope `access-gateway`
 
-> **Date** : 2026-06-18
+> **Date** : 2026-06-22 (itér. M7 : anti-spoof X-OIDC-Claims) · base 2026-06-18
 > **Auditeur** : ingénierie plateforme/sécurité (lecture seule).
 > **Périmètre docs** : [`docs/RBAC.md`](../RBAC.md), [`docs/DECISION_RBAC.md`](../DECISION_RBAC.md),
 > [`docs/CACHE.md`](../CACHE.md), [`docs/STREAMING.md`](../STREAMING.md).
@@ -78,6 +78,7 @@ l'itération 1.
 | RBAC-27 | Honnêteté §4.4 : filtre de SORTIE, pas de récupération ; LLM a pu voir le contenu | ✅ | `app/doc_acl.py:13-22` (docstring) | Cohérent, assumé. |
 | RBAC-28 | L'UI/API Onyx native doit rester interne ; gateway = seul point d'entrée | ✅ | `deploy/prod/docker-compose.prod.yml:319-321` (`expose: 8200`, aucun port hôte) ; README `:58-69` | Mitigation déployée. |
 | RBAC-29 | `X-OIDC-Claims` posé par reverse-proxy en amont (oauth2-proxy + nginx) | ✅ | `deploy/prod/docker-compose.prod.yml:201-303` | Chaîne navigateur→Caddy→oauth2-proxy→nginx→gateway. |
+| RBAC-33 (M7) | **Anti-spoof** : `X-OIDC-Claims` n'est cru QUE si la requête prouve son transit par le proxy de confiance (`X-OIDC-Proxy-Secret` == `GATEWAY_PROXY_SHARED_SECRET`, **temps constant**). Secret configuré + preuve absente/fausse → `IdentityError` → 401. Secret non configuré → refus aussi, sauf override DEV `GATEWAY_ALLOW_UNAUTHENTICATED_HEADER`. | ✅ | `app/identity.py:129-176` (`_require_proxy_proof`, `hmac.compare_digest`) ; appelée en TÊTE de `resolve_principal` `app/identity.py:173` ; `config.py:39-44,252-253` ; 4 call-sites `app/main.py:247,262,292,332,542` ; proxy : `deploy/prod/nginx.prod.conf` (injecte + envsubst) ; `deploy/prod/Caddyfile` (strip `-X-OIDC-Proxy-Secret` au bord) | Testé `test_identity.py::test_claims_sans_preuve_proxy_sont_rejetes` / `test_claims_avec_bon_secret_passent` / `test_secret_non_configure_sans_override_refuse` + e2e `test_failclosed.py::test_forged_claims_without_proxy_secret_denied_401`. **Ferme la vuln d'usurpation/bypass RBAC total** (client direct forgeant oid+groups). |
 | RBAC-30 | Révocation différée : retrait de groupe pris au ré-login OU `GATEWAY_GROUP_CACHE_TTL` | ✅ | `app/identity.py:100-122` (`_TTLCache`) ; `config.py:167` (défaut 300) | |
 | RBAC-31 | Citation `transitiveMemberOf` exige `User.Read.All` « marche aussi mais plus large » ; pas besoin de `Directory.Read.All` | ❔ | `graph_client.py:9-12` | Affirmation produit. |
 | RBAC-32 | Permissions Graph EE plus larges (`Directory.Read.All`, `Group.Read.All`…) §2 | ❔ | — | Onyx EE non vendoré. |
