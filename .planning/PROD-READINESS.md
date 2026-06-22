@@ -1,18 +1,28 @@
 # Production-Readiness — verdict & preuves
 
-**Date :** 2026-06-21 · **Méthode :** audit 7 dimensions (1 grader/dimension, preuves `fichier:ligne` + état CI + reqs/missions), bornage honnête de ce qui est **non vérifiable sans environnement** (Docker/tenant indisponibles ici).
+**Date :** 2026-06-21 (audit initial) · **MAJ 2026-06-22 (Cycle 1 sécurité landé)** · **Méthode :** audit 7 dimensions (1 grader/dimension, preuves `fichier:ligne` + état CI + reqs/missions), bornage honnête de ce qui est **non vérifiable sans environnement** (Docker/tenant indisponibles ici).
 
-## ⛔ VERDICT : NON-GO pour la production
+## ⛔ VERDICT : NON-GO pour la production (mais Cycle 1 réduit l'écart)
 
-**Score : 0 GO · 1 PARTIAL · 6 NO-GO.** onix n'est **pas** « tout monté, vérifié et robuste » pour un go-live. La couche logicielle est mature et bien testée *hors-ligne*, mais (a) la **CI du dépôt est ROUGE sur `main` aujourd'hui** (gate `pip-audit --strict` : CVE ouverte sur une dépendance épinglée), (b) plusieurs **P0 sécurité/fiabilité** restent ouverts, et (c) **la pile complète n'a jamais été démarrée ni exercée** dans cet environnement (pas de Docker) → « toutes les fonctionnalités sont up » est **non démontré**, pas prouvé.
+**Score : 0 GO · 3 PARTIAL · 4 NO-GO** (était 0/1/6). onix n'est **pas** encore « tout monté, vérifié et robuste » pour un go-live, mais le **Cycle 1 sécurité** a fermé 4 blocages P0 (preuves ci-dessous). La couche logicielle est mature et bien testée *hors-ligne* ; restent (a) la **fiabilité/observabilité/compliance** (Cycles 2-4), et (b) **la pile complète exercée runtime** (boot prouvé sain sur Azure, cf. RUNTIME-EVIDENCE.md, mais RAG chat bloqué par le modèle #12).
+
+### ✅ Cycle 1 — Sécurité applicative : LANDÉ (branche `prod/cycle1-securite`, gates locaux verts)
+| Blocker | Fix | Preuve |
+|---|---|---|
+| **M1** audit algo-downgrade | `verify_chain()` fail-closed : clé présente ⇒ HMAC strict ; ligne `sha256` = downgrade = rupture | `actions/app/audit_log.py:185-207` ; `tests/test_audit_log.py` (vérif standalone + suite **90 passed**) |
+| **M7** X-OIDC spoof | preuve proxy obligatoire (`X-OIDC-Proxy-Secret` == secret partagé, temps constant) avant tout claim ; 4 call-sites + proxy injecte/strip | `access-gateway/app/identity.py:129-176` ; suite **339 passed** |
+| **M3** ACL Fabric citations | `FabricDocACL` câblé au filtre (deny-by-default) ; doc hors-périmètre exclu | `access-gateway/app/fabric_doc_acl.py` ; `test_fabric_doc_acl.py` |
+| **SUPPLY** CVE pip-audit | `pytest 8.3.4 → 9.0.3` (CVE-2025-71176) + `requirements-dev.txt` ajouté à la boucle Makefile | `pip-audit --strict` = **0 CVE** |
+
+Gates locaux : `actions` 90✅/5⏭ · `gateway` 339✅ · `bandit` 0 medium+ · `pip-audit --strict` 0 · `docs-check`/`docs-freshness` verts · 0 secret en repo. *(gitleaks/trivy/compose-validate = CI.)*
 
 ## Tableau de bord
 
 | # | Dimension | Note | En une phrase |
 |---|-----------|------|---------------|
 | 1 | Fonctionnalités up (boot & serve E2E) | 🟡 **PARTIAL** | Câblage compose valide, mais la pile complète n'a jamais bootée ni servi une requête RAG ici ; seul `onix-actions` est prouvé démarrer. |
-| 2 | Tests & portes CI | ⛔ **NO-GO** | `pip-audit --strict` **ROUGE sur `main`** (CI échoue sur la branche par défaut) ; qualité RAG comparée à une baseline *synthétique* → « tout vert » est faux. |
-| 3 | Sécurité prouvable (cœur de valeur) | ⛔ **NO-GO** | Audit inviolable **contournable** (M1), ACL Fabric **code mort** dans le filtre live (M3), frontière X-OIDC sans contrôle in-app (M7), repli SHA-256 silencieux (HARD-03), test ACL live jamais joué (SEC-01). |
+| 2 | Tests & portes CI | 🟡 **PARTIAL** (était NO-GO) | `pip-audit --strict` **repassé vert** (SUPPLY : pytest 9.0.3) ; reste la qualité RAG comparée à une baseline *synthétique* (RAGAS réelle = Cycle 3). |
+| 3 | Sécurité prouvable (cœur de valeur) | 🟡 **PARTIAL** (était NO-GO) | **M1 ✅ M3 ✅ M7 ✅** fermés et testés (Cycle 1). Restent : repli SHA-256 exigé au preflight (HARD-03) et **test ACL live** SharePoint/Fabric jamais joué (SEC-01, exige tenant). |
 | 4 | Fiabilité / backup / restore | ⛔ **NO-GO** | Backup = tar à froid (pas `pg_dump`), **non chiffré**, restore affirme « OK » sans condition et **jamais exercé** ; ordre healthcheck overlay-only, non validé runtime. |
 | 5 | Observabilité / alerting | ⛔ **NO-GO** | Métriques OK mais **toutes les alertes vont dans un no-op** (M4) ; échec sync-ACL et rupture de chaîne d'audit **non monitorés** ; monitoring OFF par défaut en prod-local. |
 | 6 | Conformité (RGPD) | ⛔ **NO-GO** | 4 **mensonges** non corrigés dans les docs DPO (chiffrement FOSS no-op vendu comme art.32 ; journal « qui-a-vu-quoi » jamais émis sur le chemin RAG) ; effacement Onyx art.17 FK-cassé, non outillé. |
@@ -21,8 +31,8 @@
 ## Blocages — chemin vers GO
 
 ### A. Corrigeables sans environnement (code/docs — déjà catalogués)
-- **CVE pip-audit** (gate ROUGE) — bumper la dépendance vulnérable (Dependabot a ouvert PRs #11-13) ou accepter formellement le CVE. *Bloquant immédiat.*
-- **M1** audit HMAC algo-downgrade (P0) · **HARD-03** clé HMAC exigée au preflight (P0) · **M3** câbler `FabricDocACL` dans le filtre · **M7** contrôle in-app `X-OIDC` fail-closed · **SEC-03** cible `make audit-verify`.
+- ~~**CVE pip-audit** (gate ROUGE)~~ ✅ **FAIT (Cycle 1/SUPPLY)** : pytest 9.0.3, `pip-audit --strict` vert.
+- ~~**M1** audit HMAC algo-downgrade~~ ✅ · ~~**M3** câbler `FabricDocACL`~~ ✅ · ~~**M7** contrôle in-app `X-OIDC` fail-closed~~ ✅ **(Cycle 1)**. Restent : **HARD-03** clé HMAC exigée au preflight (P0) · **SEC-03** cible `make audit-verify`.
 - **M5b/BKP-02/03** `pg_dump` + chiffrement archives · **HARD-01/02** garde credentials + preflight prod.
 - **M4** livraison d'alerte réelle (envsubst/url_file) + **OBS-03/05** métriques+alertes ACL-sync/audit-chain · **OBS-02** monitoring par défaut · **M16** sonde gateway.
 - **M20** corriger les 4 mensonges docs DPO (revue DPO) · **RGPD-01** outiller l'effacement Onyx ciblé.

@@ -23,4 +23,26 @@
 Le **LLM en CPU est le goulot** : `qwen2.5:14b` ≈ 0,1 req/s. Pour un go-live multi-utilisateur → **GPU** (VM N-series) ou un modèle plus petit + budget de latence assumé. La RAM/IO/HTTP ne sont PAS les limites ; le calcul d'inférence l'est.
 
 ---
+
+## RAG E2E — investigation live de bout en bout (2026-06-21, suite)
+
+**Méthode** : pile complète sur la VM, pilotée par `az run-command` (localhost VM uniquement, **aucun port ouvert**). User admin jetable + doc de test synthétique à **token unique** (`ZQX7731ONIXE2E`, garantie fictive « Zogary Prévoyance », risque 4242). Contrats d'API extraits du **code du conteneur** (pas de devinette). **Nettoyage systématique** (doc + user + liens FK) après chaque essai ; « zéro mock présenté comme réel ».
+
+| # | Constat | Verdict | Preuve |
+|---|---------|---------|--------|
+| 8 | **Reboot → auto-start complet** | ✅ | `az vm restart` → `docker.service` + `onix-ui-forward` (socat) reviennent **enabled/active** ; 11/11 conteneurs `Up`, `make verify` **25 OK / 0 échec**. Le mode de panne prod réaliste (patching/maintenance hôte) **récupère seul** → nuance favorablement le trou #6 (kill ciblé pendant l'init = course étroite, pas le cas courant). |
+| 9 | **LLM Provider Onyx NON seedé au déploiement** | 🔴 **BLOQUANT (config)** | Table `llm_provider` **vide** après `make up-local-prod` + `make models` → chat échoue **instantanément** : `ValueError: No default LLM model found` → `"Message ID is required"`. `make models` pull le modèle Ollama mais **ne crée pas** la ligne provider Onyx (faite normalement à la main dans l'UI admin → LLM). **Un déploiement neuf a le chat mort tant qu'un admin ne configure pas le provider.** Corrigé live via `PUT /admin/llm/provider` (ollama, `http://ollama:11434`) + `POST /admin/llm/default` (provider laissé en place). |
+| 10 | **Ollama OOM-killé en génération (14B)** | 🔴 **BLOQUANT (tune)** → corrigé | Sur un **vrai** prompt RAG, llama-server reçoit **SIGKILL** (`signal: killed`), client = `OllamaException - "unexpected EOF"`, `/api/generate` → 500. Cause : **`OLLAMA_MEM_LIMIT=12g`** (réglé par `make tune`) < empreinte réelle qwen2.5:14b ≈ **9 Go modèle + 3,3 Go KV(q8_0) + 8 Go prompt-cache ≈ 20 Go**. Le stress-test direct (petit prompt) le **masquait**. **Fix prouvé** : `OLLAMA_MEM_LIMIT=40g` + `OLLAMA_NUM_PARALLEL=1` → génération réaliste **HTTP 200 en 28 s, eval_count 58, 0 crash**. ⚠️ `make tune` doit dimensionner `OLLAMA_MEM_LIMIT` au modèle (un 14B ≠ 12 Go). |
+| 11 | **Pipeline retrieval (ingest→embed→index→search)** | ✅ **PROUVÉ** | `POST /onyx-api/ingestion` 200 → **OpenSearch direct (https+auth admin)** : index `danswer_chunk_nomic_ai_nomic_embed_text_v1` **docs.count=1**, chunk embeddé (nomic) `_id ...__512__0`, token retrouvé. **`POST /admin/search` Onyx** : **1 document** retrouvé (ONIX-E2E-TESTDOC). Le cœur RAG **fonctionne**. *(Note : mes « docs.count=0 » antérieurs = sondes `http://os:9200` non-authentifiées — OpenSearch tourne en **https+auth**, elles tapaient dans le vide.)* |
+| 12 | **Chat RAG agentique avec qwen2.5:14b** | 🔴 **BLOQUANT (modèle)** | `send-chat-message` répond **200, error_msg null**, mais `top_documents:[]` et réponse = **JSON d'appel d'outil halluciné en texte brut** (`{"name":"open_url",...}` puis `{"name":"add_memory",...}` — outil même pas disponible). **Reproduit même persona réduite à `internal_search` seul** (5 autres outils retirés puis restaurés). → **qwen2.5:14b ne pilote pas le tool-calling d'Onyx** : il n'invoque jamais `internal_search`, donc la recherche n'est pas déclenchée en chat → réponses **non-sourcées**. Le pipeline marche (#11) mais le **modèle est trop faible pour le flux agentique** → il faut un modèle à function-calling natif robuste (et/ou GPU pour un modèle plus capable), ou une persona RAG non-agentique. |
+
+### Synthèse RAG
+- **Ce qui marche** : boot, retrieval E2E (embed/index/search), génération LLM (après fix OOM), infra chat (sessions, API).
+- **Ce qui bloque le produit chat** : (9) provider à configurer au déploiement, (10) `make tune` sous-dimensionne la RAM Ollama pour un 14B, (12) **qwen2.5:14b inapte au tool-calling agentique d'Onyx** → pas de réponse sourcée en chat. (10) corrigé, (9) configuré ; **(12) est le vrai mur** : sans modèle plus capable / function-calling fiable (→ GPU), le chat RAG **hallucine au lieu de citer**.
+- **Limite #1 confirmée et aggravée** : le LLM local n'est pas qu'un goulot de débit (#5) — sur 14B CPU il **OOM** (#10, corrigeable) **et** est **trop faible pour l'agentique RAG** (#12, non corrigeable sans changer de modèle/GPU).
+
+### État laissé sur la VM (jetable)
+Bénéfique et transparent : provider Ollama Onyx **créé** (id=1, défaut) ; `.env` patché `OLLAMA_MEM_LIMIT=40g`/`NUM_PARALLEL=1` + conteneur ollama recréé ; persona 0 **restaurée** à l'identique ; **tous** les users/docs de test **supprimés** (FK comprises). Le chat UI **génère** désormais (mais reste non-sourcé, cf. #12).
+
+---
 *Preuves collectées sur VM jetable (az run-command). VM à détruire après lecture (`az group delete -n onix-test-rg`).*
