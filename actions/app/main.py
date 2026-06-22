@@ -34,6 +34,7 @@ from prometheus_client import (
 from pydantic import BaseModel, Field
 
 from . import admin_state, audit_log, cost_tracker, docgen, dlp, notify as notify_mod
+from . import fabric_reference
 from . import ocr as ocr_mod
 from . import retention as retention_mod
 from . import safe_logger
@@ -554,6 +555,59 @@ async def audit_file_endpoint(
     reference_record = _load_reference(ref_inline, reference_path, client_key)
     result = run_audit({"document": document, "reference": reference_record})
     result["_ocr_mode"] = mode
+    usage_tracker.track("audit_documentaire_completed", user_id=who,
+                        client_id=result.get("client_document"), document_count=1)
+    return result
+
+
+@app.post("/audit/reconcile/file")
+async def audit_reconcile_file_endpoint(
+    file: UploadFile = File(...),
+    client_key: str = Form(...),
+    use_llm: bool = Form(default=False),
+    caller_id: Optional[str] = Form(default=None),
+    caller: CallerContext = Depends(require_caller),
+) -> Dict[str, Any]:
+    """**RÉCONCILIATION contrat ↔ SI Fabric** (POC AC360) : OCR du document →
+    champs → **référence LUE DANS LE SI FABRIC** (OneLake, par `client_key`) →
+    audit → **verdict d'écarts**.
+
+    Diffère de `/audit/file` : la référence n'est **PAS** fournie par l'appelant,
+    elle est récupérée dans le SI Fabric (le cœur de la réconciliation). Client
+    absent du SI / source non configurée ⇒ verdict `CLIENT_NON_TROUVE` (fail-closed,
+    cf. `fabric_reference.fetch_client_reference`)."""
+    who = _effective_caller(caller, caller_id)
+    _gate("audit", who)
+    _gate("ocr", who)
+    data = await file.read()
+    validate_upload(file.filename or "", len(data))
+    audit_log.record_document_accessed(
+        user_id=who, document_id=file.filename, action_name="audit_reconcile"
+    )
+    usage_tracker.track("ocr_started", user_id=who, action_name="audit_reconcile")
+    ocr_out = ocr_mod.extract(data, file.filename or "document")
+    mode = ocr_out["metadata"]["extraction_mode"]
+    if mode == "unavailable" and not use_llm:
+        usage_tracker.track("ocr_failed", status="error", user_id=who,
+                            error_code="ocr_unavailable")
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "Extraction OCR indisponible",
+                    "reason": ocr_out["metadata"].get("reason"),
+                    "hint": "Activez l'OCR (tesseract/poppler) ou utilisez use_llm."},
+        )
+    if use_llm and ocr_out.get("text"):
+        document, _ = _resolve_document_fields(None, ocr_out["text"], True, who=who)
+    else:
+        document = extract_canonical_fields(ocr_out)
+
+    # ── Le maillon AC360 : la référence vient du SI Fabric, PAS de l'appelant. ──
+    reference = fabric_reference.fetch_client_reference(client_key) or {}
+    result = run_audit({"document": document, "reference": reference})
+    result["_ocr_mode"] = mode
+    result["_reference_source"] = (
+        "fabric_si" if fabric_reference.fabric_reference_configured() else "non_configuree"
+    )
     usage_tracker.track("audit_documentaire_completed", user_id=who,
                         client_id=result.get("client_document"), document_count=1)
     return result

@@ -25,6 +25,8 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 |---|---|
 | [`app/main.py`](../../actions/app/main.py) | **Point d'entrée** FastAPI (endpoints actions + `/metrics`, rate-limit, identité d'appelant). |
 | [`app/ocr.py`](../../actions/app/ocr.py) | OCR (pytesseract/pdf2image) sur documents. |
+| [`app/audit_engine.py`](../../actions/app/audit_engine.py) | Moteur de comparaison document↔référence (champs canoniques, verdict CONFORME/ECART/INCERTAIN). |
+| [`app/fabric_reference.py`](../../actions/app/fabric_reference.py) | **[POC réconciliation AC360]** `fetch_client_reference` : référence client lue dans le **SI Fabric (OneLake)**, fail-closed, lecteur injectable. Alimente l'audit (`POST /audit/reconcile/file`) → verdict d'écarts contrat↔SI. |
 | [`app/docgen.py`](../../actions/app/docgen.py) | Génération `.docx` (python-docx). |
 | [`app/tasks.py`](../../actions/app/tasks.py) · [`app/celery_app.py`](../../actions/app/celery_app.py) | Tâches (synchrones + file Celery opt-in). |
 | [`app/notify.py`](../../actions/app/notify.py) | Notifications. |

@@ -43,6 +43,7 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 | 8 familles d'endpoints (audit, generate, tasks, notify, usage, cost, admin, health) | ✅ | `actions/app/main.py:348-938` | Tous présents et gatés |
 | `POST /audit` doc déjà extrait OU texte brut, verdict + score | ✅ | `main.py:472-490`, `audit_engine.py:279` | Verdicts `CONFORME/ECART/INCERTAIN/CLIENT_NON_TROUVE` (`audit_engine.py:11`) |
 | `POST /audit/file` → OCR local → extraction → comparaison | ✅ | `main.py:493-555`, `ocr.py:145-191` | |
+| **[POC AC360] `POST /audit/reconcile/file`** → OCR → champs → **référence lue dans le SI Fabric** (`fetch_client_reference`, OneLake, par `client_key`) → audit → verdict d'écarts contrat↔SI. Fail-closed : client absent/source non configurée ⇒ `CLIENT_NON_TROUVE`. | ✅ | `main.py` (`audit_reconcile_file_endpoint`) ; `fabric_reference.py` | `tests/test_fabric_reference.py` (8 tests : map, fetch injecté, fail-closed, verdict ECART/CONFORME) ; suite **100✅/5⏭** |
 | OCR dégrade proprement : `extraction_mode=unavailable` → 422 + raison | ✅ | `main.py:519-530`, `ocr.py:152-179` | 422 seulement si `use_llm=false` |
 | OCR : PDF texte→pdfplumber (repli pypdf) ; scanné→pdf2image+pytesseract ; image→pytesseract | ✅ | `ocr.py:93-143` | |
 | Assistance LLM via Ollama, repli heuristique non bloquant, mode journalisé | ✅ | `main.py:407-459`, `llm.py:234-313` | `_extraction_mode` = `llm`/`heuristic`/`provided` |
