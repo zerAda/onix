@@ -653,7 +653,9 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 | [`prometheus/prometheus.yml`](../../monitoring/prometheus/prometheus.yml) | Scrape config (cibles : gateway, actions, infra). |
 | [`prometheus/rules/onix-alerts.yml`](../../monitoring/prometheus/rules/onix-alerts.yml) | Règles d'**alerte**. |
 | [`prometheus/rules/onix-slo.yml`](../../monitoring/prometheus/rules/onix-slo.yml) | Règles **SLO**. |
-| [`alertmanager/alertmanager.yml`](../../monitoring/alertmanager/alertmanager.yml) | Routage des alertes. |
+| [`alertmanager/alertmanager.yml.tmpl`](../../monitoring/alertmanager/alertmanager.yml.tmpl) | **Gabarit** de routage/notification : webhook RÉEL (`${ALERT_WEBHOOK_URL}`, `send_resolved`). Rendu au boot. |
+| [`alertmanager/entrypoint.sh`](../../monitoring/alertmanager/entrypoint.sh) | Entrypoint conteneur : **rend** le gabarit (substitution env) + **FAIL-CLOSED** (refus si `ALERT_WEBHOOK_URL` absent/vide). |
+| [`../../scripts/check-alertmanager-config.py`](../../scripts/check-alertmanager-config.py) | Test autonome (stdlib) : webhook réel pointant l'URL + refus fail-closed sans URL (`make monitor-render`). |
 | [`blackbox/blackbox.yml`](../../monitoring/blackbox/blackbox.yml) | Sondes synthétiques (probes HTTP). |
 | [`loki/loki-config.yml`](../../monitoring/loki/loki-config.yml) · [`promtail/promtail-config.yml`](../../monitoring/promtail/promtail-config.yml) | Logs centralisés + collecte. |
 | [`grafana/provisioning/`](../../monitoring/grafana/provisioning/) | Datasources + provisioning des dashboards. |
@@ -662,8 +664,9 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 ## 3. Commandes
 
 ```bash
-make monitor-up                      # démarre la pile observabilité
+make monitor-up                      # démarre la pile (REFUSE si ALERT_WEBHOOK_URL ou GRAFANA_ADMIN_PASSWORD absent)
 make monitor-config                  # valide la compose monitoring (config -q)
+make monitor-render                  # rend+asserte la config Alertmanager (webhook réel + fail-closed) ; inclus dans make test
 make monitor-logs                    # logs de la pile
 make monitor-down                    # arrête la pile
 make lint                            # yamllint (workflows + monitoring)
@@ -671,10 +674,14 @@ make lint                            # yamllint (workflows + monitoring)
 
 ## 4. Tests & preuves
 
-- `make monitor-config` (compose valide) + `make lint` (YAML monitoring valide) — tous
-  deux inclus dans `make test`.
+- `make monitor-config` (compose valide) + `make lint` (YAML monitoring valide) +
+  `make monitor-render` (config Alertmanager : webhook réel + fail-closed) — tous
+  inclus dans `make test`.
 - **Cohérence** : chaque alerte/SLO doit référencer une métrique réellement exposée
   (gateway/actions `/metrics`). Preuves : [`../OBSERVABILITY.md`](../OBSERVABILITY.md).
+- **Notification fail-closed** : les alertes sont livrées par webhook
+  (`ALERT_WEBHOOK_URL`, rendu au boot par `entrypoint.sh`). Sans URL → la stack
+  refuse de démarrer (jamais d'alerte avalée en silence). Cf. §6 audit-reality.
 
 ## 5. Invariants & pièges
 
