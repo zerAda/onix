@@ -46,6 +46,10 @@ _FIELD_ALIASES: Dict[str, List[str]] = {
         "motif operation", "motif", "nature operation", "objet",
     ],
     "siret": ["siret", "n siret", "numero siret", "siren"],
+    "cotisation_annuelle": [
+        "cotisation annuelle", "cotisation", "prime annuelle", "prime",
+        "montant cotisation", "montant",
+    ],
 }
 
 # Tolérances / seuils (centralisés).
@@ -271,6 +275,7 @@ def compare_field(champ: str, doc_val: Any, ref_val: Any, kind: str) -> dict:
 # Champs audités : (champ canonique, type de comparaison)
 _AUDIT_FIELDS = [
     ("plafond_hospitalisation", "amount"),
+    ("cotisation_annuelle", "amount"),
     ("date_effet", "date"),
     ("numero_contrat", "contract"),
 ]

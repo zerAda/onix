@@ -79,6 +79,29 @@ def test_reconciliation_verdict_conforme_si_aligne():
     assert audit({"document": document, "reference": reference})["verdict"] == "CONFORME"
 
 
+def test_reconciliation_ecart_cotisation_via_si():
+    """Cas métier GEREP : la cotisation du contrat (SharePoint) diverge du SI Fabric
+    → ECART. Vérifie que `cotisation_annuelle` survit à `map_reference` puis est
+    comparée par l'audit (contrat 12 500 €/an vs SI 13 000 €)."""
+    si_record = {
+        "nom_client": "CLIENT BETA", "numero_contrat": "BETA-201",
+        "date_effet": "01/01/2026", "cotisation_annuelle": "13000",
+    }
+    ref = fetch_client_reference(
+        "client beta",
+        reader=lambda k: si_record if k in ("client beta", "beta-201") else None,
+    )
+    assert ref is not None and ref["cotisation_annuelle"] == "13000"
+    document = {
+        "nom_client": "CLIENT BETA", "numero_contrat": "BETA-201",
+        "date_effet": "01/01/2026", "cotisation_annuelle": "12 500 EUR / an",
+    }
+    result = audit({"document": document, "reference": ref})
+    assert result["verdict"] == "ECART"
+    cot = [f for f in result["fields"] if f["champ"] == "cotisation_annuelle"][0]
+    assert cot["statut"] == "MISMATCH"
+
+
 def test_reference_non_configuree_par_defaut(monkeypatch):
     monkeypatch.delenv("ONIX_FABRIC_REFERENCE_URL", raising=False)
     assert fabric_reference_configured() is False

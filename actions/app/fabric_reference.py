@@ -22,6 +22,7 @@ REFERENCE_FIELDS = (
     "nom_client",
     "siret",
     "plafond_hospitalisation",
+    "cotisation_annuelle",
     "date_effet",
     "numero_contrat",
 )
