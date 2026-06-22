@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.onyx_proxy import AccessDenied, enforce_document_sets, force_internal_search
+from app.onyx_proxy import (
+    AccessDenied,
+    enforce_document_sets,
+    force_internal_search,
+    unwrap_wrapped_answer,
+)
 
 
 def test_no_authorized_sets_denies():
@@ -99,3 +104,27 @@ def test_force_internal_search_respecte_choix_client():
     payload = {"message": "x", "forced_tool_id": 3, "allowed_tool_ids": [3]}
     out = force_internal_search(payload, enabled=True, tool_id=1)
     assert out["forced_tool_id"] == 3 and out["allowed_tool_ids"] == [3]
+
+
+# --- Déballage défensif de la réponse JSON-enveloppée (gemma3, #12) ---
+def test_unwrap_extrait_result_si_objet_json():
+    assert unwrap_wrapped_answer('{"id":"extracted_1","result":"La reponse [[1]]"}') == "La reponse [[1]]"
+
+
+def test_unwrap_texte_normal_inchange():
+    assert unwrap_wrapped_answer("Bonjour, voici la reponse [[1]].") == "Bonjour, voici la reponse [[1]]."
+
+
+def test_unwrap_json_sans_result_inchange():
+    s = '{"id":"x","autre":"y"}'
+    assert unwrap_wrapped_answer(s) == s
+
+
+def test_unwrap_result_non_str_inchange():
+    s = '{"result": 42}'
+    assert unwrap_wrapped_answer(s) == s
+
+
+def test_unwrap_json_invalide_inchange():
+    s = "{pas du json valide"
+    assert unwrap_wrapped_answer(s) == s

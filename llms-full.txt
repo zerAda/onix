@@ -1,4 +1,4 @@
-# onix — llms-full.txt (carte agent, CONTENU EMBARQUÉ)
+# llms-full.txt (carte agent, CONTENU EMBARQUÉ)
 # FICHIER GÉNÉRÉ — NE PAS ÉDITER À LA MAIN. Régénérer : `make llms-full`.
 # Source : scripts/gen-llms-full.py (orientation + dossiers de scope du registre).
 # Pour un agent sans accès fichiers : tout le contexte d'orientation en un bloc.
@@ -326,7 +326,7 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 | [`app/cache.py`](../../access-gateway/app/cache.py) | Cache **RBAC-safe** (clé HMAC incluant le périmètre trié) + tier sémantique opt-in + garde anti-divergence. |
 | [`app/guardrail.py`](../../access-gateway/app/guardrail.py) | Post-filtre garde-fous sur la réponse de l'assistant. |
 | [`app/streaming.py`](../../access-gateway/app/streaming.py) | Relais **NDJSON** (`application/x-ndjson`) token-par-token + garde DUR incrémental + override final. |
-| [`app/onyx_proxy.py`](../../access-gateway/app/onyx_proxy.py) | Relais HTTP vers Onyx amont (timeouts, en-têtes). |
+| [`app/onyx_proxy.py`](../../access-gateway/app/onyx_proxy.py) | Relais HTTP vers Onyx amont + `enforce_document_sets` (périmètre RBAC). **`force_internal_search` (#12)** : force l'outil `internal_search` d'Onyx (`forced_tool_id`+`allowed_tool_ids`) ⇒ RAG **non-agentique** sourcé même avec un modèle CPU faible (réglage `GATEWAY_FORCE_INTERNAL_SEARCH`, défaut ON ; prouvé live gemma3, cf. RUNTIME-EVIDENCE #12). **`unwrap_wrapped_answer` (#12)** : déballe défensivement une réponse gemma3 JSON-enveloppée `{"result":…}` sur le chemin réponse (sinon texte inchangé). + double filtre RBAC `retrieval_options`/`internal_search_filters`. |
 | [`app/metrics.py`](../../access-gateway/app/metrics.py) | Compteurs Prometheus (`/metrics`). |
 | [`app/audit.py`](../../access-gateway/app/audit.py) | Journal d'audit structuré des décisions d'accès (acteur haché). |
 | [`tests/`](../../access-gateway/tests/) | Suite **offline** (httpx mocké) + harnais e2e LIVE (`tests/e2e/`). |
@@ -476,6 +476,10 @@ PII, le DLP egress, la rétention/effacement, le comptage de coûts. Offline.
   stocké par ligne. Une ligne `sha256` quand la clé est présente = downgrade keyless
   (recalculable sans la clé) ⇒ rupture (`audit_log.py:187-207`). Migration
   keyless→HMAC : repartir d'une base d'audit vierge (mélange = downgrade refusé).
+- **[HARD-03] Préflight clé d'audit** : `audit_log.preflight_audit_key()` (appelé
+  dans `main.py:_lifespan`) **refuse de démarrer** sans `ONIX_ACTIONS_AUDIT_HMAC_KEY`,
+  sauf override DEV `ONIX_ACTIONS_AUDIT_KEY_OPTIONAL=true`. Sans clé, le journal est
+  forgeable (cf. M1) — fail-closed en prod, jamais « inviolable » mensonger.
 - **PII/DLP fail-safe** : en cas de doute, **rédiger/bloquer** plutôt que laisser fuir.
 - **Stateless opt-in** : imports paresseux (`db.py`/`objstore.py`) — le mode mono-poste
   SQLite ne doit **pas** exiger Postgres/S3. Ne pas régresser.

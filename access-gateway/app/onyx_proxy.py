@@ -18,6 +18,7 @@ granularité Document Set (≈ groupe d'accès), PAS par document.
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 
@@ -152,6 +153,36 @@ def upstream_headers(api_key: str, incoming: dict[str, str] | None = None) -> di
 _ANSWER_FIELDS = ("message", "answer", "answer_text", "llm_answer")
 
 
+def unwrap_wrapped_answer(text: str) -> str:
+    """Déballe une réponse JSON-enveloppée (stopgap RAG gemma3, cf. #12).
+
+    Certains modèles (ex. gemma3) renvoient parfois, dans le champ texte d'Onyx,
+    un OBJET JSON sérialisé du type ``{"id": "extracted_...", "result": "<vraie
+    réponse>"}`` au lieu du texte brut. On extrait alors ``result``.
+
+    DÉFENSIF / fail-safe : on ne déballe **que** si ``text`` parse comme un objet
+    JSON dont la clé ``result`` est une chaîne. Dans **tous** les autres cas
+    (texte non-JSON, JSON non-objet, objet sans ``result``, ``result`` non-str),
+    on renvoie ``text`` INCHANGÉ — afin de ne jamais casser le cas normal ni
+    altérer les citations ``[[1]]`` / le grounding portés par le texte légitime."""
+    if not isinstance(text, str):
+        return text
+    stripped = text.strip()
+    # Court-circuit : un objet JSON commence par '{'. Évite un parse inutile sur
+    # du texte ordinaire (qui n'est jamais un objet JSON).
+    if not stripped.startswith("{"):
+        return text
+    try:
+        parsed = json.loads(stripped)
+    except (ValueError, TypeError):
+        return text
+    if isinstance(parsed, dict):
+        result = parsed.get("result")
+        if isinstance(result, str):
+            return result
+    return text
+
+
 def extract_answer(onyx_response: Any) -> tuple[str, str | None]:
     """Renvoie ``(texte_de_l_assistant, nom_du_champ_source)``.
 
@@ -162,7 +193,9 @@ def extract_answer(onyx_response: Any) -> tuple[str, str | None]:
         for field in _ANSWER_FIELDS:
             val = onyx_response.get(field)
             if isinstance(val, str) and val.strip():
-                return val, field
+                # Déballage défensif d'une réponse JSON-enveloppée (gemma3, #12)
+                # AVANT que les garde-fous / le filtre ACL ne s'appliquent.
+                return unwrap_wrapped_answer(val), field
         # Agrégat de paquets streaming { "packets": [ {answer_piece: "..."}, ... ] }
         packets = onyx_response.get("packets")
         if isinstance(packets, list):
@@ -172,7 +205,7 @@ def extract_answer(onyx_response: Any) -> tuple[str, str | None]:
                 if isinstance(p, dict) and isinstance(p.get("answer_piece"), str)
             ]
             if pieces:
-                return "".join(pieces), "packets"
+                return unwrap_wrapped_answer("".join(pieces)), "packets"
     elif isinstance(onyx_response, list):
         # Réponse = suite de paquets NDJSON déjà décodés en liste.
         pieces = [
@@ -181,7 +214,7 @@ def extract_answer(onyx_response: Any) -> tuple[str, str | None]:
             if isinstance(p, dict) and isinstance(p.get("answer_piece"), str)
         ]
         if pieces:
-            return "".join(pieces), "answer_piece[]"
+            return unwrap_wrapped_answer("".join(pieces)), "answer_piece[]"
     return "", None
 
 
