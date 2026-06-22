@@ -11,6 +11,7 @@
 | A5 | P1 | Rate-limit `slowapi` par-process en HA (quota N×réplicas) | A5 | ✅ |
 | A6 | P2 | Compteurs de tests faux (58/71 → 90 collectés / 85+5) | A1 | ✅ |
 | A7 | P2 | `/metrics` (🔇) non décrit dans ACTIONS.md ; vars WS2 non listées au bloc `environment:` compose | A1/A4 | ⬜ |
+| M1 | **P0** | `verify_chain()` honorait l'algo stocké par ligne → downgrade HMAC→keyless silencieux (attaquant écrit `algo='sha256'`, recalcule sans la clé) | A3 | ✅ |
 
 ## Journal
 | Itér. | Date | Item | Correctif | Gates | SHA |
@@ -21,6 +22,7 @@
 | 2 | 2026-06-18 | A4 (P1) | `openapi.json` régénéré depuis `app.openapi()` : 20 paths (vs 13) ; endpoints WS2/stateless présents ; constat honnête = aucun `securityScheme` (X-Admin-Key décrit comme paramètre d'en-tête sur `/admin/*`) | JSON valide (`json.load` OK) ; pytest 85✅/5⏭ inchangé | `13c45d4` |
 | 2 | 2026-06-18 | A5 (P1) | Limite HA rate-limit documentée (encadré ⚠️ SECURITY_RGPD §3.5 : quota effectif `RATE_LIMIT × réplicas`) ; aucun Redis ajouté ce tour | doc seule (pas de code) | `c2a0357` |
 | 2 | 2026-06-18 | A6 (P2) | Compteurs de tests réconciliés : SECURITY_RGPD §11 (58→90/85/5) + STATELESS §6.1 (71/4→90/85/5) | `--collect-only` = 90 ; run = 85✅/5⏭ | `68e2cc1` |
+| 3 | 2026-06-22 | M1 (P0) | `verify_chain()` fail-closed anti-downgrade : algo imposé par présence de clé (clé⇒hmac-sha256 strict ; ligne `sha256`⇒rupture « downgrade »), l'algo stocké par ligne ne pilote plus la vérif ; nouveau `tests/test_audit_log.py` (4 tests : downgrade détecté + non-régression hmac/keyless + clé disparue) ; `test_security_rgpd.py` chaîne mixte ré-aligné sur la politique (downgrade signalé) | TDD (échec→fix) ; `pytest actions/tests` 90✅/5⏭ ; `bandit` audit_log = 0 issue | (worktree) |
 
 ## Questions bloquantes
 - (aucune) — coordination Helm avec scope `deploy-ops`.

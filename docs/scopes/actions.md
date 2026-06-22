@@ -56,6 +56,11 @@ PII, le DLP egress, la rétention/effacement, le comptage de coûts. Offline.
 
 - **Audit-trail = intégrité** : le chaînage HMAC ne doit jamais être cassé (toute
   écriture chaîne le hash précédent). Secret HMAC en env, **jamais** en repo.
+- **[M1] Audit anti-downgrade fail-closed** : `verify_chain()` impose l'algo selon
+  la présence d'une clé (clé ⇒ chaîne 100 % `hmac-sha256`), **jamais** selon l'algo
+  stocké par ligne. Une ligne `sha256` quand la clé est présente = downgrade keyless
+  (recalculable sans la clé) ⇒ rupture (`audit_log.py:187-207`). Migration
+  keyless→HMAC : repartir d'une base d'audit vierge (mélange = downgrade refusé).
 - **PII/DLP fail-safe** : en cas de doute, **rédiger/bloquer** plutôt que laisser fuir.
 - **Stateless opt-in** : imports paresseux (`db.py`/`objstore.py`) — le mode mono-poste
   SQLite ne doit **pas** exiger Postgres/S3. Ne pas régresser.
