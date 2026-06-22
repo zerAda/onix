@@ -84,5 +84,16 @@ Bénéfique et transparent : provider Ollama Onyx **créé** (id=1, défaut) ; `
 
 **Verdict** : les correctifs des 5 scopes (actions M1/HARD-03, rag #12, gateway M7/RBAC, deploy-ops, monitoring M4) sont **prouvés au runtime sur la pile réelle**, en plus des suites offline (actions 92 · gateway 350 · deploy-ops 6+3 verts).
 
+### RAGAS — vrai run de référence avec juge ≥7B (gemma3:12b, CPU)
+Première mesure RAGAS **LIVE avec un vrai juge ≥7B** (et non le seed scripté déterministe), sur `golden_fr.json`, conteneur détaché sur `onix-net` :
+
+| Métrique | Seed scripté (committé) | **gemma3:12b (réel)** | Seuil nightly |
+|---|---|---|---|
+| faithfulness | 0.750 | **0.750** | 0.55 ✅ |
+| context_precision | 0.875 | **0.375** | 0.55 ❌ |
+| answer_relevancy | 1.000 | **0.9375** | 0.70 ✅ |
+
+**Signal honnête** : un vrai juge strict donne **context_precision = 0.375 < 0.55** (le seuil absolu du nightly). Deux causes mêlées : (a) le golden set inclut **2 items volontairement dégradés** (G07 halluciné, G08 hors-sujet) qui tirent context_precision vers le bas par construction ; (b) gemma3 juge **plus strictement** que le seed (0.875). → À trancher : ajuster le seuil pour un juge strict, **ou** améliorer la précision de récupération (re-ranking / chunking), **ou** sortir les 2 items dégradés de l'agrégat. **Le baseline committé reste le seed scripté** (le test offline `test_baseline_is_reproducible_from_scripted_judge` exige la reproductibilité byte-level) ; pour adopter le baseline gemma3, lancer le nightly sur **runner self-hosted + gemma3** et rafraîchir baseline **ET** valeurs attendues du test offline.
+
 ---
 *Preuves collectées sur VM jetable (az run-command). VM **désallouée** après lecture (branche `prod/cycle1-securite` + modèles gemma3 conservés sur disque ; `az vm start` pour re-tester, `az group delete -n onix-test-rg` pour détruire).*
