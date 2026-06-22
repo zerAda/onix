@@ -91,12 +91,59 @@ def _select_record(data: Any, key: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _default_onelake_reader(key: str) -> Optional[Dict[str, Any]]:
-    """Lecteur par défaut : JSON de référence du SI Fabric (lakehouse **gold**,
-    OneLake), indexé par identité client. Configuration **par env** (jamais en repo) :
+# Cache mémoire du jeton OneLake (évite un aller-retour AAD par requête).
+_TOKEN_CACHE: Dict[str, Any] = {"value": None, "expires": 0.0}
 
-      * ``ONIX_FABRIC_REFERENCE_URL`` : URL **HTTPS** du JSON (OneLake DFS / gold).
-      * ``ONIX_FABRIC_TOKEN``         : jeton Bearer (audience ``storage.azure.com``).
+
+def _storage_token() -> Optional[str]:
+    """Jeton d'accès OneLake (audience ``storage.azure.com``). Deux modes :
+
+      * **Service principal** (recommandé, auto-rafraîchi) si ``ONIX_FABRIC_SP_CLIENT_ID``
+        + ``ONIX_FABRIC_SP_CLIENT_SECRET`` + ``ONIX_FABRIC_SP_TENANT`` sont fournis :
+        ``client_credentials`` → jeton mis en cache jusqu'à ~1 min avant expiration ;
+      * **jeton statique** ``ONIX_FABRIC_TOKEN`` sinon (déballage manuel, expire vite).
+
+    Tous les secrets viennent de l'**environnement** (jamais du repo). Retourne
+    ``None`` si rien n'est configuré ou si le mint AAD échoue (fail-closed)."""
+    cid = os.environ.get("ONIX_FABRIC_SP_CLIENT_ID", "").strip()
+    sec = os.environ.get("ONIX_FABRIC_SP_CLIENT_SECRET", "").strip()
+    ten = os.environ.get("ONIX_FABRIC_SP_TENANT", "").strip()
+    if not (cid and sec and ten):
+        return os.environ.get("ONIX_FABRIC_TOKEN", "").strip() or None
+
+    import time
+
+    now = time.time()
+    if _TOKEN_CACHE["value"] and _TOKEN_CACHE["expires"] > now + 60:
+        return _TOKEN_CACHE["value"]
+    import urllib.parse
+    import urllib.request
+
+    data = urllib.parse.urlencode({
+        "client_id": cid, "client_secret": sec,
+        "scope": "https://storage.azure.com/.default",
+        "grant_type": "client_credentials",
+    }).encode("utf-8")
+    url = "https://login.microsoftonline.com/" + ten + "/oauth2/v2.0/token"
+    try:
+        req = urllib.request.Request(url, data=data)  # AAD, https
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - endpoint AAD https constant
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    tok = payload.get("access_token")
+    if tok:
+        _TOKEN_CACHE["value"] = tok
+        _TOKEN_CACHE["expires"] = now + float(payload.get("expires_in", 3600))
+    return tok
+
+
+def _default_onelake_reader(key: str) -> Optional[Dict[str, Any]]:
+    """Lecteur par défaut : JSON de référence du SI Fabric (lakehouse, OneLake),
+    indexé par identité client. Configuration **par env** (jamais en repo) :
+
+      * ``ONIX_FABRIC_REFERENCE_URL`` : URL **HTTPS** du JSON (OneLake DFS).
+      * auth via :func:`_storage_token` (service principal auto-rafraîchi, ou jeton statique).
 
     Le JSON peut être ``{clé: enregistrement}`` OU une liste d'enregistrements.
     Absence de config / URL non-HTTPS ⇒ ``None`` (fail-closed, anti-SSRF)."""
@@ -106,7 +153,7 @@ def _default_onelake_reader(key: str) -> Optional[Dict[str, Any]]:
     import urllib.request
 
     req = urllib.request.Request(url)  # https only (vérifié ci-dessus)
-    token = os.environ.get("ONIX_FABRIC_TOKEN", "").strip()
+    token = _storage_token()
     if token:
         req.add_header("Authorization", "Bearer " + token)
     with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - URL d'exploitation env, https-only

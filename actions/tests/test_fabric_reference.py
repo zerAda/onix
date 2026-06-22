@@ -102,6 +102,21 @@ def test_reconciliation_ecart_cotisation_via_si():
     assert cot["statut"] == "MISMATCH"
 
 
+def test_storage_token_fallback_statique(monkeypatch):
+    from app.fabric_reference import _storage_token
+    monkeypatch.delenv("ONIX_FABRIC_SP_CLIENT_ID", raising=False)
+    monkeypatch.setenv("ONIX_FABRIC_TOKEN", "tok-statique")
+    assert _storage_token() == "tok-statique"
+
+
+def test_storage_token_none_si_rien_configure(monkeypatch):
+    from app.fabric_reference import _storage_token
+    for v in ("ONIX_FABRIC_SP_CLIENT_ID", "ONIX_FABRIC_SP_CLIENT_SECRET",
+              "ONIX_FABRIC_SP_TENANT", "ONIX_FABRIC_TOKEN"):
+        monkeypatch.delenv(v, raising=False)
+    assert _storage_token() is None
+
+
 def test_reference_non_configuree_par_defaut(monkeypatch):
     monkeypatch.delenv("ONIX_FABRIC_REFERENCE_URL", raising=False)
     assert fabric_reference_configured() is False
