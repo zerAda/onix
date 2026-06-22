@@ -221,6 +221,9 @@ def _client_with(monkeypatch, tmp_path, **env):
     monkeypatch.setenv("ONIX_ACTIONS_DB", str(tmp_path / "db.sqlite"))
     monkeypatch.setenv("ONIX_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("ONIX_ACTIONS_RATE_LIMIT", "10000/minute")
+    # HARD-03 : par défaut on autorise le repli SHA-256 (préflight non bloquant) ;
+    # un test qui veut prouver le fail-closed passe ONIX_ACTIONS_AUDIT_KEY_OPTIONAL="false".
+    monkeypatch.setenv("ONIX_ACTIONS_AUDIT_KEY_OPTIONAL", "true")
     for k, v in env.items():
         if v is None:
             monkeypatch.delenv(k, raising=False)
@@ -239,6 +242,28 @@ def _client_with(monkeypatch, tmp_path, **env):
     c = TestClient(main.app)
     c.headers.update({"X-API-Key": "test-key-0123456789"})
     return c
+
+
+def test_preflight_audit_key_fail_closed_sans_cle(monkeypatch, tmp_path):
+    """HARD-03 : sans clé HMAC d'audit ET sans override, le service REFUSE de démarrer."""
+    c = _client_with(
+        monkeypatch, tmp_path,
+        ONIX_ACTIONS_AUDIT_HMAC_KEY=None, ONIX_ACTIONS_AUDIT_KEY_OPTIONAL="false",
+    )
+    with pytest.raises(RuntimeError, match="HARD-03"):
+        with c:
+            pass
+
+
+def test_preflight_audit_key_ok_avec_cle(monkeypatch, tmp_path):
+    """Avec la clé HMAC, le préflight passe et le service démarre (même override off)."""
+    c = _client_with(
+        monkeypatch, tmp_path,
+        ONIX_ACTIONS_AUDIT_HMAC_KEY="cle-de-prod-au-moins-32-octets!!",
+        ONIX_ACTIONS_AUDIT_KEY_OPTIONAL="false",
+    )
+    with c:
+        assert c.get("/health").status_code == 200
 
 
 def test_admin_fail_closed_sans_cle_admin(monkeypatch, tmp_path):

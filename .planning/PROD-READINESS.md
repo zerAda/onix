@@ -32,7 +32,7 @@ Gates locaux : `actions` 90✅/5⏭ · `gateway` 339✅ · `bandit` 0 medium+ ·
 |---|-----------|------|---------------|
 | 1 | Fonctionnalités up (boot & serve E2E) | 🟡 **PARTIAL** | Boot complet **prouvé sain sur Azure** (RUNTIME-EVIDENCE) ; **#9** (seed provider) + **#10** (OOM 14B) fermés ⇒ deux blocages du chat levés. Reste : pile complète + **RAG E2E réel** gâté par le **modèle #12** (Cycle 3). |
 | 2 | Tests & portes CI | 🟡 **PARTIAL** (était NO-GO) | `pip-audit --strict` **repassé vert** (SUPPLY : pytest 9.0.3) ; reste la qualité RAG comparée à une baseline *synthétique* (RAGAS réelle = Cycle 3). |
-| 3 | Sécurité prouvable (cœur de valeur) | 🟡 **PARTIAL** (était NO-GO) | **M1 ✅ M3 ✅ M7 ✅** fermés et testés (Cycle 1). Restent : repli SHA-256 exigé au preflight (HARD-03) et **test ACL live** SharePoint/Fabric jamais joué (SEC-01, exige tenant). |
+| 3 | Sécurité prouvable (cœur de valeur) | 🟡 **PARTIAL** (était NO-GO) | **M1 ✅ M3 ✅ M7 ✅ HARD-03 ✅** (préflight clé HMAC d'audit fail-closed) fermés et testés. Reste : **test ACL live** SharePoint/Fabric jamais joué (SEC-01, exige tenant) + le finding API-compat gateway↔Onyx 4.1.1 à vérifier. |
 | 4 | Fiabilité / backup / restore | ⛔ **NO-GO** | **#6** résilience restart : invariants `restart:always`/`start_period`/ordre **assertés** (Cycle 2). Restent BLOQUANTS : backup = tar à froid (pas `pg_dump`), **non chiffré** ; restore round-trip prouvé sain sur Azure mais pas de WAL/chiffrement. |
 | 5 | Observabilité / alerting | 🟡 **PARTIAL** (était NO-GO) | **M4 fermé** : alertes livrées pour de vrai (webhook rendu **fail-closed**, refus sans URL) ⇒ plus de no-op. Restent : couverture d'alertes sync-ACL/rupture-audit (OBS-03/05), monitoring OFF par défaut (OBS-02), livraison E2E `amtool` (runtime). |
 | 6 | Conformité (RGPD) | ⛔ **NO-GO** | 4 **mensonges** non corrigés dans les docs DPO (chiffrement FOSS no-op vendu comme art.32 ; journal « qui-a-vu-quoi » jamais émis sur le chemin RAG) ; effacement Onyx art.17 FK-cassé, non outillé. |
@@ -42,7 +42,7 @@ Gates locaux : `actions` 90✅/5⏭ · `gateway` 339✅ · `bandit` 0 medium+ ·
 
 ### A. Corrigeables sans environnement (code/docs — déjà catalogués)
 - ~~**CVE pip-audit** (gate ROUGE)~~ ✅ **FAIT (Cycle 1/SUPPLY)** : pytest 9.0.3, `pip-audit --strict` vert.
-- ~~**M1** audit HMAC algo-downgrade~~ ✅ · ~~**M3** câbler `FabricDocACL`~~ ✅ · ~~**M7** contrôle in-app `X-OIDC` fail-closed~~ ✅ **(Cycle 1)**. Restent : **HARD-03** clé HMAC exigée au preflight (P0) · **SEC-03** cible `make audit-verify`.
+- ~~**M1** audit HMAC algo-downgrade~~ ✅ · ~~**M3** câbler `FabricDocACL`~~ ✅ · ~~**M7** contrôle in-app `X-OIDC` fail-closed~~ ✅ **(Cycle 1)** · ~~**HARD-03** clé HMAC exigée au preflight~~ ✅ **(préflight fail-closed `_lifespan`)**. Reste : **SEC-03** cible `make audit-verify`.
 - **M5b/BKP-02/03** `pg_dump` + chiffrement archives · **HARD-01/02** garde credentials + preflight prod.
 - ~~**M4** livraison d'alerte réelle~~ ✅ **(Cycle 2)** : `entrypoint.sh` rend le webhook fail-closed, `check-alertmanager-config` rc=0. · ~~**#10** OOM tune~~ ✅ · ~~**#9** seed provider~~ ✅ · ~~**#6** invariants restart~~ ✅ **(Cycle 2)**. Restent : **OBS-03/05** alertes ACL-sync/audit-chain · **OBS-02** monitoring par défaut · **M16** sonde gateway.
 - **M20** corriger les 4 mensonges docs DPO (revue DPO) · **RGPD-01** outiller l'effacement Onyx ciblé.

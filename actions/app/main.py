@@ -72,6 +72,10 @@ def _configure_logging() -> None:
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     _configure_logging()
+    # Préflight FAIL-CLOSED (HARD-03) : refus de démarrer sans clé HMAC d'audit
+    # (sauf override dev ONIX_ACTIONS_AUDIT_KEY_OPTIONAL) — sinon la chaîne d'audit
+    # serait en SHA-256 keyless, forgeable (cf. M1 / verify_chain).
+    audit_log.preflight_audit_key()
     admin_state.init_db()
     usage_tracker.init_db()
     tasks_mod.init_db()

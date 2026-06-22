@@ -61,6 +61,10 @@ PII, le DLP egress, la rétention/effacement, le comptage de coûts. Offline.
   stocké par ligne. Une ligne `sha256` quand la clé est présente = downgrade keyless
   (recalculable sans la clé) ⇒ rupture (`audit_log.py:187-207`). Migration
   keyless→HMAC : repartir d'une base d'audit vierge (mélange = downgrade refusé).
+- **[HARD-03] Préflight clé d'audit** : `audit_log.preflight_audit_key()` (appelé
+  dans `main.py:_lifespan`) **refuse de démarrer** sans `ONIX_ACTIONS_AUDIT_HMAC_KEY`,
+  sauf override DEV `ONIX_ACTIONS_AUDIT_KEY_OPTIONAL=true`. Sans clé, le journal est
+  forgeable (cf. M1) — fail-closed en prod, jamais « inviolable » mensonger.
 - **PII/DLP fail-safe** : en cas de doute, **rédiger/bloquer** plutôt que laisser fuir.
 - **Stateless opt-in** : imports paresseux (`db.py`/`objstore.py`) — le mode mono-poste
   SQLite ne doit **pas** exiger Postgres/S3. Ne pas régresser.

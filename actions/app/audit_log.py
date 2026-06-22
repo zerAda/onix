@@ -54,6 +54,30 @@ def _audit_secret() -> Optional[str]:
     return (os.environ.get("ONIX_ACTIONS_AUDIT_HMAC_KEY") or "").strip() or None
 
 
+def _audit_key_optional() -> bool:
+    """Par défaut FALSE (fail-closed) : la clé de chaînage HMAC est OBLIGATOIRE.
+    `ONIX_ACTIONS_AUDIT_KEY_OPTIONAL=true` rétablit le repli SHA-256 (DEV/TEST)."""
+    raw = os.environ.get("ONIX_ACTIONS_AUDIT_KEY_OPTIONAL", "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def preflight_audit_key() -> None:
+    """Préflight **FAIL-CLOSED** (HARD-03) : refuse de démarrer si la clé HMAC
+    d'audit (`ONIX_ACTIONS_AUDIT_HMAC_KEY`) est absente, SAUF override dev explicite
+    `ONIX_ACTIONS_AUDIT_KEY_OPTIONAL=true`.
+
+    Sans clé, `verify_chain` ne peut être qu'en SHA-256 keyless (cf. M1) : un
+    attaquant capable d'écrire en base peut **forger** toute la chaîne sans secret.
+    Laisser démarrer en prod = un journal d'audit *non* inviolable vendu comme tel.
+    Lève `RuntimeError` (le service ne démarre pas) — appelé dans le lifespan."""
+    if _audit_secret() is None and not _audit_key_optional():
+        raise RuntimeError(
+            "ONIX_ACTIONS_AUDIT_HMAC_KEY absente : la chaîne d'audit serait en "
+            "SHA-256 keyless (forgeable). Refus de démarrer (fail-closed, HARD-03). "
+            "Définissez la clé, ou ONIX_ACTIONS_AUDIT_KEY_OPTIONAL=true en DEV/TEST."
+        )
+
+
 def ensure_schema() -> None:
     """Ajoute les colonnes de chaînage à `admin_audit` si absentes (migration
     idempotente, compatible avec une base AC360 préexistante)."""

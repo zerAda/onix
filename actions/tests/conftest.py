@@ -16,6 +16,15 @@ if _ROOT not in sys.path:
 API_KEY = "test-key-0123456789"
 
 
+@pytest.fixture(autouse=True)
+def _default_audit_key_optional(monkeypatch):
+    """HARD-03 : par défaut TOUS les tests autorisent le repli SHA-256 (préflight
+    audit non bloquant), sinon `_lifespan` refuserait de démarrer sans clé HMAC.
+    Un test qui PROUVE le fail-closed prod repose ce flag à "false" après coup
+    (via `_client_with(..., ONIX_ACTIONS_AUDIT_KEY_OPTIONAL="false")`)."""
+    monkeypatch.setenv("ONIX_ACTIONS_AUDIT_KEY_OPTIONAL", "true")
+
+
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
     """Environnement isolé : DB/jobs/reference dans tmp, clé API et flags par défaut.
@@ -33,6 +42,10 @@ def env(tmp_path, monkeypatch):
     # service fait admin), conformément au comportement historique.
     monkeypatch.setenv("ONIX_ACTIONS_ADMIN_KEY_OPTIONAL", "true")
     monkeypatch.delenv("ONIX_ACTIONS_ADMIN_KEY", raising=False)
+    # HARD-03 : ces tests historiques tournent sans clé HMAC d'audit (repli SHA-256
+    # assumé) — on autorise explicitement le repli pour que le préflight ne refuse
+    # pas le démarrage. Les tests de prod fail-closed le remettent à "false".
+    monkeypatch.setenv("ONIX_ACTIONS_AUDIT_KEY_OPTIONAL", "true")
     # Compat egress : les tests d'intégration poussent vers 127.0.0.1 en http.
     monkeypatch.setenv("ONIX_EGRESS_ALLOWLIST", "127.0.0.1,localhost")
     monkeypatch.setenv("ONIX_EGRESS_ALLOW_HTTP", "true")
