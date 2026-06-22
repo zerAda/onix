@@ -73,6 +73,18 @@ def enforce_document_sets(
 
     filters["document_set"] = effective
 
+    # DEFENSE-IN-DEPTH (API-compat) : Onyx 4.1.x filtre via `internal_search_filters`
+    # (BaseFilters de SendMessageRequest), et NON plus via `retrieval_options` (schéma
+    # plus ancien). On pose donc le périmètre RBAC sur les DEUX champs : ajouter un
+    # filtre ne peut que **resserrer** le périmètre (jamais l'élargir), c'est donc
+    # strictement sûr quelle que soit la version d'API honorée par Onyx. La version
+    # réellement honorée par 4.1.1 reste à confirmer live (cf. RUNTIME-EVIDENCE #12).
+    isf = out.get("internal_search_filters")
+    if not isinstance(isf, dict):
+        isf = {}
+        out["internal_search_filters"] = isf
+    isf["document_set"] = effective
+
     # Neutralise un éventuel accès direct par id de document (non vérifiable en FOSS).
     out.pop("search_doc_ids", None)
     return out

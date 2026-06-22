@@ -59,6 +59,21 @@ def test_permissive_policy_passes_without_filter():
     ).get("filters", {})
 
 
+# --- Defense-in-depth API-compat : périmètre posé aussi sur internal_search_filters ---
+def test_perimetre_pose_sur_les_deux_champs_filtres():
+    out = enforce_document_sets({"message": "x"}, ["clients-nord"])
+    assert out["retrieval_options"]["filters"]["document_set"] == ["clients-nord"]
+    assert out["internal_search_filters"]["document_set"] == ["clients-nord"]
+
+
+def test_internal_search_filters_client_ne_peut_pas_elargir():
+    # Un client pré-remplissant internal_search_filters est écrasé par le périmètre
+    # effectif (déjà borné aux sets autorisés) — pas d'élargissement possible.
+    payload = {"message": "x", "internal_search_filters": {"document_set": ["secret-rh"]}}
+    out = enforce_document_sets(payload, ["clients-nord"])
+    assert out["internal_search_filters"]["document_set"] == ["clients-nord"]
+
+
 # --- RAG NON-AGENTIQUE : forçage de la recherche documentaire (stopgap CPU, #12) ---
 def test_force_internal_search_injecte_outil_recherche():
     # Pose forced_tool_id + allowed_tool_ids => Onyx exécute la recherche (REQUIRED)
