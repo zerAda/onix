@@ -72,9 +72,10 @@ def ensure_schema() -> None:
         if "entry_hash" not in cols:
             conn.execute("ALTER TABLE admin_audit ADD COLUMN entry_hash TEXT")
         if "algo" not in cols:
-            # Marqueur d'algorithme de chaînage PAR LIGNE : permet de vérifier
-            # correctement une chaîne écrite partie en SHA-256 (sans clé) puis en
-            # HMAC (clé ajoutée ensuite) sans fausse alerte d'altération.
+            # Marqueur d'algorithme de chaînage PAR LIGNE. ATTENTION (M1) : cet
+            # algo stocké NE pilote PAS la vérification (sinon downgrade keyless
+            # silencieux possible). `verify_chain()` impose l'algo selon la
+            # présence d'une clé et traite toute divergence comme une rupture.
             conn.execute("ALTER TABLE admin_audit ADD COLUMN algo TEXT")
         conn.commit()
 
@@ -184,10 +185,27 @@ def verify_chain() -> Dict[str, Any]:
         if (row.get("prev_hash") or "") != prev:
             return {"ok": False, "count": len(rows), "broken_at": row.get("seq"),
                     "reason": "prev_hash incohérent"}
-        # Recalcule avec l'algo RÉELLEMENT utilisé à l'écriture de cette ligne
-        # (évite une fausse alerte si la chaîne mêle sha256 et hmac-sha256).
-        row_algo = row.get("algo") or ("hmac-sha256" if _audit_secret() else "sha256")
-        recomputed = compute_entry_hash(prev, row, row_algo)
+        # Politique anti-downgrade FAIL-CLOSED : l'algo de vérification ne doit
+        # JAMAIS être dicté par l'algo STOCKÉ PAR LIGNE. Sinon un attaquant qui
+        # écrit en base met algo='sha256' (keyless), recalcule entry_hash SANS la
+        # clé HMAC, et la chaîne « vérifie » → dégradation silencieuse HMAC→keyless.
+        key_present = _audit_secret() is not None
+        stored_algo = (row.get("algo") or "").strip().lower()
+        if key_present:
+            # Clé configurée => politique HMAC stricte. Une ligne keyless (sha256)
+            # ou tout autre algo est une tentative de DOWNGRADE -> rupture.
+            if stored_algo and stored_algo != "hmac-sha256":
+                return {"ok": False, "count": len(rows), "broken_at": row.get("seq"),
+                        "reason": f"algo downgrade détecté (clé présente, ligne en '{stored_algo}')"}
+            verify_algo = "hmac-sha256"
+        else:
+            # Pas de clé : best-effort sha256. Une ligne HMAC est invérifiable
+            # (clé disparue/rotée) -> rupture explicite, jamais "ok" silencieux.
+            if stored_algo == "hmac-sha256":
+                return {"ok": False, "count": len(rows), "broken_at": row.get("seq"),
+                        "reason": "ligne hmac-sha256 mais clé absente : vérification impossible"}
+            verify_algo = "sha256"
+        recomputed = compute_entry_hash(prev, row, verify_algo)
         if recomputed != (row.get("entry_hash") or ""):
             return {"ok": False, "count": len(rows), "broken_at": row.get("seq"),
                     "reason": "entry_hash incohérent"}

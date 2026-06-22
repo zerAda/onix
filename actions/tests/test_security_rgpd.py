@@ -419,10 +419,19 @@ def test_audit_chain_verify_ok_puis_alteration(monkeypatch, tmp_path):
         assert v2["broken_at"] == 2
 
 
-def test_audit_chain_sans_cle_puis_avec_cle_pas_de_faux_positif(monkeypatch, tmp_path):
-    """Entrées écrites SANS clé (SHA-256) puis clé ajoutée : la vérification ne
-    doit PAS crier à l'altération (marqueur d'algo par ligne)."""
-    # Phase 1 : pas de clé d'audit.
+def test_audit_chain_sans_cle_puis_avec_cle_signale_downgrade(monkeypatch, tmp_path):
+    """Fail-closed M1 : entrées écrites SANS clé (SHA-256) PUIS clé ajoutée.
+
+    L'ANCIEN comportement (marqueur d'algo par ligne) acceptait la chaîne mixte
+    sha256+hmac. C'était une FAILLE : l'algo stocké par ligne pilotait la vérif,
+    donc un attaquant pouvait réécrire une ligne en sha256 keyless (recalculable
+    SANS la clé) et la chaîne « vérifiait » → downgrade HMAC→keyless silencieux.
+
+    Politique corrigée : dès qu'une clé est configurée, toute ligne keyless
+    (sha256) est un downgrade indétectable d'une vraie altération → rupture. La
+    migration légitime keyless→HMAC doit donc se faire sur une base d'audit
+    vierge (ou via re-scellement explicite), jamais en mêlant les deux."""
+    # Phase 1 : pas de clé d'audit (lignes écrites en sha256 keyless).
     c = _client_with(
         monkeypatch, tmp_path,
         ONIX_ACTIONS_ADMIN_KEY_OPTIONAL="true", ONIX_ACTIONS_AUDIT_HMAC_KEY=None,
@@ -431,7 +440,8 @@ def test_audit_chain_sans_cle_puis_avec_cle_pas_de_faux_positif(monkeypatch, tmp
         c.post("/admin/control", json={"action": "disable_feature", "scope": "audit"})
         c.post("/admin/control", json={"action": "enable_feature", "scope": "audit"})
         assert c.get("/admin/audit/verify").json()["ok"] is True
-    # Phase 2 : clé ajoutée + nouvelle entrée HMAC ; la chaîne mixte reste valide.
+    # Phase 2 : clé ajoutée. Les lignes keyless préexistantes deviennent suspectes
+    # (recalculables sans clé) → la chaîne DOIT signaler un downgrade (fail-closed).
     c2 = _client_with(
         monkeypatch, tmp_path,
         ONIX_ACTIONS_ADMIN_KEY_OPTIONAL="true", ONIX_ACTIONS_AUDIT_HMAC_KEY="cle-ajoutee",
@@ -439,7 +449,9 @@ def test_audit_chain_sans_cle_puis_avec_cle_pas_de_faux_positif(monkeypatch, tmp
     with c2:
         c2.post("/admin/control", json={"action": "disable_global", "scope": "global"})
         v = c2.get("/admin/audit/verify").json()
-        assert v["ok"] is True and v["count"] >= 3
+        assert v["ok"] is False
+        assert "downgrade" in (v.get("reason") or "").lower()
+        assert v["broken_at"] == 1  # la première ligne keyless est rejetée
 
 
 def test_audit_reason_redacted_avant_persistance(monkeypatch, tmp_path):
