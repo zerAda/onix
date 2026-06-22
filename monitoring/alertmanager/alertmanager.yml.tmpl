@@ -1,0 +1,55 @@
+# =============================================================================
+# onix — Alertmanager : routage et notification des alertes Prometheus.
+# -----------------------------------------------------------------------------
+# GABARIT (rendu au démarrage). Ce fichier N'est PAS lu directement par
+# Alertmanager : il est rendu en `alertmanager.yml` par l'entrypoint du conteneur
+# (cf. monitoring/alertmanager/entrypoint.sh) qui substitue ${ALERT_WEBHOOK_URL}.
+#
+# FAIL-CLOSED (non négociable) : si `ALERT_WEBHOOK_URL` est absent/vide au
+# démarrage, l'entrypoint REFUSE de lancer Alertmanager (erreur BRUYANTE). On ne
+# « livre PLUS les alertes dans le vide » comme l'ancienne config (receiver
+# `default` vide + `critical` commenté). Toute alerte (budget FinOps, service
+# down, chaîne d'audit rompue) DOIT avoir une destination réelle, sinon refus.
+#
+# Convention : `ALERT_WEBHOOK_URL` (Slack/Mattermost/Teams-compatible) — la MÊME
+# que ONIX_NOTIFY_WEBHOOK côté onix-actions. AUCUN secret committé : l'URL passe
+# par variable d'environnement (.env gitignoré ; cf. env.template).
+# =============================================================================
+global:
+  resolve_timeout: 5m
+
+route:
+  # Récepteur par défaut : notifie RÉELLEMENT le webhook (plus de trou noir).
+  receiver: webhook
+  group_by: ["alertname", "component"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Les alertes critiques sont notifiées plus vite et répétées plus souvent.
+    - matchers:
+        - severity = critical
+      receiver: webhook
+      group_wait: 10s
+      repeat_interval: 1h
+    # Le budget dépassé est une alerte « métier » prioritaire.
+    - matchers:
+        - component = finops
+      receiver: webhook
+      group_wait: 10s
+
+receivers:
+  # Récepteur unique : livraison webhook RÉELLE (URL injectée via env, jamais
+  # committée). `send_resolved: true` notifie aussi la résolution des alertes.
+  - name: webhook
+    webhook_configs:
+      - url: "${ALERT_WEBHOOK_URL}"
+        send_resolved: true
+
+inhibit_rules:
+  # Une alerte critique sur un composant masque les warnings du même composant.
+  - source_matchers:
+      - severity = critical
+    target_matchers:
+      - severity = warning
+    equal: ["component"]

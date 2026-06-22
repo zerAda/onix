@@ -128,8 +128,8 @@
 | `KillSwitchBlockingTraffic` : ≥1 req/s (5 min), info | ✅ | `onix-alerts.yml:95-108` | |
 | `BudgetWarning` : ≥80% et <100%, warning | ✅ | `onix-alerts.yml:115-127` | |
 | `BudgetExceeded` : ≥100%, critical | ✅ | `onix-alerts.yml:129-141` | `for:1m` (la doc ne précise pas la durée). |
-| « Par défaut aucune notification sortante (récepteur local) » | ✅ | `alertmanager.yml:32-39` (receiver `default` vide, `critical` webhook commenté) | |
-| Activation via `ALERT_WEBHOOK_URL` + décommenter `webhook_configs` | ✅ | `alertmanager.yml:37-39`, env injectée `docker-compose.monitoring.yml:87`, `env.template:192` | URL jamais committée, conforme. |
+| ~~« Par défaut aucune notification sortante (récepteur local) »~~ | ❌→✅ (résolu itér. 4, §P0-bis) | Ancien : `alertmanager.yml:32-39` (receiver `default` VIDE + `critical` webhook COMMENTÉ) → **toute** alerte avalée en silence. La doc affirmait « ✅ conforme » : FAUX (anti-fail-closed). | Corrigé : gabarit + entrypoint fail-closed (cf. §P0-bis). |
+| Livraison webhook RÉELLE via `ALERT_WEBHOOK_URL` + fail-closed | ✅ (itér. 4) | `alertmanager/alertmanager.yml.tmpl:39-46` (receiver `webhook` réel, `send_resolved: true`) ; rendu `alertmanager/entrypoint.sh:25-58` ; refus boot si vide `entrypoint.sh:30-37` ; garde `Makefile` `monitor-up` ; test `scripts/check-alertmanager-config.py` (`make monitor-render`) | URL jamais committée ; substitution env au démarrage (Alertmanager n'expanse pas les env). |
 
 ## 7. Logs / Loki / Promtail (§2)
 
@@ -166,6 +166,34 @@
    (§0/§2/§3/§5/§7/§8), `prometheus.yml`, `onix-alerts.yml`, `blackbox.yml`,
    `docker-compose.monitoring.yml`, `env.template`. Validé : YAML OK +
    `docker compose -f monitoring/docker-compose.monitoring.yml config -q` OK.
+
+### P0-bis — bloquant / trompeur (itér. 4)
+1-bis. **Alertes livrées DANS LE VIDE + doc « conforme » mensongère (❌).**
+   `alertmanager.yml` (ancien) : receiver `default` **VIDE** (ne notifiait nulle
+   part) et receiver `critical` avec `webhook_configs` **COMMENTÉ**. Résultat :
+   **TOUTE** alerte (budget FinOps, service down, chaîne d'audit rompue) partait
+   en silence. Pire, `OBSERVABILITY.md` §4 affirmait que c'était « ✅ conforme /
+   souverain » — **anti-fail-closed**. De surcroît, même décommenté,
+   `${ALERT_WEBHOOK_URL}` serait resté **littéral** (Alertmanager n'expanse pas
+   les variables d'environnement dans sa config).
+   → ✅ **RÉSOLU** (boucle Ralph `monitoring`, itér. 4) :
+   - `monitoring/alertmanager/alertmanager.yml.tmpl` : **gabarit** avec receiver
+     `webhook` **réel** (`webhook_configs` décommenté, `${ALERT_WEBHOOK_URL}`,
+     `send_resolved: true`) ; routes par défaut **et** `critical`/`finops` y mènent.
+   - `monitoring/alertmanager/entrypoint.sh` : rend le gabarit (substitution
+     `sed`) au boot **et FAIL-CLOSED** — refus `exit 1` + log `CRITICAL` si
+     `ALERT_WEBHOOK_URL` absent/vide/non-http (jamais d'avalement silencieux).
+   - `docker-compose.monitoring.yml` : monte gabarit + entrypoint, `tmpfs:/tmp`
+     (rendu écrit dans /tmp) ; l'ancien `alertmanager.yml` statique est **supprimé**.
+   - `Makefile` : `monitor-up` REFUSE de démarrer sans `ALERT_WEBHOOK_URL`
+     (double garde) ; nouvelle cible `monitor-render` (incluse dans `make test`).
+   - `scripts/check-alertmanager-config.py` : test autonome (stdlib) — asserte le
+     webhook réel pointant l'URL **et** le refus fail-closed sans URL.
+   - Docs : `OBSERVABILITY.md` §4/§8, `env.template`, scope docs corrigés.
+   Validé localement : `make monitor-render` → vert ; rendu shell de l'entrypoint
+   exécuté (URL absente/vide/non-http → refus `exit 1` ; URL valide → config
+   rendue + lancement) ; compose YAML + gabarit rendu parsés OK (pyyaml). Boot
+   conteneur réel + envoi HTTP par Alertmanager : à confirmer en stack (Docker).
 
 ### P1 — sérieux
 2. **18 métriques `onix_gateway_*` émises, scrappées, mais ni visualisées ni

@@ -84,17 +84,28 @@ services:
     image: prom/alertmanager:v0.27.0
     restart: unless-stopped
     # Durcissement : pas d'escalade, aucune capability. PAS de read_only :
-    # Alertmanager écrit son état (silences, nflog) dans le volume /alertmanager.
+    # Alertmanager écrit son état (silences, nflog) dans le volume /alertmanager
+    # ET le rendu de config dans /tmp (cf. entrypoint) -> /tmp en tmpfs.
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
+    tmpfs:
+      - /tmp
+    # FAIL-CLOSED : l'entrypoint REND la config depuis alertmanager.yml.tmpl en
+    # substituant ${ALERT_WEBHOOK_URL}, et REFUSE de démarrer si l'URL est
+    # absente/vide (sinon les alertes partiraient dans le vide). Il fixe
+    # lui-même --config.file ; on ne passe ici que les autres arguments.
+    entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
     command:
-      - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
     environment:
-      # URL de webhook optionnelle (non committée). Vide = pas de notif sortante.
+      # URL de webhook OBLIGATOIRE (non committée). Vide => refus de démarrer
+      # (fail-closed dans l'entrypoint). `:?` non utilisé ici pour ne pas casser
+      # `docker compose config` quand .env est absent ; le garde-fou bloquant
+      # vit dans l'entrypoint (au boot) ET dans `make monitor-up` (au lancement).
       - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
     volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/alertmanager.yml.tmpl:/etc/alertmanager/alertmanager.yml.tmpl:ro
+      - ./alertmanager/entrypoint.sh:/etc/alertmanager/entrypoint.sh:ro
       - alertmanager_data:/alertmanager
     networks: [monitoring]
     healthcheck:

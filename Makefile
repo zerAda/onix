@@ -384,10 +384,10 @@ logs-local-prod:
 MONITORING_COMPOSE := docker compose -f monitoring/docker-compose.monitoring.yml
 
 .PHONY: test lint docs-check docs-freshness hooks-install llms-full pytest bandit pip-audit trivy gitleaks compose-validate sbom \
-        monitor-up monitor-down monitor-config monitor-logs
+        monitor-up monitor-down monitor-config monitor-logs monitor-render
 
 # Barrière unique : tout ce que la CI vérifie, en local, dans l'ordre.
-test: lint compose-validate pytest bandit pip-audit gitleaks trivy
+test: lint compose-validate monitor-render pytest bandit pip-audit gitleaks trivy
 	@echo "✓ WS6 : toutes les barrières qualité/sécurité/supply-chain sont VERTES."
 
 lint: docs-check
@@ -483,6 +483,16 @@ monitor-up:
 	  if [ $${#PW} -lt 12 ]; then \
 	    echo "✗ GRAFANA_ADMIN_PASSWORD trop court (< 12 caractères). Renforcez-le (make secrets)."; exit 1; \
 	  fi
+	@# Garde-fou FAIL-CLOSED Alertmanager : sans ALERT_WEBHOOK_URL, TOUTE alerte
+	@# (budget FinOps, service down, chaîne d'audit rompue) partirait dans le vide.
+	@# On REFUSE de démarrer la stack plutôt que d'avaler les alertes en silence.
+	@# (Le conteneur alertmanager refuse aussi au boot — double garde.)
+	@WH=$$(sed -n 's/^ALERT_WEBHOOK_URL=//p' .env 2>/dev/null | head -n1); \
+	  if [ -z "$$WH" ]; then \
+	    echo "✗ ALERT_WEBHOOK_URL absent/vide dans .env. Sans lui, alertmanager n'a AUCUNE destination : les alertes (budget, service down, audit) seraient perdues. Renseignez l'URL webhook (Slack/Mattermost/Teams-compatible) avant 'make monitor-up'. Fail-closed."; exit 1; \
+	  fi; \
+	  case "$$WH" in http://*|https://*) : ;; *) \
+	    echo "✗ ALERT_WEBHOOK_URL ne commence pas par http(s):// — URL invalide. Fail-closed."; exit 1;; esac
 	@$(MONITORING_COMPOSE) up -d
 	@P=$$(sed -n 's/^GRAFANA_HOST_PORT=//p' .env 2>/dev/null | head -n1); P=$${P:-3001}; \
 	  U=$$(sed -n 's/^GRAFANA_ADMIN_USER=//p' .env 2>/dev/null | head -n1); U=$${U:-onix-admin}; \
@@ -493,6 +503,12 @@ monitor-down:
 
 monitor-config:
 	@$(MONITORING_COMPOSE) config -q && echo "✓ monitoring/docker-compose.monitoring.yml valide."
+
+# Valide le rendu fail-closed d'Alertmanager : (1) le gabarit rendu contient un
+# webhook_configs RÉEL pointant ALERT_WEBHOOK_URL (pas vide/commenté) ; (2) sans
+# l'URL, le rendu est REFUSÉ. Test autonome (stdlib, sans Docker).
+monitor-render:
+	@python3 scripts/check-alertmanager-config.py
 
 monitor-logs:
 	@$(MONITORING_COMPOSE) logs -f --tail=200

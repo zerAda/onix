@@ -145,11 +145,33 @@ Routage : [`monitoring/alertmanager/alertmanager.yml`](../monitoring/alertmanage
 | `OpenSearchExporterDown` | `elasticsearch_cluster_health_up == 0` 2 min | critical | non |
 | `OpenSearchHeapHigh` | heap JVM OpenSearch > 90 % pendant 10 min | warning | non |
 
-**Notification :** par défaut **aucune sortie** (récepteur local — souveraineté).
-Pour notifier, renseignez `ALERT_WEBHOOK_URL` (Slack/Mattermost/Teams-compatible,
-même convention que `ONIX_NOTIFY_WEBHOOK`) et décommentez le `webhook_configs`
-dans `alertmanager.yml`. L'URL passe par variable d'environnement — **jamais
-committée**.
+**Notification (FAIL-CLOSED) :** la livraison des alertes est **réelle** via
+webhook (`ALERT_WEBHOOK_URL`, Slack/Mattermost/Teams-compatible, même convention
+que `ONIX_NOTIFY_WEBHOOK`). L'URL passe par variable d'environnement — **jamais
+committée** (`.env` gitignoré, cf. `env.template`).
+
+- **Rendu au démarrage.** Alertmanager n'expanse pas les variables d'environnement
+  dans sa config. Le conteneur lit donc un **gabarit**
+  [`alertmanager/alertmanager.yml.tmpl`](../monitoring/alertmanager/alertmanager.yml.tmpl)
+  et le **rend** au boot via
+  [`alertmanager/entrypoint.sh`](../monitoring/alertmanager/entrypoint.sh) (substitution
+  de `${ALERT_WEBHOOK_URL}`). Le receiver `webhook` est **réel** (plus de
+  `webhook_configs` commenté) avec `send_resolved: true`.
+- **Fail-closed (non négociable).** Si `ALERT_WEBHOOK_URL` est **absent/vide**, la
+  stack **REFUSE de démarrer** Alertmanager — garde *au boot* (entrypoint, log
+  `CRITICAL` + `exit 1`) **et** *au lancement* (`make monitor-up` refuse). On ne
+  livre **plus** les alertes « dans le vide » comme l'ancienne config (receiver
+  `default` vide + `webhook_configs` commenté), qui avalait silencieusement
+  **toute** alerte (budget FinOps, service down, chaîne d'audit rompue).
+- **Validation hors Docker.** `make monitor-render`
+  ([`scripts/check-alertmanager-config.py`](../scripts/check-alertmanager-config.py),
+  inclus dans `make test`) rend le gabarit et **asserte** : (1) un `webhook_configs`
+  réel pointant l'URL ; (2) le refus fail-closed sans `ALERT_WEBHOOK_URL`.
+
+> **Souveraineté.** Aucune dépendance cloud : le webhook cible un endpoint **fourni
+> par le client** (Mattermost/Slack/Teams self-hosted ou autre récepteur HTTP). La
+> config par défaut n'émet rien tant qu'aucune URL n'est fournie — mais alors la
+> stack monitoring **ne démarre pas** (fail-closed), elle ne tourne pas « sourde ».
 
 ---
 
@@ -362,10 +384,18 @@ ignorés proprement en local s'ils ne sont pas installés (ils tournent en CI).
 - `yamllint` sur workflows + monitoring → OK ; JSON des dashboards bien formés.
 - Parsing des workflows et des règles Prometheus.
 - `gitleaks` → 0 secret.
+- **`make monitor-render`** (`scripts/check-alertmanager-config.py`) → rend le
+  gabarit Alertmanager et asserte le `webhook_configs` réel + le refus fail-closed
+  sans `ALERT_WEBHOOK_URL`. Le rendu shell de l'entrypoint a été exécuté
+  localement (cas URL absente/vide/non-http → refus `exit 1` ; cas URL valide →
+  config rendue + lancement) ; le boot conteneur réel reste à confirmer en stack.
 
 **Nécessite une vraie exécution CI / cluster (à confirmer en pipeline réel) :**
 - Exécution des actions GitHub (`trivy-action`, `sbom-action`,
   `build-push-action`, upload SARIF) — réseau + runner requis.
 - `make monitor-up` réel : scrape des cibles, peuplement Grafana, déclenchement
-  d'alertes (y compris celles basées sur `/metrics`, désormais livré).
+  d'alertes (y compris celles basées sur `/metrics`, désormais livré), et
+  **livraison effective** d'une notification webhook vers `ALERT_WEBHOOK_URL`
+  (le rendu fail-closed est testé statiquement ; l'envoi HTTP réel par Alertmanager
+  se confirme en stack avec un récepteur joignable).
 - Push GHCR (nécessite les permissions `packages: write` du dépôt).
