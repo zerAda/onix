@@ -67,4 +67,22 @@ Bénéfique et transparent : provider Ollama Onyx **créé** (id=1, défaut) ; `
 - **Cosmétique** : gemma3 enveloppe sa réponse dans `{"result": "..."}` → à déballer côté gateway (non bloquant).
 
 ---
-*Preuves collectées sur VM jetable (az run-command). VM **désallouée** après lecture (modèles gemma3+embeddinggemma conservés sur disque ; `az vm start` pour re-tester, `az group delete -n onix-test-rg` pour détruire).*
+
+## Cycle 4 — E2E Docker **LIVE de mes correctifs onix**, par scope (2026-06-22)
+
+**Méthode** : la branche `prod/cycle1-securite` **déployée sur la VM** (`git fetch` + checkout `00b46e7`), **image `actions` rebuildée** avec mon code (M1/HARD-03), **gateway buildée+lancée** sur `onix-net`. Chaque scope testé de bout en bout sur la **pile réelle** (gemma3 par défaut).
+
+| Scope | Fonctionnalité | Preuve LIVE |
+|---|---|---|
+| **actions** | **M1** audit anti-downgrade | `verify_chain` (code déployé) : chaîne HMAC normale `ok=True` ; après attaque downgrade keyless (`UPDATE … algo='sha256'`) → **`ok=False`, reason « algo downgrade détecté »** → `M1_LIVE: PASS` |
+| **actions** | **HARD-03** préflight clé d'audit | Clé vidée + recréation `actions` → **`Restarting (3)`** (crash-loop), logs `RuntimeError: … Refus de démarrer (fail-closed, HARD-03)`. Clé restaurée → `Up (healthy)`, `/health=200`. |
+| **rag-prompts** | **#12** RAG sourcé+cité (gemma3) | register/connecteur/ingestion → chat **200** (313 s), `TOP_DOCUMENTS=1`, `CITATIONS=1`, **GROUNDED `ZQX7731`+`4242` = True** → réponse « …code **ZQX7731ONIXE2E [[1]]**…risque **4242 [[1]]** ». |
+| **access-gateway** | **M7** anti-spoof X-OIDC | `/v1/authorized-document-sets` SANS `X-OIDC-Proxy-Secret` → **401** ; mauvais secret → **401** ; bon secret → **200**. Usurpation par accès direct **bloquée**. |
+| **access-gateway** | **RBAC** groupe→Document Set | claims groupe `TESTGROUP` (mappé) → `authorized_document_sets:["clients-test"]` ; groupe non mappé → **périmètre vide** (deny-by-default). |
+| **deploy-ops** | intégration (gemma3 défaut) | `make verify` = **25 OK / 0 échec** — « Stack saine » sur boot frais. |
+| **monitoring** | **M4** alertes fail-closed | `alertmanager/entrypoint.sh` sans `ALERT_WEBHOOK_URL` → **exit 1** + 3 `CRITICAL` (« REFUS de démarrer… alertes sans destination… Fail-closed »). Fini le no-op. |
+
+**Verdict** : les correctifs des 5 scopes (actions M1/HARD-03, rag #12, gateway M7/RBAC, deploy-ops, monitoring M4) sont **prouvés au runtime sur la pile réelle**, en plus des suites offline (actions 92 · gateway 350 · deploy-ops 6+3 verts).
+
+---
+*Preuves collectées sur VM jetable (az run-command). VM **désallouée** après lecture (branche `prod/cycle1-securite` + modèles gemma3 conservés sur disque ; `az vm start` pour re-tester, `az group delete -n onix-test-rg` pour détruire).*
