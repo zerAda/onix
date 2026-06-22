@@ -51,6 +51,7 @@ from .onyx_proxy import (
     apply_filtered_answer,
     enforce_document_sets,
     extract_answer,
+    force_internal_search,
     reconstruct_context,
     upstream_headers,
 )
@@ -376,6 +377,16 @@ async def chat_send_message(
         )
         inc_requests(endpoint="chat/send-message", decision="deny")
         raise HTTPException(status_code=403, detail=str(exc))
+
+    # RAG NON-AGENTIQUE (stopgap CPU) : forcer la recherche documentaire pour que
+    # la réponse soit SOURCÉE même avec un modèle local faible (cf. #12). Posé sur
+    # `safe_payload` => couvre les DEUX chemins (stream + non-stream). No-op si le
+    # client a déjà choisi ses outils, ou si désactivé (modèle agentique fiable).
+    safe_payload = force_internal_search(
+        safe_payload,
+        enabled=settings.force_internal_search,
+        tool_id=settings.force_search_tool_id,
+    )
 
     effective = (
         safe_payload.get("retrieval_options", {}).get("filters", {}).get("document_set")

@@ -64,6 +64,13 @@ class Settings:
     # True par défaut : c'est un contrôle de sécurité DÉPLOYÉ (fail-safe). On ne
     # l'expose désactivable que pour le diagnostic ; en prod on le laisse actif.
     guardrail_enabled: bool
+    # RAG NON-AGENTIQUE (stopgap CPU) : forcer l'outil de recherche documentaire
+    # côté Onyx pour des réponses SOURCÉES même avec un modèle local faible
+    # (cf. onyx_proxy.force_internal_search + RUNTIME-EVIDENCE #12). Mettre False
+    # quand un modèle à function-calling fiable (GPU) est déployé → agentique natif.
+    force_internal_search: bool
+    # Id de l'outil internal_search d'Onyx (stable = 1 ; configurable par sûreté).
+    force_search_tool_id: int
     # Timeout (s) du relais HTTP vers l'amont Onyx. Un amont qui génère via LLM
     # peut être lent (CPU) ; configurable pour ne pas couper une génération longue.
     upstream_timeout: float
@@ -269,6 +276,8 @@ def get_settings() -> Settings:
         graph_authority=graph_authority,
         mapping_path=os.environ.get("GATEWAY_MAPPING_PATH", "/config/group_map.json"),
         deny_if_no_match=_bool("GATEWAY_DENY_IF_NO_MATCH", True),
+        force_internal_search=_bool("GATEWAY_FORCE_INTERNAL_SEARCH", True),
+        force_search_tool_id=int(os.environ.get("GATEWAY_FORCE_SEARCH_TOOL_ID", "1")),
         oidc_group_claims=oidc_group_claims,
         group_cache_ttl=int(os.environ.get("GATEWAY_GROUP_CACHE_TTL", "300")),
         guardrail_enabled=_bool("GATEWAY_GUARDRAIL_ENABLED", True),

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.onyx_proxy import AccessDenied, enforce_document_sets
+from app.onyx_proxy import AccessDenied, enforce_document_sets, force_internal_search
 
 
 def test_no_authorized_sets_denies():
@@ -57,3 +57,30 @@ def test_permissive_policy_passes_without_filter():
     assert "retrieval_options" not in out or "document_set" not in out.get(
         "retrieval_options", {}
     ).get("filters", {})
+
+
+# --- RAG NON-AGENTIQUE : forçage de la recherche documentaire (stopgap CPU, #12) ---
+def test_force_internal_search_injecte_outil_recherche():
+    # Pose forced_tool_id + allowed_tool_ids => Onyx exécute la recherche (REQUIRED)
+    # au lieu de laisser un modèle faible la rater. Réponse sourcée (prouvé live).
+    out = force_internal_search({"message": "x"}, enabled=True, tool_id=1)
+    assert out["forced_tool_id"] == 1
+    assert out["allowed_tool_ids"] == [1]
+
+
+def test_force_internal_search_tool_id_configurable():
+    out = force_internal_search({"message": "x"}, enabled=True, tool_id=7)
+    assert out["forced_tool_id"] == 7 and out["allowed_tool_ids"] == [7]
+
+
+def test_force_internal_search_noop_si_desactive():
+    # enabled=False => agentique natif (modèle à function-calling fiable / GPU).
+    out = force_internal_search({"message": "x"}, enabled=False, tool_id=1)
+    assert "forced_tool_id" not in out and "allowed_tool_ids" not in out
+
+
+def test_force_internal_search_respecte_choix_client():
+    # Un appel avancé qui a déjà choisi ses outils n'est PAS écrasé.
+    payload = {"message": "x", "forced_tool_id": 3, "allowed_tool_ids": [3]}
+    out = force_internal_search(payload, enabled=True, tool_id=1)
+    assert out["forced_tool_id"] == 3 and out["allowed_tool_ids"] == [3]

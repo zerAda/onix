@@ -29,9 +29,10 @@ Ancré sur les preuves : [`PROD-READINESS.md`](PROD-READINESS.md) (7 dimensions,
 - **#9** ✅ — `seed-provider.sh` (idempotent, fail-closed) enregistre le provider Ollama via l'API admin. *Persistance base = runtime-only.*
 - **#10** ✅ — `detect-hardware` dimensionne `OLLAMA_MEM_LIMIT` sur l'empreinte réelle (14B→24g). *Non-OOM précis = runtime-only.*
 
-### Cycle 3 — RAG produit (le mur #12) 🔴
-- **#12** — qwen2.5:14b **inapte au tool-calling agentique** d'Onyx (hallucine au lieu de citer). Décision : modèle à function-calling fiable (**GPU** pour un modèle plus capable) **ou** persona RAG non-agentique garantissant le grounding. Preuve : réponse **sourcée + citation** E2E.
-- **RAGAS** baseline réelle (qualité mesurée, pas supposée).
+### Cycle 3 — RAG produit (le mur #12) ✅ **STOPGAP LANDÉ + PROUVÉ LIVE**
+- **#12** ✅ — **résolu sans GPU** : la gateway force l'outil `internal_search` d'Onyx (`onyx_proxy.force_internal_search`, `forced_tool_id`+`allowed_tool_ids`) ⇒ RAG **non-agentique** ⇒ **prouvé live** avec `gemma3:12b` : réponse **sourcée + citée** (token grounded + risque 4242 + citation [[1]], cf. RUNTIME-EVIDENCE #12). 4 tests offline ; gateway 343 passed.
+- **Follow-up** : câbler gemma3:12b+embeddinggemma par défaut dans `detect-hardware`/`make models` (deploy-ops) ; déballer le `{"result":...}` de gemma3 côté gateway ; vérifier l'API-compat `retrieval_options` vs `internal_search_filters` (Onyx 4.1.1).
+- **RAGAS** baseline réelle (qualité mesurée, pas supposée) — reste à faire.
 
 ### Cycle 4 — Compliance, RGPD & durcissement final 🔴
 - **M20** — honnêteté compliance (FOSS vs EE), RGPD (minimisation, rétention, DLP).

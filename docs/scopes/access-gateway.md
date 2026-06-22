@@ -35,7 +35,7 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 | [`app/cache.py`](../../access-gateway/app/cache.py) | Cache **RBAC-safe** (clé HMAC incluant le périmètre trié) + tier sémantique opt-in + garde anti-divergence. |
 | [`app/guardrail.py`](../../access-gateway/app/guardrail.py) | Post-filtre garde-fous sur la réponse de l'assistant. |
 | [`app/streaming.py`](../../access-gateway/app/streaming.py) | Relais **NDJSON** (`application/x-ndjson`) token-par-token + garde DUR incrémental + override final. |
-| [`app/onyx_proxy.py`](../../access-gateway/app/onyx_proxy.py) | Relais HTTP vers Onyx amont (timeouts, en-têtes). |
+| [`app/onyx_proxy.py`](../../access-gateway/app/onyx_proxy.py) | Relais HTTP vers Onyx amont + `enforce_document_sets` (périmètre RBAC). **`force_internal_search` (#12)** : force l'outil `internal_search` d'Onyx (`forced_tool_id`+`allowed_tool_ids`) ⇒ RAG **non-agentique** sourcé même avec un modèle CPU faible (réglage `GATEWAY_FORCE_INTERNAL_SEARCH`, défaut ON ; prouvé live gemma3, cf. RUNTIME-EVIDENCE #12). |
 | [`app/metrics.py`](../../access-gateway/app/metrics.py) | Compteurs Prometheus (`/metrics`). |
 | [`app/audit.py`](../../access-gateway/app/audit.py) | Journal d'audit structuré des décisions d'accès (acteur haché). |
 | [`tests/`](../../access-gateway/tests/) | Suite **offline** (httpx mocké) + harnais e2e LIVE (`tests/e2e/`). |

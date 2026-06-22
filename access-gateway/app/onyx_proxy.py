@@ -78,6 +78,42 @@ def enforce_document_sets(
     return out
 
 
+def force_internal_search(
+    payload: dict[str, Any],
+    *,
+    enabled: bool = True,
+    tool_id: int = 1,
+) -> dict[str, Any]:
+    """Force la RECHERCHE DOCUMENTAIRE (RAG **non-agentique**) côté Onyx.
+
+    Onyx 4.x est agentique : c'est le LLM qui *décide* d'appeler l'outil de
+    recherche. Un modèle local faible (ex. qwen2.5:14b en CPU) échoue à ce choix
+    — il hallucine un appel d'outil **en texte** au lieu d'invoquer
+    `internal_search`, et la réponse n'est PAS sourcée (prouvé au runtime, cf.
+    `.planning/RUNTIME-EVIDENCE.md` #12).
+
+    En posant `forced_tool_id` + `allowed_tool_ids` sur l'outil de recherche,
+    Onyx bascule en `tool_choice=REQUIRED` et **exécute lui-même** la
+    récupération (`llm_loop.py`), puis le LLM répond à partir du contexte
+    récupéré → réponse **grounded + citée** (prouvé live avec `gemma3:12b`).
+    C'est le **stopgap CPU** : RAG fiable sans GPU ni agentique.
+
+    Pré-requis (satisfait en prod) : au moins un connecteur réel existe, sinon
+    `SearchTool.is_available()` est False côté Onyx et le forçage est ignoré.
+
+    Mutate-and-return (cohérent avec `enforce_document_sets`). On NE force PAS si
+    le client a déjà précisé `forced_tool_id`/`allowed_tool_ids` (respect d'un
+    appel avancé). `enabled=False` => no-op (mode agentique natif, à utiliser
+    quand un modèle à function-calling fiable est déployé)."""
+    if not enabled:
+        return payload
+    if payload.get("forced_tool_id") is not None or payload.get("allowed_tool_ids"):
+        return payload
+    payload["forced_tool_id"] = tool_id
+    payload["allowed_tool_ids"] = [tool_id]
+    return payload
+
+
 def upstream_headers(api_key: str, incoming: dict[str, str] | None = None) -> dict[str, str]:
     """Construit les en-têtes vers Onyx. La clé d'API Onyx (le cas échéant) est
     injectée côté serveur ; on ne propage JAMAIS l'en-tête d'identité brut en amont

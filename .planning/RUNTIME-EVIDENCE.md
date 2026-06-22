@@ -45,4 +45,26 @@ Le **LLM en CPU est le goulot** : `qwen2.5:14b` ≈ 0,1 req/s. Pour un go-live m
 Bénéfique et transparent : provider Ollama Onyx **créé** (id=1, défaut) ; `.env` patché `OLLAMA_MEM_LIMIT=40g`/`NUM_PARALLEL=1` + conteneur ollama recréé ; persona 0 **restaurée** à l'identique ; **tous** les users/docs de test **supprimés** (FK comprises). Le chat UI **génère** désormais (mais reste non-sourcé, cf. #12).
 
 ---
-*Preuves collectées sur VM jetable (az run-command). VM à détruire après lecture (`az group delete -n onix-test-rg`).*
+
+## Cycle 3 — #12 RÉSOLU : stopgap RAG non-agentique, **prouvé live** (2026-06-22)
+
+**Le mur #12 (chat RAG non-sourcé sur CPU) est levé** sans GPU. Cause racine, lue dans le code Onyx 4.1.1 puis prouvée au runtime :
+
+| Constat | Verdict | Preuve |
+|---|---------|--------|
+| **#12 cause** : Onyx 4.x est **agentique** (le LLM *décide* d'appeler `internal_search` via `llm_loop.py`). qwen2.5:14b CPU **rate ce choix** (hallucine un appel d'outil en texte). | 🔍 | `process_message.py` / `llm_loop.py:707-713` ; aucun flag « non-agentique » natif. |
+| **Levier** : poser `forced_tool_id` + `allowed_tool_ids` = outil `internal_search` ⇒ `tool_choice=REQUIRED` ⇒ Onyx **exécute lui-même** la recherche, indépendamment du modèle. | ✅ | `llm_loop.py:709` ; pré-requis `SearchTool.is_available()` = au moins **un connecteur réel** (`check_connectors_exist`, `connector.id>0`) — **toujours vrai en prod** (SharePoint/Fabric). |
+| **Modèle** : `gemma3:12b` répond **à partir du contexte récupéré** avec citations (là où qwen crachait du JSON d'outil). | ✅ **PROUVÉ LIVE** | chat `200` en 320 s (CPU) ; `top_documents=1` (score 1.0), `citation_info=1`, `error=None` ; **GROUNDED token `ZQX7731ONIXE2E` ✅ + risque `4242` ✅**. |
+
+**Réponse réelle gemma3** : *« Selon le document 'ONIX-E2E-TESTDOC', le code de validation de bout en bout onix est **ZQX7731ONIXE2E [[1]]**. La garantie fictive Zogary Prevoyance couvre le risque imaginaire **numéro 4242 [[1]]**. »* → vraie réponse **sourcée + citée**.
+
+### Codification (landée)
+- **access-gateway** : `onyx_proxy.force_internal_search()` injecte `forced_tool_id`+`allowed_tool_ids` dans le payload chat relayé (stream + non-stream), réglage `GATEWAY_FORCE_INTERNAL_SEARCH` (défaut **ON**) + `GATEWAY_FORCE_SEARCH_TOOL_ID` (défaut 1). 4 tests offline. À désactiver quand un modèle à function-calling fiable (GPU) est déployé → agentique natif.
+- **Recommandation modèle** : `gemma3:12b` (chat) + `embeddinggemma` (embeddings) — pull validé sur VM. *(Câblage `detect-hardware`/`make models` = follow-up deploy-ops ciblé, non fait ce tour pour ne pas re-toucher la logique d'empreinte #10 fraîchement landée.)*
+
+### Findings secondaires (à tracer, hors stopgap)
+- **API-compat gateway↔Onyx 4.1.1** : la gateway force le périmètre via `retrieval_options.filters.document_set` (ancien schéma), mais `SendMessageRequest` 4.1.1 attend `internal_search_filters` (`BaseFilters`) → le forçage de Document Set pourrait être **ignoré** par Onyx 4.1.1. **À vérifier/réconcilier** (impact RBAC réel).
+- **Cosmétique** : gemma3 enveloppe sa réponse dans `{"result": "..."}` → à déballer côté gateway (non bloquant).
+
+---
+*Preuves collectées sur VM jetable (az run-command). VM **désallouée** après lecture (modèles gemma3+embeddinggemma conservés sur disque ; `az vm start` pour re-tester, `az group delete -n onix-test-rg` pour détruire).*
