@@ -1,10 +1,20 @@
 # Production-Readiness — verdict & preuves
 
-**Date :** 2026-06-21 (audit initial) · **MAJ 2026-06-22 (Cycle 1 sécurité landé)** · **Méthode :** audit 7 dimensions (1 grader/dimension, preuves `fichier:ligne` + état CI + reqs/missions), bornage honnête de ce qui est **non vérifiable sans environnement** (Docker/tenant indisponibles ici).
+**Date :** 2026-06-21 (audit initial) · **MAJ 2026-06-22 (Cycles 1+2 landés)** · **Méthode :** audit 7 dimensions (1 grader/dimension, preuves `fichier:ligne` + état CI + reqs/missions), bornage honnête de ce qui est **non vérifiable sans environnement** (Docker/tenant indisponibles ici).
 
-## ⛔ VERDICT : NON-GO pour la production (mais Cycle 1 réduit l'écart)
+## ⛔ VERDICT : NON-GO pour la production (mais Cycles 1+2 réduisent nettement l'écart)
 
-**Score : 0 GO · 3 PARTIAL · 4 NO-GO** (était 0/1/6). onix n'est **pas** encore « tout monté, vérifié et robuste » pour un go-live, mais le **Cycle 1 sécurité** a fermé 4 blocages P0 (preuves ci-dessous). La couche logicielle est mature et bien testée *hors-ligne* ; restent (a) la **fiabilité/observabilité/compliance** (Cycles 2-4), et (b) **la pile complète exercée runtime** (boot prouvé sain sur Azure, cf. RUNTIME-EVIDENCE.md, mais RAG chat bloqué par le modèle #12).
+**Score : 0 GO · 4 PARTIAL · 3 NO-GO** (était 0/1/6 → 0/3/4 après C1). onix n'est **pas** encore « tout monté, vérifié et robuste » pour un go-live, mais les **Cycles 1 (sécurité) + 2 (fiabilité/observabilité)** ont fermé **7 blocages P0** (preuves ci-dessous). La couche logicielle est mature et bien testée *hors-ligne* ; restent (a) la **compliance + backup chiffré + supply-chain release** (Cycles 4), (b) le **mur RAG #12** (modèle/GPU, Cycle 3), et (c) **la pile complète exercée runtime** (boot prouvé sain sur Azure, cf. RUNTIME-EVIDENCE.md).
+
+### ✅ Cycle 2 — Fiabilité & observabilité : LANDÉ (branche `prod/cycle1-securite`, gates locaux verts)
+| Blocker | Fix | Preuve |
+|---|---|---|
+| **M4** alertes no-op | Alertmanager : `alertmanager.yml.tmpl` + `entrypoint.sh` rend l'URL webhook **fail-closed** (refus de démarrer sans `ALERT_WEBHOOK_URL` http(s)) ; receivers/routes ont un webhook RÉEL (`send_resolved`) | `monitoring/alertmanager/entrypoint.sh` ; `scripts/check-alertmanager-config.py` **rc=0** (cible `make` l.511) |
+| **#10** OOM 14B (`make tune` 12g) | `detect-hardware.sh`/`.ps1` : empreinte = PIC réel (poids+KV+prompt-cache), pas poids Q4 ; 14B→24g ; avert. fail-closed petite RAM | `scripts/tests/test_detect_hardware_mem.py` (**6 tests**) ; 64Go→24g, 32→14g, 16→5g, somme<RAM |
+| **#9** provider LLM non seedé | `scripts/seed-provider.sh` (+ cible `seed-provider`) : enregistre le provider Ollama via API admin, **idempotent + fail-closed** (auth admin par env, jamais en repo) | `scripts/tests/test_seed_provider.py` (**5 tests**) ; revue : fail-closed sur santé API/auth/401/PUT |
+| **#6** résilience restart | Invariants `restart: always` + `start_period` + ordre de démarrage **assertés en test** + documentés | `scripts/tests/test_restart_policy.py` (**4 tests**) |
+
+Gates locaux Cycle 2 : `deploy-ops` **15 tests passed** · `check-alertmanager-config` **rc=0** · `bandit` **0** sur le nouveau Python · 0 secret en repo. *Runtime-only restant (dit honnêtement) : non-OOM à 24g sur pile réelle, persistance `llm_provider` en base, reprise Docker post-kill — voir `ralph/state/deploy-ops.md` §Runtime-only.*
 
 ### ✅ Cycle 1 — Sécurité applicative : LANDÉ (branche `prod/cycle1-securite`, gates locaux verts)
 | Blocker | Fix | Preuve |
@@ -20,11 +30,11 @@ Gates locaux : `actions` 90✅/5⏭ · `gateway` 339✅ · `bandit` 0 medium+ ·
 
 | # | Dimension | Note | En une phrase |
 |---|-----------|------|---------------|
-| 1 | Fonctionnalités up (boot & serve E2E) | 🟡 **PARTIAL** | Câblage compose valide, mais la pile complète n'a jamais bootée ni servi une requête RAG ici ; seul `onix-actions` est prouvé démarrer. |
+| 1 | Fonctionnalités up (boot & serve E2E) | 🟡 **PARTIAL** | Boot complet **prouvé sain sur Azure** (RUNTIME-EVIDENCE) ; **#9** (seed provider) + **#10** (OOM 14B) fermés ⇒ deux blocages du chat levés. Reste : pile complète + **RAG E2E réel** gâté par le **modèle #12** (Cycle 3). |
 | 2 | Tests & portes CI | 🟡 **PARTIAL** (était NO-GO) | `pip-audit --strict` **repassé vert** (SUPPLY : pytest 9.0.3) ; reste la qualité RAG comparée à une baseline *synthétique* (RAGAS réelle = Cycle 3). |
 | 3 | Sécurité prouvable (cœur de valeur) | 🟡 **PARTIAL** (était NO-GO) | **M1 ✅ M3 ✅ M7 ✅** fermés et testés (Cycle 1). Restent : repli SHA-256 exigé au preflight (HARD-03) et **test ACL live** SharePoint/Fabric jamais joué (SEC-01, exige tenant). |
-| 4 | Fiabilité / backup / restore | ⛔ **NO-GO** | Backup = tar à froid (pas `pg_dump`), **non chiffré**, restore affirme « OK » sans condition et **jamais exercé** ; ordre healthcheck overlay-only, non validé runtime. |
-| 5 | Observabilité / alerting | ⛔ **NO-GO** | Métriques OK mais **toutes les alertes vont dans un no-op** (M4) ; échec sync-ACL et rupture de chaîne d'audit **non monitorés** ; monitoring OFF par défaut en prod-local. |
+| 4 | Fiabilité / backup / restore | ⛔ **NO-GO** | **#6** résilience restart : invariants `restart:always`/`start_period`/ordre **assertés** (Cycle 2). Restent BLOQUANTS : backup = tar à froid (pas `pg_dump`), **non chiffré** ; restore round-trip prouvé sain sur Azure mais pas de WAL/chiffrement. |
+| 5 | Observabilité / alerting | 🟡 **PARTIAL** (était NO-GO) | **M4 fermé** : alertes livrées pour de vrai (webhook rendu **fail-closed**, refus sans URL) ⇒ plus de no-op. Restent : couverture d'alertes sync-ACL/rupture-audit (OBS-03/05), monitoring OFF par défaut (OBS-02), livraison E2E `amtool` (runtime). |
 | 6 | Conformité (RGPD) | ⛔ **NO-GO** | 4 **mensonges** non corrigés dans les docs DPO (chiffrement FOSS no-op vendu comme art.32 ; journal « qui-a-vu-quoi » jamais émis sur le chemin RAG) ; effacement Onyx art.17 FK-cassé, non outillé. |
 | 7 | Supply chain / release | ⛔ **NO-GO** | Gate release ROUGE (CVE), images **non signées** (pas de cosign), base Docker non digest-pinnée, gitleaks téléchargé sans checksum. |
 
@@ -34,7 +44,7 @@ Gates locaux : `actions` 90✅/5⏭ · `gateway` 339✅ · `bandit` 0 medium+ ·
 - ~~**CVE pip-audit** (gate ROUGE)~~ ✅ **FAIT (Cycle 1/SUPPLY)** : pytest 9.0.3, `pip-audit --strict` vert.
 - ~~**M1** audit HMAC algo-downgrade~~ ✅ · ~~**M3** câbler `FabricDocACL`~~ ✅ · ~~**M7** contrôle in-app `X-OIDC` fail-closed~~ ✅ **(Cycle 1)**. Restent : **HARD-03** clé HMAC exigée au preflight (P0) · **SEC-03** cible `make audit-verify`.
 - **M5b/BKP-02/03** `pg_dump` + chiffrement archives · **HARD-01/02** garde credentials + preflight prod.
-- **M4** livraison d'alerte réelle (envsubst/url_file) + **OBS-03/05** métriques+alertes ACL-sync/audit-chain · **OBS-02** monitoring par défaut · **M16** sonde gateway.
+- ~~**M4** livraison d'alerte réelle~~ ✅ **(Cycle 2)** : `entrypoint.sh` rend le webhook fail-closed, `check-alertmanager-config` rc=0. · ~~**#10** OOM tune~~ ✅ · ~~**#9** seed provider~~ ✅ · ~~**#6** invariants restart~~ ✅ **(Cycle 2)**. Restent : **OBS-03/05** alertes ACL-sync/audit-chain · **OBS-02** monitoring par défaut · **M16** sonde gateway.
 - **M20** corriger les 4 mensonges docs DPO (revue DPO) · **RGPD-01** outiller l'effacement Onyx ciblé.
 - **CICD-01** signature cosign · **M9** digest-pin des bases · **M12-rest** checksum gitleaks.
 

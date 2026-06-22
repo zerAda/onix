@@ -15,7 +15,7 @@ Ancré sur les preuves : [`PROD-READINESS.md`](PROD-READINESS.md) (7 dimensions,
 
 ## Cycles (ordre = sécurité d'abord, valeur #1 auditable)
 
-### Cycle 1 — Sécurité applicative 🔴 (BLOQUANT auditeur) — *plan détaillé*
+### Cycle 1 — Sécurité applicative ✅ **LANDÉ** (M1·M7·M3·SUPPLY ; gates locaux verts) — *plan détaillé*
 [`docs/superpowers/plans/2026-06-22-onix-prod-cycle1-securite.md`](../docs/superpowers/plans/2026-06-22-onix-prod-cycle1-securite.md)
 - **M1** — audit HMAC *algo-downgrade* (`actions/app/audit_log.py:189`) → vérif **fail-closed**, refus du downgrade keyless quand une clé existe.
 - **M7** — *trust* `X-OIDC-Claims` verbatim (`access-gateway/app/identity.py:140`, 4 call-sites `main.py`) → exiger un **secret partagé proxy**, rejeter tout header non prouvé (anti-spoof RBAC).
@@ -23,11 +23,11 @@ Ancré sur les preuves : [`PROD-READINESS.md`](PROD-READINESS.md) (7 dimensions,
 - **Supply-chain** — `pip-audit --strict` ROUGE → bump dep CVE, gate vert.
 - **Sortie** : 4 vulns fermées, tests de non-régression, gates sécu verts.
 
-### Cycle 2 — Fiabilité, résilience & exploitation 🔴
-- **M4** — livraison d'alertes *no-op* → canal réel (webhook/SMTP) **fail-closed** + test.
-- **Résilience #6** — `restart:always` rate un kill pendant l'init → politique restart/healthcheck durcie + preuve.
-- **#9** — provider LLM Onyx **non seedé** au déploiement → seed auto du `llm_provider` (sinon chat mort).
-- **#10** — `make tune` sous-dimensionne `OLLAMA_MEM_LIMIT` (12g) pour un 14B (OOM) → dimensionnement au modèle.
+### Cycle 2 — Fiabilité, résilience & exploitation ✅ **LANDÉ** (gates locaux verts)
+- **M4** ✅ — alertes livrées réellement : `entrypoint.sh` rend le webhook **fail-closed** (refus sans URL) ; `check-alertmanager-config` rc=0.
+- **Résilience #6** ✅ — invariants `restart:always`/`start_period`/ordre **assertés** (`test_restart_policy.py`). *Reprise Docker post-kill = runtime-only.*
+- **#9** ✅ — `seed-provider.sh` (idempotent, fail-closed) enregistre le provider Ollama via l'API admin. *Persistance base = runtime-only.*
+- **#10** ✅ — `detect-hardware` dimensionne `OLLAMA_MEM_LIMIT` sur l'empreinte réelle (14B→24g). *Non-OOM précis = runtime-only.*
 
 ### Cycle 3 — RAG produit (le mur #12) 🔴
 - **#12** — qwen2.5:14b **inapte au tool-calling agentique** d'Onyx (hallucine au lieu de citer). Décision : modèle à function-calling fiable (**GPU** pour un modèle plus capable) **ou** persona RAG non-agentique garantissant le grounding. Preuve : réponse **sourcée + citation** E2E.
