@@ -141,6 +141,17 @@ class Settings:
     # (rafraîchi périodique). 0 ⇒ figée après le 1er build (pas de re-sync auto).
     doc_acl_refresh_seconds: int
 
+    # ── ACL par DOCUMENT auto-dérivée de Microsoft FABRIC (cf. fabric_doc_acl.py) ──
+    # Active la source d'ACL Fabric : la passerelle lit les roleAssignments du
+    # workspace gold (Fabric REST) et OR-merge cette ACL avec le statique / Graph
+    # (CompositeDocACL). Ferme la fuite « citation Fabric hors-périmètre » [M3].
+    # Désactivé par défaut (opt-in : nécessite Fabric+gold configurés + un mapping).
+    doc_acl_fabric_enabled: bool
+    # Chemin du mapping JSON { doc_id: {workspace_id, item_id, item_type} } reliant
+    # un doc Onyx à son item Fabric (cf. config/fabric_acl.example.json). Requis si
+    # doc_acl_fabric_enabled=true. Absent ⇒ ACL Fabric vide (deny total).
+    doc_acl_fabric_mapping_path: str
+
     # ── Microsoft Fabric / OneLake / Power BI (cf. app/fabric_client.py) ──
     # Module d'accès Fabric : énumération workspaces/items, RBAC de contrôle
     # (roleAssignments), lecture OneLake (données ADLS Gen2) et datasets Power BI.
@@ -286,6 +297,11 @@ def get_settings() -> Settings:
             "GATEWAY_DOC_ACL_MAPPING_PATH", "config/doc_acl_mapping.json"
         ).strip(),
         doc_acl_refresh_seconds=int(os.environ.get("GATEWAY_DOC_ACL_REFRESH_SECONDS", "900")),
+        # ACL par document auto-dérivée de Microsoft Fabric (cf. app/fabric_doc_acl.py) [M3].
+        doc_acl_fabric_enabled=_bool("GATEWAY_DOC_ACL_FABRIC_ENABLED", False),
+        doc_acl_fabric_mapping_path=os.environ.get(
+            "GATEWAY_DOC_ACL_FABRIC_MAPPING_PATH", "config/fabric_acl.json"
+        ).strip(),
         # Microsoft Fabric / OneLake / Power BI (cf. app/fabric_client.py).
         # Identifiants : override dédié SINON repli sur le SPN Graph (même Entra).
         fabric_tenant_id=os.environ.get("GATEWAY_FABRIC_TENANT_ID", "").strip() or graph_tenant_id,

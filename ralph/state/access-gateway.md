@@ -18,6 +18,13 @@
 | 1 | 2026-06-18 | G2 | CACHE.md §4 note « Comportement réel au démarrage » + §7 : dégradation gracieuse (cache OFF + log CRITICAL), pas d'arrêt ; **code inchangé** | 267 passed | _voir commits_ |
 | 1 | 2026-06-18 | G3 | RBAC.md §4.3 bis : `_READ_ROLES` liste blanche finie → faux refus possible (custom/localisé), fail-closed, extension par tenant ; **code inchangé** | 267 passed | _voir commits_ |
 | 1 | 2026-06-18 | G4 | DECISION_RBAC.md §6/§8 : « 52 tests »→**267** (comptage `pytest --collect-only` vérifié) | 267 passed | _voir commits_ |
+| 2 | 2026-06-22 | M3 | **Fix sécurité (code)** : ACL **Fabric** câblée au filtre de citations. Nouveau `app/fabric_doc_acl.py` (`FabricDocACL` `DocACL` + `build_fabric_acl`, deny-by-default, gold-only) ; câblage `_build_doc_acl` (`main.py:129-158`) ; settings `GATEWAY_DOC_ACL_FABRIC_ENABLED`/`_MAPPING_PATH` (`config.py`). Test TDD `test_fabric_doc_acl.py` (fuite AVANT, absente APRÈS). | 333 passed (`py -m pytest tests -q`) ; bandit 0 | _worktree_ |
+
+## Notes itération 2 — M3 (ACL Fabric → citations)
+- **Vuln réelle confirmée** : `fabric_acl.py` (`can_principal_read`/`authorized_items`) existait et était testé, MAIS **jamais branché** comme source `DocACL` du filtre. `_build_doc_acl` (`main.py`) ne câblait que `StaticDocACL` + `GraphDocACL`. Un doc Fabric hors-périmètre fuitait en citation.
+- **Fix fail-closed** : adaptateur synchrone `FabricDocACL` (même pattern que `GraphDocACL`) ; pré-résolution build-time (gold gate + roleAssignments → `_Entry`). Doc non mappé / hors gold / roleAssignments illisibles ⇒ **exclu** (deny-by-default). Fabric non configuré ⇒ ACL vide, **0 appel réseau**.
+- **Opt-in** : `GATEWAY_DOC_ACL_FABRIC_ENABLED=false` par défaut (cohérent avec la source Graph, opt-in). Le filtre de citations (`doc_acl.filter_citations`) est **inchangé** : il consomme l'ACL OR-mergée via `CompositeDocACL`, donc le streaming bénéficie aussi du fix (même `acl`).
+- **Limite assumée (honnêteté)** : filtre de SORTIE, pas de récupération — identique à `doc_acl`/`graph_acl` (cf. docs/RBAC.md §4.4). Le zéro-fuite strict à la recherche reste Fabric/Onyx EE.
 
 ## Notes itération 1
 - **Aucun changement de comportement de code** ce tour-ci (réconciliation doc-truth pure, règle n°1).

@@ -65,6 +65,9 @@ from .cache import (
     should_bypass,
 )
 from .doc_acl import CompositeDocACL, StaticDocACL, filter_citations
+from .fabric_client import FabricClient
+from .fabric_doc_acl import build_fabric_acl
+from .fabric_doc_acl import load_mapping as load_fabric_mapping
 from .graph_acl import GraphSession, build_graph_acl, load_mapping
 from .streaming import proxy_stream
 
@@ -120,6 +123,30 @@ async def _build_doc_acl(http_client: httpx.AsyncClient, settings):
             _logger.info("doc_acl Graph synchronisé (%d docs SharePoint).", len(graph_acl))
         except GraphError as exc:
             _logger.error("doc_acl Graph indisponible (%s) — source statique seule.", exc)
+    # ── Source Microsoft FABRIC (M3) : ferme la fuite « citation Fabric hors
+    # périmètre » en câblant l'ACL Fabric (gold-only, roleAssignments) au filtre.
+    # OR-mergée avec les autres sources. Opt-in ; fail-closed (échec → omise). ──
+    if settings.doc_acl_fabric_enabled:
+        fabric_client: Optional[FabricClient] = None
+        try:
+            fabric_client = FabricClient(settings, client=http_client)
+            fabric_mapping = load_fabric_mapping(settings.doc_acl_fabric_mapping_path)
+            fabric_acl = await build_fabric_acl(
+                fabric_client, fabric_mapping,
+                default_policy=settings.doc_acl_default_policy,
+            )
+            sources.append(fabric_acl)
+            _logger.info("doc_acl Fabric synchronisé (%d docs Fabric).", len(fabric_acl))
+        except Exception as exc:  # noqa: BLE001
+            # Une source en échec est OMISE (jamais de crash de la passerelle pour
+            # l'ACL) ; deny-by-default au filtre reste la posture sûre.
+            _logger.error("doc_acl Fabric indisponible (%s) — source omise.", exc)
+        finally:
+            # FabricClient possède son client httpx s'il l'a créé ; ici on lui a
+            # passé le client partagé (owns_client=False) → aclose est un no-op,
+            # on n'attente donc pas le client partagé de la passerelle.
+            if fabric_client is not None:
+                await fabric_client.aclose()
     if not sources:
         _logger.warning(
             "doc_acl activé mais aucune source exploitable (fichier '%s' / Graph) "
