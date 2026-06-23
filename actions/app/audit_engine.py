@@ -335,3 +335,45 @@ def audit(audit_input: dict) -> dict:
         "verdict": verdict,
         "fields": fields,
     }
+
+
+# Verdicts qui déclenchent une revue HUMAINE (parité AC360 : `_FIC_VERDICTS`).
+_REVIEW_VERDICTS = frozenset({"ECART", "INCERTAIN", "CLIENT_NON_TROUVE"})
+
+_REVIEW_RECOS = {
+    "ECART": "Écart(s) détecté(s) entre le contrat et le SI — arbitrage humain requis avant validation.",
+    "INCERTAIN": "Données ambiguës (tolérance) — vérifier manuellement les champs incertains.",
+    "CLIENT_NON_TROUVE": "Client absent du SI Fabric ou nom non concordant — vérifier le référencement.",
+    "CONFORME": "Contrat cohérent avec le SI — aucune action requise.",
+}
+
+
+def build_review_fiche(audit_result: dict, *, client_key: Any = None) -> dict:
+    """Fiche de **revue humaine** synthétisée à partir d'un ``audit_result``.
+
+    Met en avant le verdict, la liste des champs en **écart** (valeur contrat vs
+    valeur SI) et une recommandation d'action. ``a_revoir`` est ``True`` dès qu'une
+    revue est requise (ECART / INCERTAIN / CLIENT_NON_TROUVE). Pur calcul, **jamais
+    d'exception** : alimente une fiche prête à arbitrer (le contrat reste intouché —
+    on ne modifie JAMAIS la donnée source, cf. prompt agent « lecture seule »)."""
+    result = audit_result if isinstance(audit_result, dict) else {}
+    verdict = result.get("verdict", "INCONNU")
+    fields = result.get("fields", []) or []
+    ecarts = [
+        {
+            "champ": f.get("champ"),
+            "valeur_contrat": f.get("valeur_document"),
+            "valeur_si": f.get("valeur_reference"),
+            "statut": f.get("statut"),
+        }
+        for f in fields
+        if isinstance(f, dict) and f.get("statut") in ("MISMATCH", "UNCERTAIN")
+    ]
+    return {
+        "client": result.get("client_document") or client_key,
+        "verdict": verdict,
+        "a_revoir": verdict in _REVIEW_VERDICTS,
+        "nb_ecarts": len(ecarts),
+        "ecarts": ecarts,
+        "recommandation": _REVIEW_RECOS.get(verdict, "Vérifier le dossier."),
+    }

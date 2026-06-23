@@ -42,6 +42,7 @@ from . import security
 from . import tasks as tasks_mod
 from . import usage_tracker
 from .audit_engine import audit as run_audit
+from .audit_engine import build_review_fiche
 from .audit_engine import extract_canonical_fields
 from .caller_identity import CallerContext
 from .security import require_admin, require_caller, validate_upload
@@ -608,6 +609,8 @@ async def audit_reconcile_file_endpoint(
     result["_reference_source"] = (
         "fabric_si" if fabric_reference.fabric_reference_configured() else "non_configuree"
     )
+    # Fiche de revue humaine prête à arbitrer (écarts + reco) sur verdict non conforme.
+    result["fiche_revue"] = build_review_fiche(result, client_key=client_key)
     usage_tracker.track("audit_documentaire_completed", user_id=who,
                         client_id=result.get("client_document"), document_count=1)
     return result

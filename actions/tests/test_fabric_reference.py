@@ -119,6 +119,35 @@ def test_extraction_ignore_disclaimer_et_alias_dossier():
     assert f["cotisation_annuelle"] == "12 500 EUR / an"
 
 
+def test_fiche_revue_ecart_liste_les_ecarts():
+    """Verdict ECART → fiche à revoir, écarts listés (contrat vs SI) + reco."""
+    from app.audit_engine import audit, build_review_fiche
+    document = {"nom_client": "CLIENT BETA", "cotisation_annuelle": "12 500 EUR / an"}
+    reference = {"nom_client": "CLIENT BETA", "cotisation_annuelle": "13000"}
+    fiche = build_review_fiche(audit({"document": document, "reference": reference}), client_key="CLIENT BETA")
+    assert fiche["verdict"] == "ECART"
+    assert fiche["a_revoir"] is True
+    assert fiche["nb_ecarts"] >= 1
+    cot = [e for e in fiche["ecarts"] if e["champ"] == "cotisation_annuelle"][0]
+    assert cot["valeur_contrat"] == "12 500 EUR / an" and cot["valeur_si"] == "13000"
+    assert "arbitrage" in fiche["recommandation"].lower()
+
+
+def test_fiche_revue_conforme_pas_a_revoir():
+    from app.audit_engine import audit, build_review_fiche
+    document = {"nom_client": "CLIENT GAMMA", "cotisation_annuelle": "8900"}
+    reference = {"nom_client": "CLIENT GAMMA", "cotisation_annuelle": "8900"}
+    fiche = build_review_fiche(audit({"document": document, "reference": reference}))
+    assert fiche["verdict"] == "CONFORME"
+    assert fiche["a_revoir"] is False and fiche["nb_ecarts"] == 0
+
+
+def test_fiche_revue_failsafe_sur_entree_invalide():
+    from app.audit_engine import build_review_fiche
+    fiche = build_review_fiche(None)  # ne doit jamais lever
+    assert fiche["a_revoir"] is False and fiche["ecarts"] == []
+
+
 def test_garantie_alias_et_reconciliation():
     """Cas métier : la GARANTIE (risque couvert) du contrat doit être cohérente
     avec le SI. Vérifie l'aliasing + MATCH (garantie identique) + MISMATCH (→ ECART)."""
