@@ -23,6 +23,7 @@ REFERENCE_FIELDS = (
     "siret",
     "plafond_hospitalisation",
     "cotisation_annuelle",
+    "garantie",
     "date_effet",
     "numero_contrat",
 )

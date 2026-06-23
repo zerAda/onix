@@ -119,6 +119,30 @@ def test_extraction_ignore_disclaimer_et_alias_dossier():
     assert f["cotisation_annuelle"] == "12 500 EUR / an"
 
 
+def test_garantie_alias_et_reconciliation():
+    """Cas métier : la GARANTIE (risque couvert) du contrat doit être cohérente
+    avec le SI. Vérifie l'aliasing + MATCH (garantie identique) + MISMATCH (→ ECART)."""
+    from app.audit_engine import alias_field, audit
+    assert alias_field("Garantie") == "garantie"
+    assert alias_field("Risque couvert") == "garantie"
+    base_doc = {"nom_client": "CLIENT BETA", "garantie": "Prevoyance collective"}
+    # SI identique -> pas d'ecart sur la garantie
+    r_ok = audit({"document": base_doc, "reference": {"nom_client": "CLIENT BETA", "garantie": "Prevoyance collective"}})
+    g_ok = [f for f in r_ok["fields"] if f["champ"] == "garantie"][0]
+    assert g_ok["statut"] == "MATCH"
+    # SI divergent (Sante vs Prevoyance) -> ECART
+    r_ko = audit({"document": base_doc, "reference": {"nom_client": "CLIENT BETA", "garantie": "Sante collective"}})
+    g_ko = [f for f in r_ko["fields"] if f["champ"] == "garantie"][0]
+    assert g_ko["statut"] == "MISMATCH"
+    assert r_ko["verdict"] == "ECART"
+
+
+def test_garantie_projetee_depuis_le_si():
+    """La garantie doit survivre à map_reference (sinon non comparée)."""
+    ref = map_reference({"nom_client": "ACME", "garantie": "Sante collective", "autre": "x"})
+    assert ref["garantie"] == "Sante collective"
+
+
 def test_storage_token_fallback_statique(monkeypatch):
     from app.fabric_reference import _storage_token
     monkeypatch.delenv("ONIX_FABRIC_SP_CLIENT_ID", raising=False)
