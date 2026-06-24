@@ -51,6 +51,35 @@ def fabric_reference_configured() -> bool:
     return bool(os.environ.get("ONIX_FABRIC_REFERENCE_URL", "").strip())
 
 
+# Résilience lecture OneLake (blips réseau). Bornés pour rester sûrs/prévisibles.
+_BACKOFF_BASE = 0.25  # secondes ; backoff linéaire entre deux tentatives
+
+
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    """Entier d'env borné [lo, hi] ; revient au défaut si absent/illisible."""
+    try:
+        return max(lo, min(int(os.environ.get(name, str(default))), hi))
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_attempts() -> int:
+    """Nombre de tentatives de lecture du SI (env ``ONIX_FABRIC_READ_ATTEMPTS``, défaut 2, borné [1,5])."""
+    return _env_int("ONIX_FABRIC_READ_ATTEMPTS", 2, 1, 5)
+
+
+def _read_timeout() -> int:
+    """Timeout HTTP de la lecture OneLake (env ``ONIX_FABRIC_READ_TIMEOUT``, défaut 15 s, borné [3,60])."""
+    return _env_int("ONIX_FABRIC_READ_TIMEOUT", 15, 3, 60)
+
+
+def _sleep(seconds: float) -> None:
+    """Pause entre tentatives — isolée pour être neutralisable en test (monkeypatch)."""
+    import time
+
+    time.sleep(seconds)
+
+
 def fetch_client_reference(
     client_key: Optional[str], *, reader: Optional[ReferenceReader] = None
 ) -> Optional[Dict[str, Any]]:
@@ -63,11 +92,18 @@ def fetch_client_reference(
     if not key:
         return None
     read = reader or _default_onelake_reader
-    try:
-        raw = read(key)
-    except Exception:
-        # Jamais de fuite d'erreur/jeton : une lecture KO = pas de référence.
-        return None
+    attempts = _read_attempts()
+    raw: Any = None
+    for i in range(attempts):
+        try:
+            raw = read(key)
+            break  # succès (raw peut être None = client absent du SI, PAS une erreur)
+        except Exception:
+            # Blip réseau / OneLake momentané : on retente (backoff). Jamais de fuite
+            # d'erreur/jeton ; toutes les tentatives KO ⇒ fail-closed (pas de référence).
+            if i + 1 >= attempts:
+                return None
+            _sleep(_BACKOFF_BASE * (i + 1))
     if not isinstance(raw, dict) or not raw:
         return None
     ref = map_reference(raw)
@@ -157,6 +193,6 @@ def _default_onelake_reader(key: str) -> Optional[Dict[str, Any]]:
     token = _storage_token()
     if token:
         req.add_header("Authorization", "Bearer " + token)
-    with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - URL d'exploitation env, https-only
+    with urllib.request.urlopen(req, timeout=_read_timeout()) as resp:  # nosec B310 - URL env, https-only
         data = json.loads(resp.read().decode("utf-8"))
     return _select_record(data, key)

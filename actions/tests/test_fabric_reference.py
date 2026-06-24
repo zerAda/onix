@@ -172,6 +172,49 @@ def test_garantie_projetee_depuis_le_si():
     assert ref["garantie"] == "Sante collective"
 
 
+def test_fetch_retry_apres_blip_reseau(monkeypatch):
+    """Un blip réseau momentané (1re lecture KO) ⇒ la 2e tentative réussit."""
+    import app.fabric_reference as fr
+    monkeypatch.setattr(fr, "_sleep", lambda s: None)  # pas de vraie pause en test
+    monkeypatch.setenv("ONIX_FABRIC_READ_ATTEMPTS", "3")
+    calls = {"n": 0}
+
+    def flaky(key):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RuntimeError("OneLake blip")
+        return {"nom_client": "ACME", "siret": key}
+
+    ref = fr.fetch_client_reference("123", reader=flaky)
+    assert ref is not None and ref["nom_client"] == "ACME"
+    assert calls["n"] == 2  # a bien retenté une fois
+
+
+def test_fetch_failclosed_apres_toutes_tentatives(monkeypatch):
+    """Toutes les tentatives KO ⇒ None (fail-closed, pas d'invention)."""
+    import app.fabric_reference as fr
+    monkeypatch.setattr(fr, "_sleep", lambda s: None)
+    monkeypatch.setenv("ONIX_FABRIC_READ_ATTEMPTS", "2")
+    calls = {"n": 0}
+
+    def always_ko(key):
+        calls["n"] += 1
+        raise RuntimeError("OneLake down")
+
+    assert fr.fetch_client_reference("123", reader=always_ko) is None
+    assert calls["n"] == 2  # tenté 2 fois puis abandon
+
+
+def test_read_attempts_et_timeout_bornes(monkeypatch):
+    import app.fabric_reference as fr
+    monkeypatch.setenv("ONIX_FABRIC_READ_ATTEMPTS", "99")
+    assert fr._read_attempts() == 5  # borné à 5
+    monkeypatch.setenv("ONIX_FABRIC_READ_ATTEMPTS", "abc")
+    assert fr._read_attempts() == 2  # défaut si illisible
+    monkeypatch.setenv("ONIX_FABRIC_READ_TIMEOUT", "1")
+    assert fr._read_timeout() == 3  # borné au plancher 3 s
+
+
 def test_storage_token_fallback_statique(monkeypatch):
     from app.fabric_reference import _storage_token
     monkeypatch.delenv("ONIX_FABRIC_SP_CLIENT_ID", raising=False)
