@@ -121,6 +121,41 @@ def test_reconcile_file_client_non_trouve(client, monkeypatch):
     assert b["fiche_revue"]["a_revoir"] is True
 
 
+# --- RAG non-agentique souverain : POST /rag/ask ------------------------------
+def test_rag_ask_grounded(client, monkeypatch):
+    """Récupère le bon document + génère une réponse grounded (générateur mocké)."""
+    import app.rag_local as rag_local
+    monkeypatch.setattr(rag_local, "ollama_generator",
+                        lambda prompt: "La cotisation annuelle est de 12 500 EUR (dossier BETA-201).")
+    r = client.post("/rag/ask", json={
+        "question": "Quelle est la cotisation du dossier BETA ?",
+        "documents": [
+            {"id": "fiche_beta", "content": "Dossier BETA-201, cotisation annuelle 12 500 EUR, prevoyance collective."},
+            {"id": "fiche_gamma", "content": "Dossier GAMMA-301, sante collective."},
+        ],
+    })
+    assert r.status_code == 200
+    b = r.json()
+    assert b["grounded"] is True
+    assert b["sources"] == ["fiche_beta"]      # le doc le plus pertinent
+    assert "12 500" in b["answer"]
+
+
+def test_rag_ask_aucune_source_failclosed(client, monkeypatch):
+    """Aucun document pertinent -> refus explicite (grounded=False), pas d'invention."""
+    import app.rag_local as rag_local
+    monkeypatch.setattr(rag_local, "ollama_generator",
+                        lambda prompt: "NE DOIT PAS ETRE APPELE")
+    r = client.post("/rag/ask", json={
+        "question": "Comment reparer mon velo aujourd'hui ?",
+        "documents": [{"id": "d1", "content": "Dossier client mutuelle sante entreprise."}],
+    })
+    assert r.status_code == 200
+    b = r.json()
+    assert b["grounded"] is False
+    assert b["sources"] == []
+
+
 def test_generate_fiche_and_download(client):
     r = client.post("/generate/fiche", json={
         "client_name": "ACME SAS",

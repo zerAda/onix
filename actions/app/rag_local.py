@@ -91,3 +91,25 @@ def answer(
     except Exception:
         return {"answer": "", "sources": sources, "grounded": False, "reason": "generation KO"}
     return {"answer": str(text or "").strip(), "sources": sources, "grounded": True}
+
+
+def ollama_generator(prompt: str) -> str:
+    """Générateur **par défaut** : appel direct Ollama ``/api/generate`` (souverain,
+    local, non-agentique). Configuration **par env** (jamais en repo) :
+    ``ONIX_OLLAMA_URL`` (défaut ``http://ollama:11434``) · ``ONIX_LLM_MODEL`` (défaut
+    ``gemma3:4b``). Lève en cas d'échec — capturé par :func:`answer` (grounded=False)."""
+    import json
+    import os
+    import urllib.request
+
+    base = os.environ.get("ONIX_OLLAMA_URL", "http://ollama:11434").strip().rstrip("/")
+    if not base.startswith(("http://", "https://")):  # anti-SSRF : schéma maîtrisé
+        raise ValueError("ONIX_OLLAMA_URL invalide")
+    model = os.environ.get("ONIX_LLM_MODEL", "gemma3:4b").strip() or "gemma3:4b"
+    body = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode("utf-8")
+    req = urllib.request.Request(
+        base + "/api/generate", data=body, headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310 - URL interne d'exploitation (env)
+        data = json.loads(resp.read().decode("utf-8"))
+    return str(data.get("response", ""))

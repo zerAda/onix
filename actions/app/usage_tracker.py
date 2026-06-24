@@ -27,6 +27,8 @@ VALID_EVENT_TYPES = {
     "fiche_generated",
     "audit_documentaire_started",
     "audit_documentaire_completed",
+    "rag_ask_started",
+    "rag_ask_completed",
     "task_created",
     "notification_sent",
     "cost_estimated",

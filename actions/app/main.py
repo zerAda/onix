@@ -19,7 +19,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from . import admin_state, audit_log, cost_tracker, docgen, dlp, notify as notify_mod
 from . import fabric_reference
+from . import rag_local
 from . import ocr as ocr_mod
 from . import retention as retention_mod
 from . import safe_logger
@@ -264,6 +265,15 @@ class AuditRequest(BaseModel):
         default=None, description="Nom de client pour filtrer une référence multi-lignes."
     )
     use_llm: bool = Field(default=False, description="Extraction des champs via Ollama.")
+    caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashé).")
+
+
+class RagAskRequest(BaseModel):
+    question: str = Field(description="Question en langage naturel.")
+    documents: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Corpus { id, content } à interroger (souverain)."
+    )
+    top_k: int = Field(default=1, ge=1, le=10, description="Nombre de documents à récupérer.")
     caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashé).")
 
 
@@ -613,6 +623,28 @@ async def audit_reconcile_file_endpoint(
     result["fiche_revue"] = build_review_fiche(result, client_key=client_key)
     usage_tracker.track("audit_documentaire_completed", user_id=who,
                         client_id=result.get("client_document"), document_count=1)
+    return result
+
+
+@app.post("/rag/ask")
+def rag_ask_endpoint(
+    req: RagAskRequest, caller: CallerContext = Depends(require_caller)
+) -> Dict[str, Any]:
+    """RAG **non-agentique** souverain : récupère le(s) document(s) pertinent(s) du
+    corpus fourni puis génère une réponse **grounded** en local (Ollama). Contourne le
+    mur agentique d'Onyx 4.1.1 (#12, cf. [`app/rag_local.py`](rag_local.py)).
+    **Fail-closed** : aucune source pertinente ⇒ refus explicite (`grounded=False`) ;
+    génération KO ⇒ `grounded=False`, jamais d'invention."""
+    who = _effective_caller(caller, req.caller_id)
+    _gate("llm", who)
+    usage_tracker.track("rag_ask_started", user_id=who, action_name="rag_ask")
+    result = rag_local.answer(
+        req.question, req.documents, generator=rag_local.ollama_generator, top_k=req.top_k
+    )
+    # La requête a réussi (200) ; l'issue métier (grounded / refus fail-closed) est
+    # portée par le corps de réponse, pas par le statut d'usage.
+    usage_tracker.track("rag_ask_completed", user_id=who, action_name="rag_ask",
+                        document_count=len(result.get("sources") or []))
     return result
 
 
