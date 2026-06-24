@@ -153,6 +153,20 @@ def upstream_headers(api_key: str, incoming: dict[str, str] | None = None) -> di
 _ANSWER_FIELDS = ("message", "answer", "answer_text", "llm_answer")
 
 
+def _strip_code_fence(s: str) -> str:
+    """Retire une clôture markdown (bloc de code triple-backtick, avec un éventuel
+    tag de langage type ``json``) entourant TOUT le texte. Certains modèles encadrent
+    leur JSON d'un bloc de code. Best-effort : renvoie ``s`` inchangé sans clôture nette."""
+    if len(s) >= 6 and s.startswith("```") and s.endswith("```"):
+        inner = s[3:-3].strip()
+        nl = inner.find("\n")
+        # 1re ligne sans espace ni '{' = tag de langage (```json…) -> on l'enlève.
+        if nl != -1 and " " not in inner[:nl] and "{" not in inner[:nl]:
+            inner = inner[nl + 1:].strip()
+        return inner
+    return s
+
+
 def unwrap_wrapped_answer(text: str) -> str:
     """Déballe une réponse JSON-enveloppée (stopgap RAG gemma3, cf. #12).
 
@@ -167,13 +181,13 @@ def unwrap_wrapped_answer(text: str) -> str:
     altérer les citations ``[[1]]`` / le grounding portés par le texte légitime."""
     if not isinstance(text, str):
         return text
-    stripped = text.strip()
-    # Court-circuit : un objet JSON commence par '{'. Évite un parse inutile sur
-    # du texte ordinaire (qui n'est jamais un objet JSON).
-    if not stripped.startswith("{"):
+    # Déballe une éventuelle clôture markdown ``` ... ``` autour du JSON, puis
+    # court-circuit si ce n'est pas un objet JSON (texte ordinaire) -> inchangé.
+    candidate = _strip_code_fence(text.strip())
+    if not candidate.startswith("{"):
         return text
     try:
-        parsed = json.loads(stripped)
+        parsed = json.loads(candidate)
     except (ValueError, TypeError):
         return text
     if isinstance(parsed, dict):

@@ -128,3 +128,20 @@ def test_unwrap_result_non_str_inchange():
 def test_unwrap_json_invalide_inchange():
     s = "{pas du json valide"
     assert unwrap_wrapped_answer(s) == s
+
+
+def test_unwrap_json_encadre_markdown_avec_tag():
+    # gemma3 encadre parfois son JSON d'un bloc de code ```json ... ```
+    s = '```json\n{"result":"La reponse [[1]]"}\n```'
+    assert unwrap_wrapped_answer(s) == "La reponse [[1]]"
+
+
+def test_unwrap_json_encadre_markdown_sans_tag():
+    s = '```\n{"result":"Reponse"}\n```'
+    assert unwrap_wrapped_answer(s) == "Reponse"
+
+
+def test_unwrap_bloc_code_non_json_inchange():
+    # Un vrai bloc de code (pas une enveloppe JSON) reste INTACT (fail-safe).
+    s = '```python\nprint("hello")\n```'
+    assert unwrap_wrapped_answer(s) == s
