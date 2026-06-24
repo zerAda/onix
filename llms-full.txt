@@ -604,7 +604,8 @@ passent par la passerelle (`/metrics`). Cf. [`../RAG_EVAL.md`](../RAG_EVAL.md).
 [`../RAG_OPTIMIZATION.md`](../RAG_OPTIMIZATION.md) ·
 [`../PLAYBOOK_ONYX_RAG.md`](../PLAYBOOK_ONYX_RAG.md) · [`../RAG_EVAL.md`](../RAG_EVAL.md) ·
 [`../QA_GUARDRAILS.md`](../QA_GUARDRAILS.md) · [`../AGENT_COMMERCIAL.md`](../AGENT_COMMERCIAL.md) ·
-[`../PERFORMANCE.md`](../PERFORMANCE.md).
+[`../PERFORMANCE.md`](../PERFORMANCE.md) ·
+[**#12 Onyx 4.1.1 ↔ Ollama (tool-calling) → RAG non-agentique**](../audit-onyx/41-onyx411-ollama-toolcalling.md).
 
 ## 8. Audit & journal
 
