@@ -100,3 +100,49 @@ def test_verify_chain_hmac_sans_cle_est_invérifiable(monkeypatch, tmp_path):
     res = al.verify_chain()
     assert res["ok"] is False
     assert "clé" in (res.get("reason") or "").lower() or "cle" in (res.get("reason") or "").lower()
+
+
+# --- Tamper-evidence de base : altération / suppression / chaînage rompu ------
+def _chaine_de_trois(al):
+    """Écrit 3 enregistrements distincts dans la chaîne (seq 1, 2, 3)."""
+    for i in (1, 2, 3):
+        al.append_audit(dict(_exemple_record(al), action_id=f"a{i}", action=chr(64 + i)))
+
+
+def test_verify_chain_detecte_record_altere(monkeypatch, tmp_path):
+    """Un contenu signé modifié AU MILIEU (sans pouvoir recalculer le HMAC, clé
+    inconnue de l'attaquant) est détecté : entry_hash recalculé ≠ stocké."""
+    al = _reload_audit(monkeypatch, tmp_path, hmac_key="cle-de-test-32-octets-minimum!!")
+    _chaine_de_trois(al)
+    with al._lock, al._connect() as conn:
+        conn.execute("UPDATE admin_audit SET action='FORGE' WHERE seq=2")
+        conn.commit()
+    res = al.verify_chain()
+    assert res["ok"] is False
+    assert res["broken_at"] == 2
+    assert "entry_hash" in (res.get("reason") or "")
+
+
+def test_verify_chain_detecte_suppression(monkeypatch, tmp_path):
+    """La suppression d'un maillon casse la contiguïté des seq -> rupture."""
+    al = _reload_audit(monkeypatch, tmp_path, hmac_key="cle-de-test-32-octets-minimum!!")
+    _chaine_de_trois(al)
+    with al._lock, al._connect() as conn:
+        conn.execute("DELETE FROM admin_audit WHERE seq=2")
+        conn.commit()
+    res = al.verify_chain()
+    assert res["ok"] is False
+    assert "seq" in (res.get("reason") or "").lower()
+
+
+def test_verify_chain_detecte_chainage_rompu(monkeypatch, tmp_path):
+    """Un prev_hash altéré (réordonnancement / insertion) est détecté."""
+    al = _reload_audit(monkeypatch, tmp_path, hmac_key="cle-de-test-32-octets-minimum!!")
+    _chaine_de_trois(al)
+    with al._lock, al._connect() as conn:
+        conn.execute("UPDATE admin_audit SET prev_hash=? WHERE seq=2", ("0" * 64,))
+        conn.commit()
+    res = al.verify_chain()
+    assert res["ok"] is False
+    assert res["broken_at"] == 2
+    assert "prev_hash" in (res.get("reason") or "")
