@@ -50,6 +50,77 @@ def test_audit_from_text_heuristic(client):
     assert r.json()["verdict"] == "CONFORME"
 
 
+# --- Réconciliation contrat ↔ SI Fabric : POST /audit/reconcile/file ----------
+# OCR et lecture du SI Fabric mockés (déterministe, hors-ligne) ; on prouve le
+# flux HTTP complet OCR → champs → réf Fabric → audit → verdict + fiche de revue.
+_CONTRAT_BETA = {
+    "Client": "CLIENT BETA", "Numero dossier": "BETA-201",
+    "Date d effet": "01/01/2026", "Cotisation": "12 500 EUR / an",
+    "Garantie": "Prevoyance collective",
+}
+
+
+def _patch_reconcile(monkeypatch, reference):
+    """Mocke l'OCR (contrat BETA) et la lecture du SI Fabric (`reference`)."""
+    import app.fabric_reference as fabric_reference
+    import app.ocr as ocr_mod
+    monkeypatch.setattr(ocr_mod, "extract", lambda data, name: {
+        "metadata": {"extraction_mode": "pdf_text"}, "tables": [], "fields": _CONTRAT_BETA,
+    })
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference", lambda ck: reference)
+    monkeypatch.setattr(fabric_reference, "fabric_reference_configured", lambda: True)
+
+
+def _post_reconcile(client, client_key="CLIENT BETA"):
+    return client.post(
+        "/audit/reconcile/file",
+        files={"file": ("c.pdf", b"%PDF-1.4 contrat", "application/pdf")},
+        data={"client_key": client_key},
+    )
+
+
+def test_reconcile_file_ecart_cotisation(client, monkeypatch):
+    # SI Fabric : cotisation divergente (13000) -> ECART détecté.
+    _patch_reconcile(monkeypatch, {
+        "nom_client": "CLIENT BETA", "numero_contrat": "BETA-201",
+        "date_effet": "01/01/2026", "cotisation_annuelle": "13000",
+        "garantie": "Prevoyance collective",
+    })
+    r = _post_reconcile(client)
+    assert r.status_code == 200
+    b = r.json()
+    assert b["verdict"] == "ECART"
+    assert b["_reference_source"] == "fabric_si"
+    cot = [f for f in b["fields"] if f["champ"] == "cotisation_annuelle"][0]
+    assert cot["statut"] == "MISMATCH"
+    assert b["fiche_revue"]["a_revoir"] is True
+    assert b["fiche_revue"]["nb_ecarts"] >= 1
+
+
+def test_reconcile_file_conforme(client, monkeypatch):
+    # SI Fabric aligné -> CONFORME, fiche sans revue requise.
+    _patch_reconcile(monkeypatch, {
+        "nom_client": "CLIENT BETA", "numero_contrat": "BETA-201",
+        "date_effet": "01/01/2026", "cotisation_annuelle": "12500",
+        "garantie": "Prevoyance collective",
+    })
+    r = _post_reconcile(client)
+    assert r.status_code == 200
+    b = r.json()
+    assert b["verdict"] == "CONFORME"
+    assert b["fiche_revue"]["a_revoir"] is False
+
+
+def test_reconcile_file_client_non_trouve(client, monkeypatch):
+    # Client absent du SI Fabric (référence None) -> CLIENT_NON_TROUVE (fail-closed).
+    _patch_reconcile(monkeypatch, None)
+    r = _post_reconcile(client, client_key="INCONNU")
+    assert r.status_code == 200
+    b = r.json()
+    assert b["verdict"] == "CLIENT_NON_TROUVE"
+    assert b["fiche_revue"]["a_revoir"] is True
+
+
 def test_generate_fiche_and_download(client):
     r = client.post("/generate/fiche", json={
         "client_name": "ACME SAS",
