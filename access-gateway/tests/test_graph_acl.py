@@ -687,3 +687,29 @@ def test_sync_cli_without_graph_config_errors(monkeypatch, tmp_path):
     rc = cli.main(["--mapping", str(mapping_path), "--out", str(out_path)])
     assert rc == 2
     assert not out_path.exists()
+
+
+def test_sync_cli_mapping_introuvable_errors(monkeypatch, tmp_path, capsys):
+    # Creds Graph présents MAIS mapping introuvable -> code retour 2, aucun fichier
+    # (fail-closed : ne jamais matérialiser un doc_acl.json trompeur sans entrée).
+    _settings(monkeypatch)
+    cli = _load_sync_cli()
+    out_path = tmp_path / "out.json"
+    rc = cli.main(["--mapping", str(tmp_path / "absent.json"), "--out", str(out_path)])
+    assert rc == 2
+    assert not out_path.exists()
+    # L'échec vient bien du mapping (et non du contrôle Graph) — chemin précis.
+    assert "mapping" in capsys.readouterr().err.lower()
+
+
+def test_sync_cli_mapping_corrompu_errors(monkeypatch, tmp_path, capsys):
+    # Mapping présent mais JSON illisible -> code retour 2, aucun fichier écrit.
+    _settings(monkeypatch)
+    cli = _load_sync_cli()
+    mapping_path = tmp_path / "m.json"
+    mapping_path.write_text("{ ceci n'est pas du json valide", encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    rc = cli.main(["--mapping", str(mapping_path), "--out", str(out_path)])
+    assert rc == 2
+    assert not out_path.exists()
+    assert "mapping" in capsys.readouterr().err.lower()
