@@ -378,6 +378,36 @@ def test_dlp_anti_ssrf_ip_privee(monkeypatch):
         dlp.check_egress("http://100.64.0.1/x")
 
 
+def test_dlp_host_matches_wildcard():
+    """Le motif `*.corp.local` matche les sous-domaines mais PAS l'apex (sécurité :
+    un wildcard ne doit pas couvrir le domaine racine)."""
+    from app import dlp
+    assert dlp._host_matches("a.corp.local", "*.corp.local") is True
+    assert dlp._host_matches("x.y.corp.local", "*.corp.local") is True
+    assert dlp._host_matches("corp.local", "*.corp.local") is False        # apex exclu
+    assert dlp._host_matches("evilcorp.local", "*.corp.local") is False    # pas un sous-domaine
+
+
+def test_dlp_host_matches_exact_sans_piege_de_suffixe():
+    """Un motif exact `corp.local` matche l'hôte exact + ses sous-domaines, sans se
+    laisser piéger par un suffixe collé (`evilcorp.local` != sous-domaine)."""
+    from app import dlp
+    assert dlp._host_matches("corp.local", "corp.local") is True
+    assert dlp._host_matches("a.corp.local", "corp.local") is True
+    assert dlp._host_matches("evilcorp.local", "corp.local") is False      # bordure de label
+    assert dlp._host_matches("corp.local.", "corp.local") is True          # point final normalisé
+
+
+def test_dlp_check_egress_port_ne_casse_pas_le_match(monkeypatch):
+    """Un port dans l'URL ne casse pas le match d'hôte (hostname extrait sans port)."""
+    from app import dlp
+    monkeypatch.setenv("ONIX_EGRESS_ALLOWLIST", "hooks.corp.local")
+    monkeypatch.setenv("ONIX_EGRESS_ALLOW_PRIVATE_IP", "true")  # évite la résolution DNS en test
+    assert dlp.check_egress("https://hooks.corp.local:8443/x").startswith("https://")
+    with pytest.raises(dlp.EgressDenied):
+        dlp.check_egress("https://hooks.evil.local:8443/x")    # hors allowlist
+
+
 def test_dlp_notify_refuse_destination_hors_allowlist(monkeypatch, tmp_path):
     c = _client_with(
         monkeypatch, tmp_path,
