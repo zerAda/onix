@@ -188,8 +188,37 @@ def normalize_amount(value: Any) -> Optional[float]:
         return None
 
 
+# Mois FR (sans accents, minuscules) -> numéro, pour les dates en toutes lettres.
+_FRENCH_MONTHS: Dict[str, int] = {
+    "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
+    "juillet": 7, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11,
+    "decembre": 12,
+    # abréviations courantes
+    "janv": 1, "fevr": 2, "fev": 2, "avr": 4, "juil": 7, "sept": 9, "sep": 9,
+    "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _parse_french_text_date(t: str) -> Optional[str]:
+    """Parse une date FR en toutes lettres : '1er janvier 2026', '15 mars 2025',
+    '1 août 2026', '3 janv. 2025'. Renvoie l'ISO, ou None (fail-closed)."""
+    m = re.match(r"^\s*(\d{1,2})\s*(?:er)?\s+([^\d\s]+)\s+(\d{4})\s*$", t, re.IGNORECASE)
+    if not m:
+        return None
+    mois = _FRENCH_MONTHS.get(_strip_accents(m.group(2)).rstrip(".").lower())
+    if mois is None:
+        return None
+    try:
+        return datetime(int(m.group(3)), mois, int(m.group(1))).date().isoformat()
+    except ValueError:
+        return None  # date impossible (ex. 31 février) -> fail-closed
+
+
 def normalize_date(value: Any) -> Optional[str]:
-    """Retourne une date ISO 'YYYY-MM-DD' ou None si non parsable."""
+    """Retourne une date ISO 'YYYY-MM-DD' ou None si non parsable.
+
+    Gère les formats **numériques** (jj/mm/aaaa, ISO…) ET les dates FR **en toutes
+    lettres** ('1er janvier 2026'), courantes sur les contrats/avenants."""
     if not value:
         return None
     t = str(value).strip()
@@ -198,7 +227,7 @@ def normalize_date(value: Any) -> Optional[str]:
             return datetime.strptime(t, fmt).date().isoformat()
         except ValueError:
             continue
-    return None
+    return _parse_french_text_date(t)
 
 
 def normalize_name(value: Any) -> str:

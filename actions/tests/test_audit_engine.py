@@ -28,6 +28,27 @@ def test_normalize_date_iso():
     assert normalize_date("not a date") is None
 
 
+def test_normalize_date_francais_en_toutes_lettres():
+    # Dates FR en lettres, courantes sur les contrats/avenants.
+    assert normalize_date("1er janvier 2026") == "2026-01-01"
+    assert normalize_date("15 mars 2025") == "2025-03-15"
+    assert normalize_date("1 août 2026") == "2026-08-01"          # accent
+    assert normalize_date("3 janv. 2025") == "2025-01-03"         # abréviation + point
+    assert normalize_date("31 février 2026") is None              # date impossible -> fail-closed
+    assert normalize_date("le 1er janvier 2026") is None          # pas une date pure
+
+
+def test_reconciliation_date_francais_vs_si_iso():
+    """Métier : une date d'effet en lettres (contrat) doit MATCHer la date ISO du SI
+    — pas de faux ECART dû au format."""
+    from app.audit_engine import audit
+    doc = {"nom_client": "CLIENT X", "date_effet": "1er janvier 2026"}
+    ref = {"nom_client": "CLIENT X", "date_effet": "01/01/2026"}
+    result = audit({"document": doc, "reference": ref})
+    champ_date = [f for f in result["fields"] if f["champ"] == "date_effet"][0]
+    assert champ_date["statut"] == "MATCH"
+
+
 def test_normalize_name_and_contract():
     assert normalize_name("Société Générale") == "SOCIETE GENERALE"
     assert normalize_contract("ctr-2024/AB.12") == "CTR2024AB12"
