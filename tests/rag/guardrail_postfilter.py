@@ -268,6 +268,13 @@ def has_citation(answer: str) -> bool:
     # bloc [Document: …] repris
     if re.search(r"\[\s*document\s*:", low):
         return True
+    # Marqueur de citation inline natif d'Onyx : [1], [[1]], [1, 2] (renvoi
+    # numéroté à un document récupéré). Sans cette reconnaissance, TOUTE réponse
+    # chiffrée correctement sourcée au format Onyx serait faussement bloquée
+    # (no_citation) — le garde-fou rejetterait alors l'ensemble des réponses
+    # légitimes. `\[\d` capte aussi le « [[1]] » via le crochet interne.
+    if re.search(r"\[\d", answer):
+        return True
     return False
 
 

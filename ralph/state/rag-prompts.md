@@ -16,6 +16,7 @@
 | 1 | 2026-06-18 | R2 | `scripted_judge.py` + `gen_baseline.py` (régén. baseline byte-level, offline) + RAG_EVAL/README + test provenance | `pytest tests/rag -q` 175 passed, 64 skipped | bf096ca |
 | 1 | 2026-06-18 | R1 | Encadré « indicatif/non reproductible byte-level » (run_live.py + doc) + `ollama_version()` + cadrage comptage + tests | idem (175 passed) | 6c0ccd4 |
 | 1 | 2026-06-18 | R4+R5 | Comptage « 21 cas (20 RT + 1 NOM01) » (E2E/QA) + note traçabilité E2E §4.3 | idem (175 passed) | e75ad92 |
+| 2 | 2026-06-25 | GUARD-CITATION (faux refus) | `has_citation` (post-filtre couche 3) ne reconnaissait PAS le format de citation natif d'Onyx `[1]`/`[[1]]` → toute réponse chiffrée correctement sourcée à ce format était **faussement bloquée** (no_citation), rendant le RAG inutilisable. Ajout reconnaissance `` `\[\d` `` (capte `[1]` ET `[[1]]` via le crochet interne). N'affecte QUE la règle groundedness (les règles sécurité 1-4 passent avant → red-team inchangé). +2 tests (cas positif fait+`[[1]]` passe ; reconnaissance unitaire). | `tests/rag` **178 passed/64⏭** ; bandit 0 | (branche prod) |
 
 ## Questions bloquantes
 - (aucune) — R3 (extension red-team : jailbreaks avancés, multi-langue, variation

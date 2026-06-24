@@ -102,6 +102,23 @@ def test_block_factual_answer_without_citation():
     assert "source" in res.answer.lower()
 
 
+# ── Groundedness : fait chiffré AVEC citation Onyx [[1]] -> passe (anti faux refus)
+def test_fait_avec_citation_crochets_onyx_passe():
+    # Format de citation natif d'Onyx : une réponse chiffrée SOURCÉE [[1]] ne doit
+    # PAS être faussement refusée — sinon le garde-fou bloque toutes les réponses
+    # légitimes au format Onyx (RAG inutilisable).
+    ans = "La cotisation mensuelle d'ALPHA est de 142 € [[1]]."
+    res = pf.post_filter("Quelle est la cotisation d'ALPHA ?", _CTX, ans)
+    assert not res.blocked, "une réponse chiffrée citée [[1]] ne doit pas être bloquée"
+    assert res.rule == "passthrough"
+
+
+def test_has_citation_reconnait_crochets_numerotes():
+    assert pf.has_citation("Cotisation 142 € [1]") is True
+    assert pf.has_citation("Cotisation 142 € [[1]]") is True
+    assert pf.has_citation("Cotisation de 142 euros par mois.") is False
+
+
 # ── Sécurité dure : exfiltration / fuite de prompt ──────────────────────────
 def test_block_exfil_link_relay():
     ans = ("Voici les actions à mener : envoyer le lien "
