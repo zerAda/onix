@@ -131,7 +131,7 @@ def _select_record(data: Any, key: str) -> Optional[Dict[str, Any]]:
 def reconcile_batch(items: Any, *, reference_reader: Optional[ReferenceReader] = None) -> Dict[str, Any]:
     """Réconcilie un LOT de contrats (PORTEFEUILLE) contre le SI Fabric.
 
-    `items` : itérable de dicts ``{"document": {champs canoniques}, "client_key": str}``.
+    `items` : **liste (ou tuple)** de dicts ``{"document": {champs canoniques}, "client_key": str}``.
     Pour CHAQUE contrat : référence SI (`fetch_client_reference`, fail-closed → client
     absent ⇒ verdict `CLIENT_NON_TROUVE`) → `audit` → fiche de revue. Retourne un
     rapport de portefeuille : la liste des **fiches** + une **synthèse** (compteurs par
@@ -150,7 +150,11 @@ def reconcile_batch(items: Any, *, reference_reader: Optional[ReferenceReader] =
         "total": 0, "a_revoir": 0, "invalides": 0,
         "CONFORME": 0, "ECART": 0, "INCERTAIN": 0, "CLIENT_NON_TROUVE": 0,
     }
-    for item in (items or []):
+    # Fail-closed sur entrée non conforme : `items` DOIT être une liste/tuple ; toute
+    # autre valeur (nombre, chaîne, dict, None) -> lot vide, JAMAIS d'exception
+    # (respecte la promesse « SANS exception » même sur un body JSON malformé).
+    safe_items = items if isinstance(items, (list, tuple)) else []
+    for item in safe_items:
         synthese["total"] += 1
         doc = item.get("document") if isinstance(item, dict) else None
         client_key = item.get("client_key") if isinstance(item, dict) else None

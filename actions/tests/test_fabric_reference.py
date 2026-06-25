@@ -255,6 +255,11 @@ def test_reconcile_batch_vide_et_fail_safe():
     # Items non-dict / sans document -> comptés invalides, sans exception ni I/O SI.
     r1 = reconcile_batch([None, "pas un dict", {"client_key": "y"}], reference_reader=lambda k: None)
     assert r1["synthese"]["total"] == 3 and r1["synthese"]["invalides"] == 3
+    # AUDIT (fix) : `items` non-itérable / non-liste -> lot VIDE, jamais de TypeError
+    # (un body JSON malformé `"items": 42` ne doit pas faire crasher la réconciliation).
+    for mauvais in (42, "abc", None, {"document": {"nom_client": "X"}}):
+        r = reconcile_batch(mauvais)
+        assert r["synthese"]["total"] == 0 and r["fiches"] == []
 
 
 def test_fetch_retry_apres_blip_reseau(monkeypatch):
