@@ -37,6 +37,33 @@ def test_redact_text_couvre_jwt_iban_nir_email():
     assert "jean.dupont@corp.fr" not in redact_text("jean.dupont@corp.fr")
 
 
+def test_redact_couvre_carte_telephone_bearer():
+    """Les 3 motifs PII restants (carte bancaire, téléphone FR/E.164, secret
+    Bearer/API-key) sont aussi neutralisés."""
+    from app.safe_logger import redact_text
+
+    assert "[REDACTED_CARD]" in redact_text("carte 4111 1111 1111 1111 exp")
+    assert "[REDACTED_PHONE]" in redact_text("appelez le 06 12 34 56 78")
+    assert "[REDACTED_PHONE]" in redact_text("mobile +33 6 12 34 56 78")
+    assert "[REDACTED_SECRET]" in redact_text("Authorization: Bearer abcdef0123456789xy")
+
+
+def test_redact_ne_mutile_pas_les_donnees_d_investigation():
+    """ASVS V7 : la redaction ne doit PAS détruire les dates ISO, références
+    de contrat, montants ou UUID — utiles à l'investigation. Garde-fou contre une
+    SUR-redaction (les motifs téléphone/carte sont volontairement conservateurs)."""
+    from app.safe_logger import redact_text
+
+    for keep in (
+        "2024-01-01",                                  # date ISO
+        "CTR-2024-00123",                              # référence de contrat
+        "montant 1234567",                             # nombre court (< carte)
+        "123e4567-e89b-12d3-a456-426614174000",        # UUID
+    ):
+        out = redact_text(keep)
+        assert "[REDACTED" not in out, f"sur-redaction de {keep!r} -> {out!r}"
+
+
 def test_redact_anti_crlf_log_forging():
     from app.safe_logger import redact_text
 
