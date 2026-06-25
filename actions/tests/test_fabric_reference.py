@@ -186,6 +186,19 @@ def test_fiche_revue_failsafe_sur_entree_invalide():
     assert fiche["a_revoir"] is False and fiche["ecarts"] == []
 
 
+def test_fiche_revue_incertain_et_client_non_trouve_a_revoir():
+    from app.audit_engine import build_review_fiche, _REVIEW_RECOS
+    # Les 2 verdicts (avec ECART) qui pilotent la revue humaine : a_revoir=True AVEC
+    # une recommandation SPÉCIFIQUE par verdict (pas le fallback générique) — un
+    # INCERTAIN (vérifier les champs ambigus) et un CLIENT_NON_TROUVE (vérifier le
+    # référencement) n'appellent PAS la même action.
+    for verdict in ("INCERTAIN", "CLIENT_NON_TROUVE"):
+        fiche = build_review_fiche({"verdict": verdict, "fields": []})
+        assert fiche["a_revoir"] is True, f"{verdict} devrait requérir une revue"
+        assert fiche["recommandation"] == _REVIEW_RECOS[verdict]
+        assert fiche["recommandation"] != "Vérifier le dossier."  # pas le fallback
+
+
 def test_garantie_alias_et_reconciliation():
     """Cas métier : la GARANTIE (risque couvert) du contrat doit être cohérente
     avec le SI. Vérifie l'aliasing + MATCH (garantie identique) + MISMATCH (→ ECART)."""
