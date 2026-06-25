@@ -352,6 +352,53 @@ def test_csv_safe_neutralise_tab_et_cr():
     assert _csv_safe(None) == ""                 # None -> vide
 
 
+def test_batch_to_csv_crlf_ne_forge_pas_de_ligne():
+    """SÉCURITÉ : un nom contenant CRLF ne crée PAS de fausse ligne CSV (csv.writer
+    quote la valeur) — re-parsé, on retrouve EXACTEMENT 1 ligne data par fiche."""
+    import csv as _csv
+    import io as _io
+    from app.fabric_reference import batch_to_csv
+    rapport = {"fiches": [
+        {"client": "Evil\r\nFAKE,row,injection", "verdict": "CONFORME", "a_revoir": False,
+         "nb_ecarts": 0, "recommandation": "ok"},
+        {"client": "Normal", "verdict": "ECART", "a_revoir": True, "nb_ecarts": 1,
+         "recommandation": "arbitrer"},
+    ]}
+    rows = list(_csv.reader(_io.StringIO(batch_to_csv(rapport))))
+    assert len(rows) == 3                              # en-tête + 2 fiches (pas plus)
+    assert rows[0][0] == "client"
+    assert rows[2][0] == "Normal" and rows[2][1] == "ECART"  # 2e fiche non décalée
+
+
+def test_batch_to_csv_roundtrip_csv_reader():
+    """Round-trip : csv.reader redonne fidèlement en-tête + lignes (ordre + valeurs)."""
+    import csv as _csv
+    import io as _io
+    from app.fabric_reference import reconcile_batch, batch_to_csv
+    si = {"acme": {"nom_client": "ACME", "cotisation_annuelle": "1000"}}
+    items = [
+        {"client_key": "acme", "document": {"nom_client": "ACME", "cotisation_annuelle": "1000"}},  # CONFORME
+        {"client_key": "x"},  # INVALIDE
+    ]
+    rapport = reconcile_batch(items, reference_reader=lambda k: si.get(k))
+    rows = list(_csv.reader(_io.StringIO(batch_to_csv(rapport))))
+    assert rows[0] == ["client", "verdict", "a_revoir", "nb_ecarts", "recommandation"]
+    assert rows[1][0] == "ACME" and rows[1][1] == "CONFORME"
+    assert rows[2][0] == "x" and rows[2][1] == "INVALIDE"
+
+
+def test_batch_to_csv_pas_de_bom_dans_la_fonction():
+    """Le BOM est ajouté SEULEMENT à l'endpoint : la fonction reste pure (re-parseable)
+    → csv.reader lit `client` en 1re colonne, sans BOM parasite."""
+    import csv as _csv
+    import io as _io
+    from app.fabric_reference import batch_to_csv
+    out = batch_to_csv({"fiches": []})
+    assert not out.startswith(chr(0xFEFF))            # pas de BOM dans la fonction
+    rows = list(_csv.reader(_io.StringIO(out)))
+    assert rows[0][0] == "client"                     # 1re colonne propre
+
+
 def test_batch_to_csv_failsafe_rapport_malforme():
     """Fail-closed : rapport None / fiches non-liste / fiches non-dict -> CSV avec
     UNIQUEMENT l'en-tête, jamais d'exception."""
