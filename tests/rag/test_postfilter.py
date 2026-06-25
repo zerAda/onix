@@ -119,6 +119,28 @@ def test_has_citation_reconnait_crochets_numerotes():
     assert pf.has_citation("Cotisation de 142 euros par mois.") is False
 
 
+# ── Groundedness : vocabulaire ASSURANCE chiffré non sourcé -> bloqué ─────────
+def test_fait_assurance_sans_citation_bloque():
+    # franchise / garantie + chiffre sans source = fait métier non étayé -> refus
+    # (le garde-fou doit connaître le vocabulaire assurance GEREP, pas que le générique).
+    for ans in (
+        "La franchise annuelle est de 150 euros.",
+        "La garantie optique rembourse 200 par an.",
+    ):
+        res = pf.post_filter("Quelles sont les conditions du contrat ?", _CTX, ans)
+        assert res.blocked, f"fait assurance non sourcé non bloqué: {ans!r}"
+        assert res.rule == "no_citation"
+
+
+def test_fait_assurance_avec_citation_passe():
+    # Le même type de fait, correctement cité [[1]], reste autorisé (complément
+    # de has_citation : on bloque l'ungrounded, jamais le sourcé).
+    ans = "La garantie optique rembourse 200 € par an [[1]]."
+    res = pf.post_filter("Quelle est la garantie optique ?", _CTX, ans)
+    assert not res.blocked
+    assert res.rule == "passthrough"
+
+
 # ── Sécurité dure : exfiltration / fuite de prompt ──────────────────────────
 def test_block_exfil_link_relay():
     ans = ("Voici les actions à mener : envoyer le lien "

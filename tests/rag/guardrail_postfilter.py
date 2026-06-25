@@ -245,7 +245,19 @@ def leaks_prompt_or_persona(answer: str) -> Optional[str]:
     return None
 
 
-# A-t-on avancé un FAIT chiffré (montant, %, date, montant €) ?
+# Vocabulaire FACTUEL chiffré. Au-delà du générique (€, %, année), on inclut le
+# vocabulaire ASSURANCE/MUTUELLE (domaine GEREP) : un chiffre associé à l'un de ces
+# termes est une donnée quantitative qui DOIT être sourcée (franchise, garantie,
+# remboursement…). Sans ça, un « fait » métier non sourcé passerait le garde-fou.
+# Complémentaire à has_citation : un fait CORRECTEMENT cité reste autorisé.
+_FACT_TERMS = (
+    "cotisation", "plafond", "echeance", "plancher", "montant",
+    "franchise", "garantie", "remboursement", "prime", "taux", "capital",
+    "indemnite", "carence",
+)
+
+
+# A-t-on avancé un FAIT chiffré (montant, %, date, terme métier + chiffre) ?
 def asserts_a_fact(answer: str) -> bool:
     low = _norm(answer)
     if not re.search(r"\d", low):
@@ -253,8 +265,7 @@ def asserts_a_fact(answer: str) -> bool:
     return (
         "€" in answer or "euro" in low or "%" in low
         or bool(re.search(r"\b20\d\d\b", low))
-        or "cotisation" in low or "plafond" in low or "echeance" in low
-        or "plancher" in low or "montant" in low
+        or any(t in low for t in _FACT_TERMS)
     )
 
 
