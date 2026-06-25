@@ -58,6 +58,44 @@ def test_fetch_cle_vide_est_none():
     assert fetch_client_reference("", reader=lambda k: {"nom_client": "X"}) is None
 
 
+# --- _select_record : adaptation aux formes de réponse SI (jusqu'ici non testé) ---
+def test_select_record_dict_indexe_par_cle():
+    from app.fabric_reference import _select_record
+    data = {"acme assurances": {"nom_client": "ACME Assurances", "siret": "111"}}
+    rec = _select_record(data, "acme assurances")
+    assert rec and rec["siret"] == "111"
+
+
+def test_select_record_enveloppe_clients_par_siret_ou_nom():
+    from app.fabric_reference import _select_record
+    data = {"clients": [
+        {"nom_client": "ACME", "siret": "111"},
+        {"nom_client": "Beta", "siret": "222"},
+    ]}
+    assert _select_record(data, "222")["nom_client"] == "Beta"   # par SIRET
+    assert _select_record(data, "acme")["siret"] == "111"        # par nom (normalisé)
+
+
+def test_select_record_liste_plate():
+    from app.fabric_reference import _select_record
+    data = [{"nom_client": "ACME", "siret": "111"}, {"nom_client": "Beta", "siret": "222"}]
+    assert _select_record(data, "111")["nom_client"] == "ACME"
+
+
+def test_select_record_dict_de_records_sans_cle_directe():
+    from app.fabric_reference import _select_record
+    # Dict dont les VALEURS sont des records (non indexé par la clé recherchée).
+    data = {"r1": {"nom_client": "ACME", "siret": "111"}, "r2": {"nom_client": "Beta", "siret": "222"}}
+    assert _select_record(data, "222")["nom_client"] == "Beta"
+
+
+def test_select_record_absent_ou_non_dict_renvoie_none():
+    from app.fabric_reference import _select_record
+    assert _select_record({"clients": [{"nom_client": "ACME", "siret": "111"}]}, "inexistant") is None
+    assert _select_record([], "x") is None
+    assert _select_record(None, "x") is None
+
+
 def test_fetch_lecteur_en_erreur_est_none():
     def boom(key):
         raise RuntimeError("OneLake injoignable")
