@@ -23,6 +23,7 @@ yaml = pytest.importorskip("yaml")
 _ROOT = Path(__file__).resolve().parents[2]
 _PROM = _ROOT / "monitoring" / "prometheus" / "prometheus.yml"
 _RULES_DIR = _ROOT / "monitoring" / "prometheus" / "rules"
+_BLACKBOX = _ROOT / "monitoring" / "blackbox" / "blackbox.yml"
 
 
 def _load():
@@ -69,3 +70,28 @@ def test_jobs_applicatifs_onix_presents():
             f"job de scrape '{requis}' manquant : les métriques onix_* qu'il expose "
             "ne seraient pas collectées (alertes basées dessus inertes)"
         )
+
+
+def test_blackbox_modules_bien_formes():
+    # Chaque module de sonde a un `prober` (http/tcp/...) — sinon module inutilisable.
+    bb = yaml.safe_load(_BLACKBOX.read_text(encoding="utf-8"))
+    modules = (bb or {}).get("modules") or {}
+    assert modules, "aucun module défini dans blackbox.yml"
+    for name, conf in modules.items():
+        assert isinstance(conf, dict) and conf.get("prober"), f"module blackbox '{name}' sans prober"
+
+
+def test_modules_blackbox_references_par_prometheus_sont_definis():
+    """Cross-check : tout module blackbox référencé par un job Prometheus
+    (`params.module`) DOIT exister dans blackbox.yml — sinon la sonde casse
+    (« module not found ») et les alertes de disponibilité (ProbeFailed /
+    ActionsServiceDown, basées sur `probe_success`) deviennent inertes EN SILENCE."""
+    defined = set((yaml.safe_load(_BLACKBOX.read_text(encoding="utf-8")) or {}).get("modules", {}))
+    referenced = set()
+    for job in _load().get("scrape_configs") or []:
+        referenced.update((job.get("params") or {}).get("module") or [])
+    manquants = referenced - defined
+    assert not manquants, (
+        f"modules blackbox référencés mais NON définis : {sorted(manquants)} "
+        f"(définis : {sorted(defined)}) — sondes cassées"
+    )
