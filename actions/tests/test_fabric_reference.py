@@ -408,6 +408,50 @@ def test_batch_to_csv_failsafe_rapport_malforme():
         assert lignes == ["client,verdict,a_revoir,nb_ecarts,recommandation"]
 
 
+def test_client_360_agregation_sources_injectees():
+    """Agrégation : réf SI + tâches ouvertes + usage, via sources INJECTÉES (offline)."""
+    from app.fabric_reference import client_360
+    ref = {"nom_client": "ACME", "cotisation_annuelle": "1000"}
+    taches = [{"task_id": "t1", "status": "open"}, {"task_id": "t2", "status": "open"}]
+    vue = client_360(
+        "acme",
+        reference_reader=lambda ck, **kw: ref,
+        tasks_lister=lambda ck: taches,
+        usage_counter=lambda ck: 7,
+    )
+    assert vue["client_key"] == "acme"
+    assert vue["reference_trouvee"] is True and vue["reference"]["nom_client"] == "ACME"
+    assert vue["nb_taches_ouvertes"] == 2 and vue["taches_ouvertes"] == taches
+    assert vue["nb_evenements_usage"] == 7
+
+
+def test_client_360_client_absent_fail_closed():
+    """Client absent du SI -> reference_trouvee False, reference None (pas d'invention)."""
+    from app.fabric_reference import client_360
+    vue = client_360(
+        "inconnu",
+        reference_reader=lambda ck, **kw: None,
+        tasks_lister=lambda ck: [],
+        usage_counter=lambda ck: 0,
+    )
+    assert vue["reference_trouvee"] is False and vue["reference"] is None
+    assert vue["nb_taches_ouvertes"] == 0 and vue["nb_evenements_usage"] == 0
+
+
+def test_client_360_failsafe_sources_qui_levent():
+    """Fail-safe : une source qui LÈVE -> champ vide/0, JAMAIS d'exception propagée."""
+    from app.fabric_reference import client_360
+
+    def boom(ck):
+        raise RuntimeError("source down")
+
+    vue = client_360("x", reference_reader=lambda ck, **kw: None,
+                     tasks_lister=boom, usage_counter=boom)
+    assert vue["nb_taches_ouvertes"] == 0 and vue["taches_ouvertes"] == []
+    assert vue["nb_evenements_usage"] == 0
+    assert vue["reference_trouvee"] is False
+
+
 def test_fetch_retry_apres_blip_reseau(monkeypatch):
     """Un blip réseau momentané (1re lecture KO) ⇒ la 2e tentative réussit."""
     import app.fabric_reference as fr

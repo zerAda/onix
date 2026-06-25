@@ -220,6 +220,84 @@ def batch_to_csv(rapport: Any) -> str:
     return buf.getvalue()
 
 
+# ── Synthèse CLIENT-360 (agrège réf SI + tâches + usage, RGPD-safe) ───────────
+def _default_open_tasks(client_key: Any) -> list:
+    """Tâches OUVERTES du client (filtrées par HASH). Best-effort, fail-safe → [].
+    Import LOCAL (tasks/admin_state) pour éviter tout cycle au chargement."""
+    try:
+        from . import tasks
+        from .admin_state import hash_id
+        h = hash_id(client_key)
+        if not h:
+            return []
+        return [
+            t for t in tasks.list_tasks(status="open")
+            if isinstance(t, dict) and t.get("client_id_hash") == h
+        ]
+    except Exception:
+        return []
+
+
+def _default_usage_count(client_key: Any) -> int:
+    """Nombre d'événements d'usage du client (par HASH, lecture seule). Best-effort,
+    fail-safe → 0 (table absente / base inaccessible)."""
+    try:
+        from .admin_state import _connect, _lock, hash_id
+        h = hash_id(client_key)
+        if not h:
+            return 0
+        with _lock, _connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM usage_events WHERE client_id_hash=?", (h,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return 0
+
+
+def client_360(
+    client_key: Any,
+    *,
+    reference_reader: Optional[ReferenceReader] = None,
+    tasks_lister: Optional[Callable[[Any], list]] = None,
+    usage_counter: Optional[Callable[[Any], int]] = None,
+) -> Dict[str, Any]:
+    """Vue **client-360** : agrège en une synthèse ce qu'onix sait d'un client — sa
+    **référence SI** (Fabric), ses **tâches ouvertes** et son **volume d'usage**.
+
+    Sources INJECTABLES (tests offline) ; sinon défauts réels (SI + base SQLite, par
+    HASH). RGPD : opère par hash (`admin_state.hash_id`), **LECTURE SEULE** (n'écrit
+    RIEN), **fail-closed et SANS exception** — toute erreur d'une source ⇒ cette source
+    vide/0, jamais propagée. C'est la brique « Assistant Client 360 »."""
+    # (1) Référence SI : fail-closed → None si client absent / source non configurée.
+    try:
+        reference = fetch_client_reference(client_key, reader=reference_reader)
+    except Exception:
+        reference = None
+    # (2) Tâches ouvertes : source injectée OU défaut base, chaque source ISOLÉE.
+    try:
+        taches = (tasks_lister(client_key) if tasks_lister is not None
+                  else _default_open_tasks(client_key)) or []
+    except Exception:
+        taches = []
+    if not isinstance(taches, list):
+        taches = []
+    # (3) Volume d'usage : source injectée OU défaut base.
+    try:
+        nb_usage = int(usage_counter(client_key) if usage_counter is not None
+                       else _default_usage_count(client_key))
+    except Exception:
+        nb_usage = 0
+    return {
+        "client_key": client_key,
+        "reference": reference,
+        "reference_trouvee": reference is not None,
+        "nb_taches_ouvertes": len(taches),
+        "taches_ouvertes": taches,
+        "nb_evenements_usage": nb_usage,
+    }
+
+
 # Cache mémoire du jeton OneLake (évite un aller-retour AAD par requête).
 _TOKEN_CACHE: Dict[str, Any] = {"value": None, "expires": 0.0}
 
