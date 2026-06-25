@@ -175,6 +175,42 @@ def test_reconcile_batch_endpoint_borne_configurable(client, monkeypatch):
     assert client.post("/audit/reconcile/batch", json={"items": items3}).status_code == 200
 
 
+def test_reconcile_batch_endpoint_si_non_configure(client, monkeypatch):
+    """SI non configuré : reader → None partout, `_reference_source`='non_configuree'
+    et TOUS les verdicts = CLIENT_NON_TROUVE (fail-closed honnête, pas d'invention)."""
+    import app.fabric_reference as fabric_reference
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference", lambda ck, **kw: None)
+    monkeypatch.setattr(fabric_reference, "fabric_reference_configured", lambda: False)
+    items = [
+        {"client_key": "a", "document": {"nom_client": "A"}},
+        {"client_key": "b", "document": {"nom_client": "B"}},
+    ]
+    b = client.post("/audit/reconcile/batch", json={"items": items}).json()
+    assert b["_reference_source"] == "non_configuree"
+    assert b["synthese"]["CLIENT_NON_TROUVE"] == 2
+    assert all(f["verdict"] == "CLIENT_NON_TROUVE" for f in b["fiches"])
+
+
+def test_reconcile_batch_endpoint_lot_vide(client):
+    """Lot vide → 200 avec synthèse à zéro (no-op valide, pas une erreur)."""
+    r = client.post("/audit/reconcile/batch", json={"items": []})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["synthese"]["total"] == 0 and b["fiches"] == []
+
+
+def test_reconcile_batch_endpoint_kill_switch(client):
+    """Kill-switch 'audit' coupé → l'endpoint batch répond 403 (gate respecté)."""
+    client.post("/admin/control",
+                json={"action": "disable_feature", "scope": "audit", "reason": "test"})
+    try:
+        r = client.post("/audit/reconcile/batch",
+                        json={"items": [{"client_key": "a", "document": {"nom_client": "A"}}]})
+        assert r.status_code == 403
+    finally:
+        client.post("/admin/control", json={"action": "enable_feature", "scope": "audit"})
+
+
 # --- RAG non-agentique souverain : POST /rag/ask ------------------------------
 def test_rag_ask_grounded(client, monkeypatch):
     """Récupère le bon document + génère une réponse grounded (générateur mocké)."""
