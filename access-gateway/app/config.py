@@ -17,6 +17,20 @@ def _bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _validate_choice(name: str, value: str, allowed: tuple[str, ...]) -> None:
+    """Refuse une valeur d'enum de config hors liste (fail-closed).
+
+    Un typo de déploiement (ex. `GATEWAY_GROUP_SOURCE=grpah`) ne doit PAS basculer
+    SILENCIEUSEMENT sur un comportement par défaut inattendu (ici, le repli `auto`
+    de `resolve_principal`). On REFUSE de démarrer, avec un message clair pour
+    l'opérateur — cohérent avec la posture fail-closed de la passerelle."""
+    if value not in allowed:
+        raise ValueError(
+            f"{name} invalide : {value!r}. Valeurs autorisées : "
+            f"{', '.join(allowed)} (fail-closed)."
+        )
+
+
 @dataclass(frozen=True)
 class Settings:
     # --- Onyx amont (cible du proxy) ---
@@ -260,10 +274,20 @@ def get_settings() -> Settings:
     graph_authority = os.environ.get(
         "GATEWAY_GRAPH_AUTHORITY", "https://login.microsoftonline.com"
     ).rstrip("/")
+    # Enums de config : validés fail-closed (un typo refuse le démarrage plutôt
+    # que de basculer en silence vers un comportement par défaut inattendu).
+    group_source = os.environ.get("GATEWAY_GROUP_SOURCE", "auto").strip().lower()
+    _validate_choice("GATEWAY_GROUP_SOURCE", group_source, ("claims", "graph", "auto"))
+    doc_acl_default_policy = (
+        os.environ.get("GATEWAY_DOC_ACL_DEFAULT_POLICY", "deny").strip().lower() or "deny"
+    )
+    _validate_choice(
+        "GATEWAY_DOC_ACL_DEFAULT_POLICY", doc_acl_default_policy, ("deny", "allow")
+    )
     return Settings(
         onyx_base_url=os.environ.get("GATEWAY_ONYX_BASE_URL", "http://api_server:8080").rstrip("/"),
         onyx_api_key=os.environ.get("GATEWAY_ONYX_API_KEY", "").strip(),
-        group_source=os.environ.get("GATEWAY_GROUP_SOURCE", "auto").strip().lower(),
+        group_source=group_source,
         # Anti-spoof X-OIDC-Claims : secret partagé prouvant le transit par le proxy
         # de confiance (cf. identity.resolve_principal). Vide => fail-closed (refus)
         # sauf override dev explicite GATEWAY_ALLOW_UNAUTHENTICATED_HEADER=true.
@@ -312,9 +336,7 @@ def get_settings() -> Settings:
         # Filtre ACL par document (cf. app/doc_acl.py + docs/RBAC.md).
         doc_acl_enabled=_bool("GATEWAY_DOC_ACL_ENABLED", True),
         doc_acl_path=os.environ.get("GATEWAY_DOC_ACL_PATH", "config/doc_acl.json").strip(),
-        doc_acl_default_policy=(
-            os.environ.get("GATEWAY_DOC_ACL_DEFAULT_POLICY", "deny").strip().lower() or "deny"
-        ),
+        doc_acl_default_policy=doc_acl_default_policy,
         doc_acl_strip_uncited=_bool("GATEWAY_DOC_ACL_STRIP_UNCITED", True),
         # Streaming SSE (cf. app/streaming.py + docs/STREAMING.md).
         stream_enabled=_bool("GATEWAY_STREAM_ENABLED", True),
