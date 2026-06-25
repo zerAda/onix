@@ -121,6 +121,46 @@ def test_reconcile_file_client_non_trouve(client, monkeypatch):
     assert b["fiche_revue"]["a_revoir"] is True
 
 
+# --- Réconciliation de PORTEFEUILLE (lot) : POST /audit/reconcile/batch --------
+def test_reconcile_batch_endpoint(client, monkeypatch):
+    """Flux HTTP complet du lot : portefeuille mixte -> synthèse par verdict
+    (lecture SI mockée -> AUCUNE I/O réelle vers Fabric)."""
+    import app.fabric_reference as fabric_reference
+    si = {
+        "acme": {"nom_client": "ACME", "cotisation_annuelle": "1000"},
+        "beta": {"nom_client": "BETA", "cotisation_annuelle": "2000"},
+    }
+    # reconcile_batch appelle fetch_client_reference(ck, reader=...) : le mock doit
+    # absorber le kwarg `reader`.
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference",
+                        lambda ck, **kw: si.get((ck or "").strip().lower()))
+    monkeypatch.setattr(fabric_reference, "fabric_reference_configured", lambda: True)
+    items = [
+        {"client_key": "acme", "document": {"nom_client": "ACME", "cotisation_annuelle": "1000"}},  # CONFORME
+        {"client_key": "beta", "document": {"nom_client": "BETA", "cotisation_annuelle": "9999"}},   # ECART
+        {"client_key": "zz", "document": {"nom_client": "ZZ"}},                                      # CLIENT_NON_TROUVE
+        {"client_key": "x"},                                                                         # INVALIDE (pas de document)
+    ]
+    r = client.post("/audit/reconcile/batch", json={"items": items})
+    assert r.status_code == 200
+    b = r.json()
+    s = b["synthese"]
+    assert s["total"] == 4
+    assert s["CONFORME"] == 1 and s["ECART"] == 1 and s["CLIENT_NON_TROUVE"] == 1 and s["invalides"] == 1
+    assert len(b["fiches"]) == 4
+    assert b["_reference_source"] == "fabric_si"
+
+
+def test_reconcile_batch_endpoint_borne_fail_closed(client, monkeypatch):
+    """Lot trop volumineux -> 400 fail-closed, AVANT toute lecture SI."""
+    import app.fabric_reference as fabric_reference
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference", lambda ck, **kw: None)
+    items = [{"client_key": str(i), "document": {"nom_client": "X"}} for i in range(201)]
+    r = client.post("/audit/reconcile/batch", json={"items": items})
+    assert r.status_code == 400
+    assert "trop volumineux" in str(r.json()).lower()
+
+
 # --- RAG non-agentique souverain : POST /rag/ask ------------------------------
 def test_rag_ask_grounded(client, monkeypatch):
     """Récupère le bon document + génère une réponse grounded (générateur mocké)."""

@@ -277,6 +277,15 @@ class RagAskRequest(BaseModel):
     caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashé).")
 
 
+class ReconcileBatchRequest(BaseModel):
+    # Lot de contrats déjà extraits (champs canoniques) à réconcilier contre le SI.
+    items: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Lot { document: {champs canoniques}, client_key } à réconcilier.",
+    )
+    caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashé).")
+
+
 class FicheRequest(BaseModel):
     client_name: str
     summary: str = ""
@@ -624,6 +633,43 @@ async def audit_reconcile_file_endpoint(
     usage_tracker.track("audit_documentaire_completed", user_id=who,
                         client_id=result.get("client_document"), document_count=1)
     return result
+
+
+# Borne fail-closed du nombre de contrats par lot (réponses bornées, anti-abus).
+_MAX_RECONCILE_BATCH = 200
+
+
+@app.post("/audit/reconcile/batch")
+def audit_reconcile_batch_endpoint(
+    req: ReconcileBatchRequest, caller: CallerContext = Depends(require_caller)
+) -> Dict[str, Any]:
+    """**RÉCONCILIATION DE PORTEFEUILLE** (lot) : réconcilie d'un coup une LISTE de
+    contrats déjà extraits (``{document, client_key}``) contre le SI Fabric → liste
+    de fiches de revue + **synthèse** (compteurs par verdict + à-revoir + invalides).
+
+    Variante batch de `/audit/reconcile/file` : **pas d'OCR** (les champs sont fournis),
+    la référence de CHAQUE client est lue dans le SI Fabric (`reconcile_batch`).
+    **Fail-closed** : lot trop volumineux ⇒ 400 ; SI non configuré / client absent ⇒
+    `CLIENT_NON_TROUVE` par contrat ; item sans document ⇒ `INVALIDE`. Lecture seule."""
+    who = _effective_caller(caller, req.caller_id)
+    _gate("audit", who)
+    if len(req.items) > _MAX_RECONCILE_BATCH:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Lot trop volumineux",
+                    "max": _MAX_RECONCILE_BATCH, "recu": len(req.items),
+                    "hint": "Découpez le portefeuille en lots plus petits."},
+        )
+    usage_tracker.track("reconcile_batch_started", user_id=who,
+                        action_name="reconcile_batch", document_count=len(req.items))
+    rapport = fabric_reference.reconcile_batch(req.items)
+    rapport["_reference_source"] = (
+        "fabric_si" if fabric_reference.fabric_reference_configured() else "non_configuree"
+    )
+    usage_tracker.track("reconcile_batch_completed", user_id=who,
+                        action_name="reconcile_batch",
+                        document_count=rapport["synthese"]["total"])
+    return rapport
 
 
 @app.post("/rag/ask")

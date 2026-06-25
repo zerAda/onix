@@ -29,6 +29,8 @@ VALID_EVENT_TYPES = {
     "audit_documentaire_completed",
     "rag_ask_started",
     "rag_ask_completed",
+    "reconcile_batch_started",
+    "reconcile_batch_completed",
     "task_created",
     "notification_sent",
     "cost_estimated",
