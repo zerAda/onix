@@ -262,6 +262,57 @@ def test_reconcile_batch_vide_et_fail_safe():
         assert r["synthese"]["total"] == 0 and r["fiches"] == []
 
 
+def test_reconcile_batch_synthese_coherente_et_ordre():
+    """Lot mixte incluant un INCERTAIN : la synthèse est COHÉRENTE (les compteurs
+    somment au total) et l'ORDRE des fiches suit l'ordre des items (le back-office
+    doit pouvoir remonter chaque fiche à sa ligne de portefeuille)."""
+    from app.fabric_reference import reconcile_batch
+    si = {
+        "acme": {"nom_client": "ACME", "cotisation_annuelle": "1000"},
+        "beta": {"nom_client": "BETA", "cotisation_annuelle": "2000"},
+        "delta": {"nom_client": "DELTA", "cotisation_annuelle": "2000"},
+    }
+    items = [
+        {"client_key": "acme", "document": {"nom_client": "ACME", "cotisation_annuelle": "1000"}},   # CONFORME
+        {"client_key": "beta", "document": {"nom_client": "BETA", "cotisation_annuelle": "9999"}},    # ECART
+        {"client_key": "delta", "document": {"nom_client": "DELTA", "cotisation_annuelle": "2010"}},  # INCERTAIN (0,5 %)
+        {"client_key": "zz", "document": {"nom_client": "ZZ"}},                                       # CLIENT_NON_TROUVE
+        {"client_key": "x"},                                                                          # INVALIDE
+    ]
+    rapport = reconcile_batch(items, reference_reader=lambda k: si.get(k))
+    s = rapport["synthese"]
+    assert s["INCERTAIN"] == 1
+    # Cohérence : aucun item perdu ni compté deux fois.
+    assert s["CONFORME"] + s["ECART"] + s["INCERTAIN"] + s["CLIENT_NON_TROUVE"] + s["invalides"] == s["total"] == 5
+    # Ordre préservé (vérifié via la séquence de verdicts).
+    assert [f["verdict"] for f in rapport["fiches"]] == [
+        "CONFORME", "ECART", "INCERTAIN", "CLIENT_NON_TROUVE", "INVALIDE"
+    ]
+    # Une fiche valide porte bien le contrat canonique.
+    valides = [f for f in rapport["fiches"] if f["verdict"] != "INVALIDE"]
+    for f in valides:
+        assert {"client", "verdict", "a_revoir", "nb_ecarts", "ecarts", "recommandation"} <= set(f)
+
+
+def test_reconcile_batch_pas_d_io_si_sur_items_invalides():
+    """Un item invalide (sans document) NE déclenche AUCUNE lecture du SI : le
+    `continue` intervient avant `fetch_client_reference` (pas d'I/O gaspillée)."""
+    from app.fabric_reference import reconcile_batch
+    appels = []
+
+    def reader(key):
+        appels.append(key)
+        return None
+
+    items = [
+        {"client_key": "x"},                                     # invalide -> pas de lecture SI
+        {"client_key": "y", "document": {}},                     # document vide -> invalide -> idem
+        {"client_key": "ok", "document": {"nom_client": "OK"}},  # valide -> 1 seule lecture SI
+    ]
+    reconcile_batch(items, reference_reader=reader)
+    assert appels == ["ok"]
+
+
 def test_fetch_retry_apres_blip_reseau(monkeypatch):
     """Un blip réseau momentané (1re lecture KO) ⇒ la 2e tentative réussit."""
     import app.fabric_reference as fr
