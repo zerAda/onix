@@ -82,6 +82,25 @@ def test_compare_name_missing_si_champ_vide():
     assert audit_engine.compare_name("ACME", None)[0] == "MISSING"
 
 
+def test_compare_date_quatre_verdicts():
+    from app.audit_engine import compare_date
+    # ISO vs FR équivalentes -> MATCH ; valides différentes -> MISMATCH.
+    assert compare_date("2025-12-31", "31/12/2025")[0] == "MATCH"
+    assert compare_date("2025-12-31", "2025-01-01")[0] == "MISMATCH"
+    # Champ absent -> MISSING. Distinction clé : une date PRÉSENTE mais ILLISIBLE
+    # (OCR garbage) -> UNCERTAIN (revue humaine), surtout pas MISMATCH (faux écart).
+    assert compare_date("", "2025-12-31")[0] == "MISSING"
+    assert compare_date("date ???illisible", "2025-12-31")[0] == "UNCERTAIN"
+
+
+def test_compare_contract_verdicts():
+    from app.audit_engine import compare_contract
+    # Même numéro à la ponctuation/casse près -> MATCH ; différents -> MISMATCH.
+    assert compare_contract("CTR-2024/AB12", "ctr 2024 ab12")[0] == "MATCH"
+    assert compare_contract("CTR-001", "CTR-002")[0] == "MISMATCH"
+    assert compare_contract("", "CTR-001")[0] == "MISSING"
+
+
 def test_alias_field_specificity():
     assert alias_field("Raison sociale") == "nom_client"
     assert alias_field("Plafond hospi.") == "plafond_hospitalisation"
