@@ -128,6 +128,53 @@ def _select_record(data: Any, key: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def reconcile_batch(items: Any, *, reference_reader: Optional[ReferenceReader] = None) -> Dict[str, Any]:
+    """Réconcilie un LOT de contrats (PORTEFEUILLE) contre le SI Fabric.
+
+    `items` : itérable de dicts ``{"document": {champs canoniques}, "client_key": str}``.
+    Pour CHAQUE contrat : référence SI (`fetch_client_reference`, fail-closed → client
+    absent ⇒ verdict `CLIENT_NON_TROUVE`) → `audit` → fiche de revue. Retourne un
+    rapport de portefeuille : la liste des **fiches** + une **synthèse** (compteurs par
+    verdict + nb à revoir + nb d'items invalides). Utile au back-office : réconcilier
+    tout un portefeuille en un appel et obtenir un tableau de bord d'arbitrage.
+
+    Fail-closed et SANS exception : un item mal formé (sans ``document`` exploitable)
+    est compté en `invalides` et marqué à revoir, jamais propagé. Lecture seule : ne
+    modifie/écrit RIEN (parité AC360, prompt agent « lecture seule »)."""
+    # Import local : audit_engine ne dépend pas de fabric_reference (relation à sens
+    # unique) — l'import ici évite tout couplage de module au chargement.
+    from .audit_engine import audit, build_review_fiche
+
+    fiches: list = []
+    synthese: Dict[str, int] = {
+        "total": 0, "a_revoir": 0, "invalides": 0,
+        "CONFORME": 0, "ECART": 0, "INCERTAIN": 0, "CLIENT_NON_TROUVE": 0,
+    }
+    for item in (items or []):
+        synthese["total"] += 1
+        doc = item.get("document") if isinstance(item, dict) else None
+        client_key = item.get("client_key") if isinstance(item, dict) else None
+        if not isinstance(doc, dict) or not doc:
+            synthese["invalides"] += 1
+            synthese["a_revoir"] += 1
+            fiches.append({
+                "client": client_key, "verdict": "INVALIDE", "a_revoir": True,
+                "nb_ecarts": 0, "ecarts": [],
+                "recommandation": "Item sans document exploitable — vérifier la saisie.",
+            })
+            continue
+        reference = fetch_client_reference(client_key, reader=reference_reader) or {}
+        fiche = build_review_fiche(
+            audit({"document": doc, "reference": reference}), client_key=client_key
+        )
+        fiches.append(fiche)
+        verdict = fiche.get("verdict", "INCONNU")
+        synthese[verdict] = synthese.get(verdict, 0) + 1
+        if fiche.get("a_revoir"):
+            synthese["a_revoir"] += 1
+    return {"fiches": fiches, "synthese": synthese}
+
+
 # Cache mémoire du jeton OneLake (évite un aller-retour AAD par requête).
 _TOKEN_CACHE: Dict[str, Any] = {"value": None, "expires": 0.0}
 

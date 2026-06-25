@@ -223,6 +223,40 @@ def test_garantie_projetee_depuis_le_si():
     assert ref["garantie"] == "Sante collective"
 
 
+def test_reconcile_batch_synthese_portefeuille():
+    """Réconciliation de PORTEFEUILLE : un lot mixte produit la bonne synthèse."""
+    from app.fabric_reference import reconcile_batch
+    si = {
+        "acme": {"nom_client": "ACME", "cotisation_annuelle": "1000"},
+        "beta": {"nom_client": "BETA", "cotisation_annuelle": "2000"},
+    }
+    items = [
+        {"client_key": "acme", "document": {"nom_client": "ACME", "cotisation_annuelle": "1000"}},   # CONFORME
+        {"client_key": "beta", "document": {"nom_client": "BETA", "cotisation_annuelle": "9999"}},    # ECART
+        {"client_key": "gamma", "document": {"nom_client": "GAMMA", "cotisation_annuelle": "500"}},   # CLIENT_NON_TROUVE
+        {"client_key": "x"},                                                                          # INVALIDE (pas de document)
+    ]
+    rapport = reconcile_batch(items, reference_reader=lambda k: si.get(k))
+    s = rapport["synthese"]
+    assert s["total"] == 4
+    assert s["CONFORME"] == 1
+    assert s["ECART"] == 1
+    assert s["CLIENT_NON_TROUVE"] == 1
+    assert s["invalides"] == 1
+    assert s["a_revoir"] == 3            # ECART + CLIENT_NON_TROUVE + INVALIDE (pas CONFORME)
+    assert len(rapport["fiches"]) == 4
+
+
+def test_reconcile_batch_vide_et_fail_safe():
+    from app.fabric_reference import reconcile_batch
+    # Lot vide -> synthèse à zéro, jamais d'exception.
+    r0 = reconcile_batch([])
+    assert r0["synthese"]["total"] == 0 and r0["fiches"] == []
+    # Items non-dict / sans document -> comptés invalides, sans exception ni I/O SI.
+    r1 = reconcile_batch([None, "pas un dict", {"client_key": "y"}], reference_reader=lambda k: None)
+    assert r1["synthese"]["total"] == 3 and r1["synthese"]["invalides"] == 3
+
+
 def test_fetch_retry_apres_blip_reseau(monkeypatch):
     """Un blip réseau momentané (1re lecture KO) ⇒ la 2e tentative réussit."""
     import app.fabric_reference as fr
