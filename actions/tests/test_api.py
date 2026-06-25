@@ -211,6 +211,24 @@ def test_reconcile_batch_endpoint_kill_switch(client):
         client.post("/admin/control", json={"action": "enable_feature", "scope": "audit"})
 
 
+def test_reconcile_batch_endpoint_format_csv(client, monkeypatch):
+    """`?format=csv` → 200 text/csv (attachment) avec en-tête ; défaut = JSON inchangé."""
+    import app.fabric_reference as fabric_reference
+    si = {"acme": {"nom_client": "ACME", "cotisation_annuelle": "1000"}}
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference",
+                        lambda ck, **kw: si.get((ck or "").strip().lower()))
+    items = [{"client_key": "acme", "document": {"nom_client": "ACME", "cotisation_annuelle": "1000"}}]
+    r = client.post("/audit/reconcile/batch?format=csv", json={"items": items})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert r.text.splitlines()[0] == "client,verdict,a_revoir,nb_ecarts,recommandation"
+    # Sans format -> JSON (comportement inchangé).
+    r2 = client.post("/audit/reconcile/batch", json={"items": items})
+    assert r2.headers["content-type"].startswith("application/json")
+    assert "synthese" in r2.json()
+
+
 # --- RAG non-agentique souverain : POST /rag/ask ------------------------------
 def test_rag_ask_grounded(client, monkeypatch):
     """Récupère le bon document + génère une réponse grounded (générateur mocké)."""

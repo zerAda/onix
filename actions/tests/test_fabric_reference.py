@@ -313,6 +313,44 @@ def test_reconcile_batch_pas_d_io_si_sur_items_invalides():
     assert appels == ["ok"]
 
 
+def test_batch_to_csv_structure_et_echappement():
+    """Export CSV : en-tête + 1 ligne/fiche dans l'ORDRE ; un nom avec virgule et
+    guillemets est correctement échappé (échappement CSV natif)."""
+    from app.fabric_reference import reconcile_batch, batch_to_csv
+    si = {"acme": {"nom_client": 'ACME, Inc "AC"', "cotisation_annuelle": "1000"}}
+    items = [
+        {"client_key": "acme", "document": {"nom_client": 'ACME, Inc "AC"', "cotisation_annuelle": "9999"}},  # ECART
+        {"client_key": "x"},  # INVALIDE
+    ]
+    rapport = reconcile_batch(items, reference_reader=lambda k: si.get(k))
+    lignes = batch_to_csv(rapport).splitlines()
+    assert lignes[0] == "client,verdict,a_revoir,nb_ecarts,recommandation"
+    assert len(lignes) == 3
+    assert '"ACME, Inc ""AC"""' in lignes[1]          # virgule + guillemets protégés
+    assert ",ECART," in lignes[1] and ",INVALIDE," in lignes[2]  # ordre préservé
+
+
+def test_batch_to_csv_anti_injection_formule():
+    """Sécurité : une valeur commençant par une formule (= + - @) est neutralisée
+    (préfixe apostrophe) pour qu'Excel/Sheets l'affiche en texte, pas l'évalue."""
+    from app.fabric_reference import batch_to_csv
+    rapport = {"fiches": [{
+        "client": "=cmd|' /c calc'!A1", "verdict": "CONFORME", "a_revoir": False,
+        "nb_ecarts": 0, "recommandation": "@SUM(1+1)",
+    }]}
+    out = batch_to_csv(rapport)
+    assert "'=cmd" in out and "'@SUM" in out
+
+
+def test_batch_to_csv_failsafe_rapport_malforme():
+    """Fail-closed : rapport None / fiches non-liste / fiches non-dict -> CSV avec
+    UNIQUEMENT l'en-tête, jamais d'exception."""
+    from app.fabric_reference import batch_to_csv
+    for mauvais in (None, {}, {"fiches": "pas une liste"}, {"fiches": [None, 42]}):
+        lignes = batch_to_csv(mauvais).splitlines()
+        assert lignes == ["client,verdict,a_revoir,nb_ecarts,recommandation"]
+
+
 def test_fetch_retry_apres_blip_reseau(monkeypatch):
     """Un blip réseau momentané (1re lecture KO) ⇒ la 2e tentative réussit."""
     import app.fabric_reference as fr

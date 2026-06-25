@@ -13,6 +13,8 @@ Sécurité : HTTPS-only, jeton via env (jamais en repo), aucune écriture.
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 from typing import Any, Callable, Dict, Optional
@@ -177,6 +179,43 @@ def reconcile_batch(items: Any, *, reference_reader: Optional[ReferenceReader] =
         if fiche.get("a_revoir"):
             synthese["a_revoir"] += 1
     return {"fiches": fiches, "synthese": synthese}
+
+
+# ── Export CSV de la synthèse de portefeuille (back-office → Excel) ───────────
+# Préfixes de formule Excel/Sheets à neutraliser (anti-injection CSV, CWE-1236).
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _csv_safe(value: Any) -> str:
+    """Valeur prête pour CSV : None → vide, et ANTI-INJECTION — une valeur commençant
+    par un préfixe de formule (`= + - @`) est préfixée d'une apostrophe pour qu'Excel/
+    Sheets l'affiche en TEXTE au lieu de l'ÉVALUER (exfiltration / exécution)."""
+    if value is None:
+        return ""
+    s = str(value)
+    if s and s[0] in _CSV_FORMULA_PREFIXES:
+        return "'" + s
+    return s
+
+
+def batch_to_csv(rapport: Any) -> str:
+    """Export CSV des FICHES d'un rapport `reconcile_batch` (back-office → Excel).
+
+    Colonnes : ``client, verdict, a_revoir, nb_ecarts, recommandation``. Échappement
+    CSV natif (stdlib `csv` : virgules / guillemets / retours-ligne dans une valeur
+    sont correctement protégés) + anti-injection de formule. **Fail-closed et SANS
+    exception** : un rapport mal formé ⇒ CSV avec uniquement l'en-tête. N'ajoute AUCUNE
+    PII au-delà de ce que la fiche porte déjà (`client` y figure ; lecture seule)."""
+    colonnes = ["client", "verdict", "a_revoir", "nb_ecarts", "recommandation"]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(colonnes)
+    fiches = rapport.get("fiches") if isinstance(rapport, dict) else None
+    for fiche in fiches if isinstance(fiches, list) else []:
+        if not isinstance(fiche, dict):
+            continue
+        writer.writerow([_csv_safe(fiche.get(c)) for c in colonnes])
+    return buf.getvalue()
 
 
 # Cache mémoire du jeton OneLake (évite un aller-retour AAD par requête).

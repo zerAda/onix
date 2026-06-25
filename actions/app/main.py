@@ -648,8 +648,10 @@ def _max_reconcile_batch() -> int:
 
 @app.post("/audit/reconcile/batch")
 def audit_reconcile_batch_endpoint(
-    req: ReconcileBatchRequest, caller: CallerContext = Depends(require_caller)
-) -> Dict[str, Any]:
+    req: ReconcileBatchRequest,
+    format: Optional[str] = None,
+    caller: CallerContext = Depends(require_caller),
+):
     """**RÉCONCILIATION DE PORTEFEUILLE** (lot) : réconcilie d'un coup une LISTE de
     contrats déjà extraits (``{document, client_key}``) contre le SI Fabric → liste
     de fiches de revue + **synthèse** (compteurs par verdict + à-revoir + invalides).
@@ -677,6 +679,14 @@ def audit_reconcile_batch_endpoint(
     usage_tracker.track("reconcile_batch_completed", user_id=who,
                         action_name="reconcile_batch",
                         document_count=rapport["synthese"]["total"])
+    # Export tableur optionnel (`?format=csv`) : CSV des fiches prêt pour Excel
+    # (anti-injection de formule inclus). Défaut = JSON (inchangé).
+    if (format or "").strip().lower() == "csv":
+        return Response(
+            content=fabric_reference.batch_to_csv(rapport),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=reconciliation.csv"},
+        )
     return rapport
 
 
