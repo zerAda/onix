@@ -223,7 +223,11 @@ def batch_to_csv(rapport: Any) -> str:
 # ── Synthèse CLIENT-360 (agrège réf SI + tâches + usage, RGPD-safe) ───────────
 def _default_open_tasks(client_key: Any) -> list:
     """Tâches OUVERTES du client (filtrées par HASH). Best-effort, fail-safe → [].
-    Import LOCAL (tasks/admin_state) pour éviter tout cycle au chargement."""
+    Import LOCAL (tasks/admin_state) pour éviter tout cycle au chargement.
+
+    Choix : passe par l'API `tasks.list_tasks` (DÉCOUPLÉ du schéma SQL) puis filtre
+    par hash en Python — O(tâches ouvertes), suffisant à l'échelle POC. À passer en
+    SQL filtré `WHERE client_id_hash=? AND status='open'` si le volume devient élevé."""
     try:
         from . import tasks
         from .admin_state import hash_id
@@ -268,7 +272,12 @@ def client_360(
     Sources INJECTABLES (tests offline) ; sinon défauts réels (SI + base SQLite, par
     HASH). RGPD : opère par hash (`admin_state.hash_id`), **LECTURE SEULE** (n'écrit
     RIEN), **fail-closed et SANS exception** — toute erreur d'une source ⇒ cette source
-    vide/0, jamais propagée. C'est la brique « Assistant Client 360 »."""
+    vide/0, jamais propagée. C'est la brique « Assistant Client 360 ».
+
+    CONTRAT (important) : `client_key` doit être le **même identifiant canonique** que
+    celui passé en `client_id` à `tasks.create_task` et au tracking d'usage — c'est sur
+    son HASH que tâches et usage sont retrouvés. Une clé différente (nom vs SIRET vs id)
+    renverrait 0 tâche / 0 usage À TORT (fail-closed, jamais d'erreur, mais incohérent)."""
     # (1) Référence SI : fail-closed → None si client absent / source non configurée.
     try:
         reference = fetch_client_reference(client_key, reader=reference_reader)
