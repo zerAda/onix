@@ -161,6 +161,20 @@ def test_reconcile_batch_endpoint_borne_fail_closed(client, monkeypatch):
     assert "trop volumineux" in str(r.json()).lower()
 
 
+def test_reconcile_batch_endpoint_borne_configurable(client, monkeypatch):
+    """AUDIT : la borne est tunable par env `ONIX_RECONCILE_BATCH_MAX` et FAIL-SAFE
+    (valeur illisible → repli sur le défaut 200, jamais d'illimité)."""
+    import app.fabric_reference as fabric_reference
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference", lambda ck, **kw: None)
+    items3 = [{"client_key": str(i), "document": {"nom_client": "X"}} for i in range(3)]
+    # Borne abaissée à 2 -> 3 items refusés (400).
+    monkeypatch.setenv("ONIX_RECONCILE_BATCH_MAX", "2")
+    assert client.post("/audit/reconcile/batch", json={"items": items3}).status_code == 400
+    # Valeur d'env illisible -> repli sur 200 -> 3 items acceptés (200).
+    monkeypatch.setenv("ONIX_RECONCILE_BATCH_MAX", "pas-un-entier")
+    assert client.post("/audit/reconcile/batch", json={"items": items3}).status_code == 200
+
+
 # --- RAG non-agentique souverain : POST /rag/ask ------------------------------
 def test_rag_ask_grounded(client, monkeypatch):
     """Récupère le bon document + génère une réponse grounded (générateur mocké)."""

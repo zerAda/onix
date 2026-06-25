@@ -636,7 +636,14 @@ async def audit_reconcile_file_endpoint(
 
 
 # Borne fail-closed du nombre de contrats par lot (réponses bornées, anti-abus).
-_MAX_RECONCILE_BATCH = 200
+def _max_reconcile_batch() -> int:
+    """Borne max d'items par lot de réconciliation, tunable par déploiement via
+    ``ONIX_RECONCILE_BATCH_MAX`` (défaut 200). Fail-safe : valeur absente / illisible
+    / hors-bornes ⇒ repli, bornée à [1, 1000] (jamais d'illimité, anti-abus)."""
+    try:
+        return max(1, min(int(os.environ.get("ONIX_RECONCILE_BATCH_MAX", "200")), 1000))
+    except (TypeError, ValueError):
+        return 200
 
 
 @app.post("/audit/reconcile/batch")
@@ -653,11 +660,12 @@ def audit_reconcile_batch_endpoint(
     `CLIENT_NON_TROUVE` par contrat ; item sans document ⇒ `INVALIDE`. Lecture seule."""
     who = _effective_caller(caller, req.caller_id)
     _gate("audit", who)
-    if len(req.items) > _MAX_RECONCILE_BATCH:
+    max_batch = _max_reconcile_batch()
+    if len(req.items) > max_batch:
         raise HTTPException(
             status_code=400,
             detail={"error": "Lot trop volumineux",
-                    "max": _MAX_RECONCILE_BATCH, "recu": len(req.items),
+                    "max": max_batch, "recu": len(req.items),
                     "hint": "Découpez le portefeuille en lots plus petits."},
         )
     usage_tracker.track("reconcile_batch_started", user_id=who,
