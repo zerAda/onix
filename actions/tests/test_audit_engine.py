@@ -54,6 +54,34 @@ def test_normalize_name_and_contract():
     assert normalize_contract("ctr-2024/AB.12") == "CTR2024AB12"
 
 
+def test_compare_name_paliers_de_verdict(monkeypatch):
+    # Paliers métier (l.63-64) : MATCH >=95, UNCERTAIN >=85, sinon MISMATCH. On
+    # INJECTE le score pour exercer les frontières indépendamment du fuzzer
+    # (thefuzz peut être absent). UNCERTAIN = revue humaine, pas auto-ECART.
+    from app import audit_engine
+
+    def set_score(v):
+        monkeypatch.setattr(audit_engine, "_name_score", lambda a, b: v)
+
+    set_score(98)
+    assert audit_engine.compare_name("ACME", "ACME")[0] == "MATCH"
+    set_score(95)
+    assert audit_engine.compare_name("ACME", "ACME")[0] == "MATCH"        # frontière incluse
+    set_score(94)
+    assert audit_engine.compare_name("ACME", "ACMX")[0] == "UNCERTAIN"
+    set_score(85)
+    assert audit_engine.compare_name("ACME", "ACMX")[0] == "UNCERTAIN"    # frontière incluse
+    set_score(84)
+    assert audit_engine.compare_name("ACME", "XYZ")[0] == "MISMATCH"
+
+
+def test_compare_name_missing_si_champ_vide():
+    from app import audit_engine
+    # Un nom absent d'un côté -> MISSING (ni MATCH ni MISMATCH : champ non comparable).
+    assert audit_engine.compare_name("", "ACME")[0] == "MISSING"
+    assert audit_engine.compare_name("ACME", None)[0] == "MISSING"
+
+
 def test_alias_field_specificity():
     assert alias_field("Raison sociale") == "nom_client"
     assert alias_field("Plafond hospi.") == "plafond_hospitalisation"
