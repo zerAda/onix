@@ -342,6 +342,16 @@ def test_batch_to_csv_anti_injection_formule():
     assert "'=cmd" in out and "'@SUM" in out
 
 
+def test_csv_safe_neutralise_tab_et_cr():
+    """AUDIT : le jeu OWASP complet inclut TAB et CR en tête — eux aussi neutralisés."""
+    from app.fabric_reference import _csv_safe
+    assert _csv_safe("\t=cmd").startswith("'")   # tabulation en tête
+    assert _csv_safe("\r=cmd").startswith("'")   # retour chariot en tête
+    assert _csv_safe("=cmd").startswith("'")     # non-régression (formule classique)
+    assert _csv_safe("Dupont") == "Dupont"       # valeur normale inchangée
+    assert _csv_safe(None) == ""                 # None -> vide
+
+
 def test_batch_to_csv_failsafe_rapport_malforme():
     """Fail-closed : rapport None / fiches non-liste / fiches non-dict -> CSV avec
     UNIQUEMENT l'en-tête, jamais d'exception."""

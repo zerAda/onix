@@ -183,13 +183,15 @@ def reconcile_batch(items: Any, *, reference_reader: Optional[ReferenceReader] =
 
 # ── Export CSV de la synthèse de portefeuille (back-office → Excel) ───────────
 # Préfixes de formule Excel/Sheets à neutraliser (anti-injection CSV, CWE-1236).
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+# Jeu COMPLET recommandé par l'OWASP : `= + - @` PLUS la tabulation et le retour
+# chariot en tête (eux aussi interprétés comme amorce de formule par les tableurs).
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
 def _csv_safe(value: Any) -> str:
     """Valeur prête pour CSV : None → vide, et ANTI-INJECTION — une valeur commençant
-    par un préfixe de formule (`= + - @`) est préfixée d'une apostrophe pour qu'Excel/
-    Sheets l'affiche en TEXTE au lieu de l'ÉVALUER (exfiltration / exécution)."""
+    par un préfixe de formule (`= + - @`, TAB ou CR) est préfixée d'une apostrophe pour
+    qu'Excel/Sheets l'affiche en TEXTE au lieu de l'ÉVALUER (exfiltration / exécution)."""
     if value is None:
         return ""
     s = str(value)

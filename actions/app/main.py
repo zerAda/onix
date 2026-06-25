@@ -682,8 +682,10 @@ def audit_reconcile_batch_endpoint(
     # Export tableur optionnel (`?format=csv`) : CSV des fiches prêt pour Excel
     # (anti-injection de formule inclus). Défaut = JSON (inchangé).
     if (format or "").strip().lower() == "csv":
+        # BOM UTF-8 (U+FEFF) en tête : Excel (FR) détecte alors l'UTF-8 et n'abîme
+        # PAS les accents des noms clients. `batch_to_csv` reste pur (re-parseable).
         return Response(
-            content=fabric_reference.batch_to_csv(rapport),
+            content=chr(0xFEFF) + fabric_reference.batch_to_csv(rapport),
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": "attachment; filename=reconciliation.csv"},
         )

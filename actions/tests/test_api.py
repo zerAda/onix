@@ -222,7 +222,9 @@ def test_reconcile_batch_endpoint_format_csv(client, monkeypatch):
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/csv")
     assert "attachment" in r.headers.get("content-disposition", "")
-    assert r.text.splitlines()[0] == "client,verdict,a_revoir,nb_ecarts,recommandation"
+    # BOM UTF-8 en tête (Excel FR lit les accents correctement) puis l'en-tête CSV.
+    assert r.content.startswith(b"\xef\xbb\xbf")
+    assert r.text.lstrip(chr(0xFEFF)).splitlines()[0] == "client,verdict,a_revoir,nb_ecarts,recommandation"
     # Sans format -> JSON (comportement inchangé).
     r2 = client.post("/audit/reconcile/batch", json={"items": items})
     assert r2.headers["content-type"].startswith("application/json")
