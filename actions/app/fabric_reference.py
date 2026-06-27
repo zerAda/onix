@@ -313,6 +313,78 @@ def client_360(
     }
 
 
+# ── Synthèse 360 de PORTEFEUILLE (tableau de bord par client + totaux) ────────
+_MAX_PORTFOLIO = 500  # borne de sécurité (réponses bornées, anti-abus)
+
+
+def portfolio_360(
+    client_keys: Any,
+    *,
+    reference_reader: Optional[ReferenceReader] = None,
+    tasks_lister: Optional[Callable[[Any], list]] = None,
+    usage_counter: Optional[Callable[[Any], int]] = None,
+) -> Dict[str, Any]:
+    """Synthèse 360 de **portefeuille** : un RÉSUMÉ par client + des totaux — tableau de
+    bord pour le back-office.
+
+    `client_keys` : liste/tuple d'identifiants client (chaînes). Toute autre valeur →
+    portefeuille vide (fail-closed). Dédoublonné en préservant l'ordre, borné à 500.
+    Pour chaque client : `client_360` puis on ne garde qu'un résumé SLIM (data-minim. :
+    NI `reference` complète NI `taches_ouvertes`) : `{client_key, reference_trouvee,
+    nb_taches_ouvertes, nb_evenements_usage}`. **Fail-closed et SANS exception** (client
+    en erreur → résumé 0/False). LECTURE SEULE."""
+    keys = client_keys if isinstance(client_keys, (list, tuple)) else []
+    vus: set = set()
+    uniques: list = []
+    for k in keys:
+        if not (isinstance(k, str) and k.strip()) or k in vus:
+            continue  # identifiants chaîne non vides, dédoublonnés (ordre préservé)
+        vus.add(k)
+        uniques.append(k)
+        if len(uniques) >= _MAX_PORTFOLIO:
+            break
+
+    lignes: list = []
+    totaux = {"nb_clients": 0, "nb_avec_reference": 0,
+              "total_taches_ouvertes": 0, "total_usage": 0}
+    for ck in uniques:
+        try:
+            vue = client_360(ck, reference_reader=reference_reader,
+                             tasks_lister=tasks_lister, usage_counter=usage_counter)
+            ligne = {
+                "client_key": ck,
+                "reference_trouvee": bool(vue.get("reference_trouvee")),
+                "nb_taches_ouvertes": int(vue.get("nb_taches_ouvertes", 0)),
+                "nb_evenements_usage": int(vue.get("nb_evenements_usage", 0)),
+            }
+        except Exception:
+            ligne = {"client_key": ck, "reference_trouvee": False,
+                     "nb_taches_ouvertes": 0, "nb_evenements_usage": 0}
+        lignes.append(ligne)
+        totaux["nb_clients"] += 1
+        totaux["nb_avec_reference"] += 1 if ligne["reference_trouvee"] else 0
+        totaux["total_taches_ouvertes"] += ligne["nb_taches_ouvertes"]
+        totaux["total_usage"] += ligne["nb_evenements_usage"]
+    return {"lignes": lignes, "totaux": totaux}
+
+
+def portfolio_360_to_csv(rapport: Any) -> str:
+    """Export CSV d'un rapport `portfolio_360` (une ligne par client). Colonnes :
+    client_key, reference_trouvee, nb_taches_ouvertes, nb_evenements_usage. Échappement
+    CSV natif + anti-injection (`_csv_safe`). Fail-closed : rapport malformé → en-tête
+    seul, jamais d'exception."""
+    colonnes = ["client_key", "reference_trouvee", "nb_taches_ouvertes", "nb_evenements_usage"]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(colonnes)
+    lignes = rapport.get("lignes") if isinstance(rapport, dict) else None
+    for ligne in lignes if isinstance(lignes, list) else []:
+        if not isinstance(ligne, dict):
+            continue
+        writer.writerow([_csv_safe(ligne.get(c)) for c in colonnes])
+    return buf.getvalue()
+
+
 # Cache mémoire du jeton OneLake (évite un aller-retour AAD par requête).
 _TOKEN_CACHE: Dict[str, Any] = {"value": None, "expires": 0.0}
 

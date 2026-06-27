@@ -526,6 +526,66 @@ def test_client_360_taches_data_minimisation(monkeypatch, tmp_path):
     assert "notes" not in t and "client_id_hash" not in t and "owner_hash" not in t
 
 
+def test_portfolio_360_lignes_et_totaux():
+    """Tableau de bord portefeuille : résumés par client + totaux (sources injectées)."""
+    from app.fabric_reference import portfolio_360
+    refs = {"a": {"nom_client": "A"}}                       # "a" a une réf, "b" non
+    taches = {"a": [{"task_id": "t1"}], "b": [{"task_id": "t2"}, {"task_id": "t3"}]}
+    usages = {"a": 4, "b": 1}
+    rapport = portfolio_360(
+        ["a", "b"],
+        reference_reader=lambda ck, **kw: refs.get(ck),
+        tasks_lister=lambda ck: taches.get(ck, []),
+        usage_counter=lambda ck: usages.get(ck, 0),
+    )
+    lignes = rapport["lignes"]
+    assert [l["client_key"] for l in lignes] == ["a", "b"]   # ordre préservé
+    assert lignes[0] == {"client_key": "a", "reference_trouvee": True,
+                         "nb_taches_ouvertes": 1, "nb_evenements_usage": 4}
+    assert lignes[1] == {"client_key": "b", "reference_trouvee": False,
+                         "nb_taches_ouvertes": 2, "nb_evenements_usage": 1}
+    assert rapport["totaux"] == {"nb_clients": 2, "nb_avec_reference": 1,
+                                 "total_taches_ouvertes": 3, "total_usage": 5}
+    # Data-minimisation : ni `reference` complète ni `taches_ouvertes` dans les lignes.
+    assert "reference" not in lignes[0] and "taches_ouvertes" not in lignes[0]
+
+
+def test_portfolio_360_dedoublonne_et_ignore_cles_invalides():
+    from app.fabric_reference import portfolio_360
+    rapport = portfolio_360(
+        ["a", "a", "b", "", None, 42, "a"],   # doublons + clés vides/non-str
+        reference_reader=lambda ck, **kw: None,
+        tasks_lister=lambda ck: [],
+        usage_counter=lambda ck: 0,
+    )
+    assert [l["client_key"] for l in rapport["lignes"]] == ["a", "b"]
+    assert rapport["totaux"]["nb_clients"] == 2
+
+
+def test_portfolio_360_non_iterable_vide():
+    from app.fabric_reference import portfolio_360
+    for mauvais in (None, 42, "abc", {"a": 1}):
+        rapport = portfolio_360(mauvais)
+        assert rapport["lignes"] == [] and rapport["totaux"]["nb_clients"] == 0
+
+
+def test_portfolio_360_to_csv_structure_et_anti_injection():
+    from app.fabric_reference import portfolio_360_to_csv
+    rapport = {"lignes": [
+        {"client_key": "=cmd", "reference_trouvee": True, "nb_taches_ouvertes": 1, "nb_evenements_usage": 2},
+        {"client_key": "B,Inc", "reference_trouvee": False, "nb_taches_ouvertes": 0, "nb_evenements_usage": 0},
+    ]}
+    lignes = portfolio_360_to_csv(rapport).splitlines()
+    assert lignes[0] == "client_key,reference_trouvee,nb_taches_ouvertes,nb_evenements_usage"
+    assert len(lignes) == 3
+    out = portfolio_360_to_csv(rapport)
+    assert "'=cmd" in out                  # anti-injection de formule
+    assert '"B,Inc"' in out                # virgule échappée
+    # Fail-safe : rapport malformé -> en-tête seul.
+    assert portfolio_360_to_csv(None).splitlines() == [
+        "client_key,reference_trouvee,nb_taches_ouvertes,nb_evenements_usage"]
+
+
 def test_fetch_retry_apres_blip_reseau(monkeypatch):
     """Un blip réseau momentané (1re lecture KO) ⇒ la 2e tentative réussit."""
     import app.fabric_reference as fr
