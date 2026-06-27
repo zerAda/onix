@@ -286,6 +286,12 @@ class ReconcileBatchRequest(BaseModel):
     caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashé).")
 
 
+class Client360Request(BaseModel):
+    # Identifiant canonique du client (le MÊME que client_id de create_task/usage).
+    client_key: str = Field(description="Identifiant client (nom/SIRET/id) — agrégé par hash.")
+    caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashé).")
+
+
 class FicheRequest(BaseModel):
     client_name: str
     summary: str = ""
@@ -712,6 +718,27 @@ def rag_ask_endpoint(
     usage_tracker.track("rag_ask_completed", user_id=who, action_name="rag_ask",
                         document_count=len(result.get("sources") or []))
     return result
+
+
+@app.post("/client/360")
+def client_360_endpoint(
+    req: Client360Request, caller: CallerContext = Depends(require_caller)
+) -> Dict[str, Any]:
+    """**Vue CLIENT-360** : synthèse de ce qu'onix sait d'un client — référence SI +
+    tâches ouvertes + volume d'usage, agrégés par HASH (RGPD, **lecture seule**).
+
+    Fail-closed : `client_key` vide ⇒ 400 ; toute source indisponible ⇒ champ vide/0
+    (jamais d'invention). Gate `audit` (même périmètre de lecture que l'audit)."""
+    who = _effective_caller(caller, req.caller_id)
+    _gate("audit", who)
+    key = (req.client_key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail={"error": "client_key requis (vide)."})
+    vue = fabric_reference.client_360(key)
+    # Traçabilité d'accès (par hash) : qui a consulté la 360 de quel client.
+    usage_tracker.track("client_360_viewed", user_id=who, action_name="client_360",
+                        client_id=key)
+    return vue
 
 
 # ---------------------------------------------------------------------------

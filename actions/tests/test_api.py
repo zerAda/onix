@@ -266,6 +266,41 @@ def test_rag_ask_aucune_source_failclosed(client, monkeypatch):
     assert b["sources"] == []
 
 
+# --- Vue Assistant Client 360 : POST /client/360 ------------------------------
+def test_client_360_endpoint(client, monkeypatch):
+    """Agrégation 360 via l'endpoint (sources mockées) : structure + valeurs."""
+    import app.fabric_reference as fabric_reference
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference",
+                        lambda ck, **kw: {"nom_client": "ACME"})
+    monkeypatch.setattr(fabric_reference, "_default_open_tasks",
+                        lambda ck: [{"task_id": "t1", "status": "open"}])
+    monkeypatch.setattr(fabric_reference, "_default_usage_count", lambda ck: 3)
+    r = client.post("/client/360", json={"client_key": "ACME"})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["client_key"] == "ACME"
+    assert b["reference_trouvee"] is True
+    assert b["nb_taches_ouvertes"] == 1
+    assert b["nb_evenements_usage"] == 3
+
+
+def test_client_360_endpoint_cle_vide_400(client):
+    """client_key vide/blanc -> 400 fail-closed."""
+    r = client.post("/client/360", json={"client_key": "   "})
+    assert r.status_code == 400
+
+
+def test_client_360_endpoint_kill_switch(client):
+    """Kill-switch 'audit' coupé -> l'endpoint 360 répond 403 (gate respecté)."""
+    client.post("/admin/control",
+                json={"action": "disable_feature", "scope": "audit", "reason": "test"})
+    try:
+        r = client.post("/client/360", json={"client_key": "ACME"})
+        assert r.status_code == 403
+    finally:
+        client.post("/admin/control", json={"action": "enable_feature", "scope": "audit"})
+
+
 def test_generate_fiche_and_download(client):
     r = client.post("/generate/fiche", json={
         "client_name": "ACME SAS",
