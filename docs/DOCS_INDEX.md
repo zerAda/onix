@@ -84,3 +84,5 @@
 | [`audit-onyx/00-VERDICT.md`](audit-onyx/00-VERDICT.md) | **Verdict** prod-ready-vs-POC + scorecard 7 dimensions (10→70) |
 | [`PARITE_ENTREPRISE.md`](PARITE_ENTREPRISE.md) | Parité fonctionnelle vs assistant cloud d'entreprise |
 | [`COMPARATIF_COPILOT_AC360.md`](COMPARATIF_COPILOT_AC360.md) | Comparatif vs Microsoft Copilot & AC360 |
+| [`COMPETITIVE_BENCHMARK_AC360_ONYX.md`](COMPETITIVE_BENCHMARK_AC360_ONYX.md) | Benchmark factuel AC360 vs ONYX (inspection code des 2 projets) |
+| [`ADAPTIVE_STRATEGY.md`](ADAPTIVE_STRATEGY.md) | Stratégie adaptative vivante (pondération, backlog, critères d'arrêt) |
