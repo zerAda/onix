@@ -227,7 +227,11 @@ def _default_open_tasks(client_key: Any) -> list:
 
     Choix : passe par l'API `tasks.list_tasks` (DÉCOUPLÉ du schéma SQL) puis filtre
     par hash en Python — O(tâches ouvertes), suffisant à l'échelle POC. À passer en
-    SQL filtré `WHERE client_id_hash=? AND status='open'` si le volume devient élevé."""
+    SQL filtré `WHERE client_id_hash=? AND status='open'` si le volume devient élevé.
+
+    **Data-minimisation (RGPD)** : la vue 360 ne remonte qu'un RÉSUMÉ d'identification
+    (`task_id, title, due_date, status`). On EXCLUT `notes` (champ libre, PII probable),
+    les hash internes (`client_id_hash`/`owner_hash`) et `webhook_status` (hors-sujet)."""
     try:
         from . import tasks
         from .admin_state import hash_id
@@ -235,7 +239,9 @@ def _default_open_tasks(client_key: Any) -> list:
         if not h:
             return []
         return [
-            t for t in tasks.list_tasks(status="open")
+            {"task_id": t.get("task_id"), "title": t.get("title"),
+             "due_date": t.get("due_date"), "status": t.get("status")}
+            for t in tasks.list_tasks(status="open")
             if isinstance(t, dict) and t.get("client_id_hash") == h
         ]
     except Exception:

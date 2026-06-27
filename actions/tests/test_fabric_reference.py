@@ -505,6 +505,27 @@ def test_client_360_defauts_base_isolee(monkeypatch, tmp_path):
     assert vide["nb_taches_ouvertes"] == 0 and vide["nb_evenements_usage"] == 0
 
 
+def test_client_360_taches_data_minimisation(monkeypatch, tmp_path):
+    """AUDIT data-minimisation : la vue 360 ne remonte PAS `notes` (champ libre PII)
+    ni les hash internes des tâches — seulement le résumé d'identification."""
+    import importlib
+    monkeypatch.setenv("ONIX_ACTIONS_DB", str(tmp_path / "c360min.sqlite"))
+    monkeypatch.delenv("ONIX_ACTIONS_DB_URL", raising=False)
+    monkeypatch.setenv("ONIX_ACTIONS_AUDIT_HMAC_KEY", "cle-de-test-32-octets-minimum!!")
+    import app.db as db
+    import app.admin_state as admin_state
+    import app.tasks as tasks
+    import app.fabric_reference as fr
+    for m in (db, admin_state, tasks, fr):
+        importlib.reload(m)
+    tasks.init_db()
+    # Tâche avec des NOTES sensibles (champ libre, PII) -> ne doivent PAS fuiter.
+    tasks.create_task(title="Relancer X", client_id="X", notes="NIR 1 85 12 75 116 001 25")
+    t = fr.client_360("X")["taches_ouvertes"][0]
+    assert set(t.keys()) == {"task_id", "title", "due_date", "status"}
+    assert "notes" not in t and "client_id_hash" not in t and "owner_hash" not in t
+
+
 def test_fetch_retry_apres_blip_reseau(monkeypatch):
     """Un blip réseau momentané (1re lecture KO) ⇒ la 2e tentative réussit."""
     import app.fabric_reference as fr
