@@ -301,6 +301,41 @@ def test_client_360_endpoint_kill_switch(client):
         client.post("/admin/control", json={"action": "enable_feature", "scope": "audit"})
 
 
+def test_client_360_endpoint_cle_absente_422(client):
+    """client_key ABSENT du body -> 422 (validation Pydantic, champ requis)."""
+    r = client.post("/client/360", json={"caller_id": "x"})
+    assert r.status_code == 422
+
+
+def test_client_360_endpoint_trace_acces_meme_si_client_absent(client, monkeypatch):
+    """Traçabilité RGPD : l'accès `client_360_viewed` est tracé MÊME si la 360 est vide
+    (client absent du SI, 0 tâche, 0 usage)."""
+    import app.fabric_reference as fabric_reference
+    import app.usage_tracker as usage_tracker
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference", lambda ck, **kw: None)
+    monkeypatch.setattr(fabric_reference, "_default_open_tasks", lambda ck: [])
+    monkeypatch.setattr(fabric_reference, "_default_usage_count", lambda ck: 0)
+    events = []
+    monkeypatch.setattr(usage_tracker, "track",
+                        lambda et, **kw: events.append(et) or {"_persisted": False})
+    r = client.post("/client/360", json={"client_key": "ABSENT"})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["reference_trouvee"] is False and b["nb_taches_ouvertes"] == 0
+    assert "client_360_viewed" in events   # accès tracé malgré la 360 vide
+
+
+def test_client_360_endpoint_structure_complete(client, monkeypatch):
+    """La réponse 360 porte EXACTEMENT les 6 clés attendues."""
+    import app.fabric_reference as fabric_reference
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference", lambda ck, **kw: {"nom_client": "A"})
+    monkeypatch.setattr(fabric_reference, "_default_open_tasks", lambda ck: [])
+    monkeypatch.setattr(fabric_reference, "_default_usage_count", lambda ck: 0)
+    b = client.post("/client/360", json={"client_key": "A"}).json()
+    assert set(b.keys()) == {"client_key", "reference", "reference_trouvee",
+                             "nb_taches_ouvertes", "taches_ouvertes", "nb_evenements_usage"}
+
+
 def test_generate_fiche_and_download(client):
     r = client.post("/generate/fiche", json={
         "client_name": "ACME SAS",
