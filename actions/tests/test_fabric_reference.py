@@ -452,6 +452,59 @@ def test_client_360_failsafe_sources_qui_levent():
     assert vue["reference_trouvee"] is False
 
 
+def test_client_360_isolation_source_taches_qui_leve():
+    """Isolation INDIVIDUELLE : la source TÂCHES qui lève n'empêche PAS référence ni
+    usage (les 3 sources sont dans des try/except SÉPARÉS)."""
+    from app.fabric_reference import client_360
+
+    def boom(ck):
+        raise RuntimeError("tasks down")
+
+    vue = client_360(
+        "acme",
+        reference_reader=lambda ck, **kw: {"nom_client": "ACME"},
+        tasks_lister=boom,
+        usage_counter=lambda ck: 5,
+    )
+    assert vue["reference_trouvee"] is True             # référence OK malgré l'échec tâches
+    assert vue["nb_evenements_usage"] == 5              # usage OK malgré l'échec tâches
+    assert vue["taches_ouvertes"] == [] and vue["nb_taches_ouvertes"] == 0  # tâches fail-safe
+
+
+def test_client_360_defauts_base_isolee(monkeypatch, tmp_path):
+    """Les VRAIS helpers défaut sur base SQLite isolée : tâche + usages d'un client sont
+    retrouvés par HASH ; un autre client / une clé vide -> 0 (isolation + garde clé)."""
+    import importlib
+    monkeypatch.setenv("ONIX_ACTIONS_DB", str(tmp_path / "c360.sqlite"))
+    monkeypatch.delenv("ONIX_ACTIONS_DB_URL", raising=False)
+    monkeypatch.setenv("ONIX_ACTIONS_AUDIT_HMAC_KEY", "cle-de-test-32-octets-minimum!!")
+    import app.db as db
+    import app.admin_state as admin_state
+    import app.tasks as tasks
+    import app.usage_tracker as ut
+    import app.fabric_reference as fr
+    for m in (db, admin_state, tasks, ut, fr):
+        importlib.reload(m)
+    tasks.init_db()
+    ut.init_db()   # crée la table usage_events dans la base isolée
+
+    # Client "X" : 1 tâche OUVERTE + 2 événements d'usage (par client_id="X").
+    tasks.create_task(title="Relancer X", client_id="X")
+    ut.track("audit_documentaire_started", client_id="X", action_name="a")
+    ut.track("audit_documentaire_completed", client_id="X", action_name="a")
+
+    vue = fr.client_360("X")  # SANS sources injectées -> défauts réels
+    assert vue["nb_taches_ouvertes"] == 1     # tâche retrouvée par hash(X)
+    assert vue["nb_evenements_usage"] == 2     # 2 usages comptés par hash(X)
+    assert vue["reference_trouvee"] is False   # SI non configuré -> None (fail-closed)
+
+    # Isolation par hash : un autre client / une clé vide ne matchent RIEN.
+    assert fr.client_360("Y")["nb_taches_ouvertes"] == 0
+    assert fr.client_360("Y")["nb_evenements_usage"] == 0
+    vide = fr.client_360("")
+    assert vide["nb_taches_ouvertes"] == 0 and vide["nb_evenements_usage"] == 0
+
+
 def test_fetch_retry_apres_blip_reseau(monkeypatch):
     """Un blip réseau momentané (1re lecture KO) ⇒ la 2e tentative réussit."""
     import app.fabric_reference as fr
