@@ -22,7 +22,7 @@ chart HA, où elles tombent silencieusement en mode dégradé.
 
 | Classe | Nb | Commentaire |
 |---|---:|---|
-| ✅ CONFORME | 46 | Cœur applicatif + Helm (P0) + openapi.json régénéré, rate-limit HA documenté, compteurs de tests réconciliés (P1/P2, itération Ralph 2 2026-06-18) |
+| ✅ CONFORME | 47 | Cœur applicatif + Helm (P0) + openapi.json régénéré, rate-limit HA documenté, compteurs de tests réconciliés (P1/P2, itération Ralph 2 2026-06-18) + `guardrail_core.py` source unique (T1 cycle1-securite) |
 | ⚠️ ÉCART MINEUR | 2 | Vars WS2 non listées dans le bloc `environment:` du compose (P2, fonctionnelles via `env_file`) |
 | ❌ ÉCART MAJEUR | 0 | **Les 3 P0 HA corrigés** (itération Ralph 1) — cf. §"Écarts priorisés" |
 | 🕳️ DOC-SANS-CODE | 0 | Aucune garantie *purement* fantôme trouvée dans le code |

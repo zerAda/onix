@@ -25,7 +25,8 @@ Routeur : [`README.md`](README.md) · Projet : [`../../AGENTS.md`](../../AGENTS.
 | [`../../prompts/agent_commercial_systeme.md`](../../prompts/agent_commercial_systeme.md) | **Prompt système** de l'agent « Commercial 360 » (sourcé, anti-injection). |
 | [`../../prompts/exemples_questions.md`](../../prompts/exemples_questions.md) | Banque de questions d'exemple. |
 | [`../../tests/rag/test_red_team.py`](../../tests/rag/test_red_team.py) | Vecteurs **red-team** (injection, fuite de prompt, exfiltration). |
-| [`../../tests/rag/guardrail_postfilter.py`](../../tests/rag/guardrail_postfilter.py) · [`test_postfilter.py`](../../tests/rag/test_postfilter.py) | **Post-filtre déterministe** + ses tests. |
+| [`../../tests/rag/guardrail_postfilter.py`](../../tests/rag/guardrail_postfilter.py) | **Ré-export** du garde-fou déterministe — la source unique est désormais `actions/app/guardrail_core.py` (couche production) ; conservé ici pour la compatibilité des imports existants. |
+| [`../../tests/rag/test_postfilter.py`](../../tests/rag/test_postfilter.py) | Tests du post-filtre déterministe (24 cas, hors-LLM). |
 | [`../../tests/rag/test_prompt_contract.py`](../../tests/rag/test_prompt_contract.py) | Contrat du prompt (invariants). |
 | [`../../tests/rag/test_eval_dataset.py`](../../tests/rag/test_eval_dataset.py) | Validité du dataset d'éval. |
 | [`../../tests/rag/ragas_eval/`](../../tests/rag/ragas_eval/) | Pipeline **RAGAS** : `runner.py`, `judge.py`/`scripted_judge.py`, `metrics.py`, `compare_scores.py`, `gen_baseline.py`. |

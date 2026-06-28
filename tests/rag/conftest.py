@@ -22,6 +22,10 @@ désormais dans `prompt_loader.py` (module normal, importable hors pytest) et so
 from __future__ import annotations
 
 import os
+import sys
+_ACTIONS = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "actions"))
+if _ACTIONS not in sys.path:
+    sys.path.insert(0, _ACTIONS)  # rend `app.guardrail_core` importable (garde-fou partagé)
 
 import pytest
 

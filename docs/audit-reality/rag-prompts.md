@@ -22,7 +22,7 @@
 
 | Classe | Nombre |
 |---|---|
-| ✅ CONFORME | 31 |
+| ✅ CONFORME | 32 |
 | ⚠️ ÉCART MINEUR | 7 |
 | ❌ ÉCART MAJEUR | 0 |
 | 🕳️ DOC-SANS-CODE | 1 |
