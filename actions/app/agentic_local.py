@@ -12,7 +12,7 @@ import json
 import os
 from typing import Any, Callable, Dict, List
 
-from . import guardrail_core
+from . import guardrail_core, fabric_reference, rag_local, tasks, audit_engine
 
 _SYSTEM_PROMPT = (
     "Tu es l'assistant client GEREP, souverain et local, en LECTURE SEULE. Reponds en "
@@ -111,6 +111,106 @@ def run_agent(question, *, tools, generator, gate, tracker, max_steps: int = 6) 
     return {"answer": "Analyse interrompue : limite d'etapes atteinte. Resultats partiels.",
             "grounded": False, "steps": steps, "sources": sources,
             "blocked": False, "truncated": True}
+
+
+# ── Handlers lecture-seule : adaptateurs qui enveloppent les fonctions metier ─
+
+def _h_client_360(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Adaptateur client_360 : passe client_key positionnel, kwargs injectes par defaut."""
+    return fabric_reference.client_360(str(args.get("client_key") or "").strip())
+
+
+def _h_portfolio_360(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Adaptateur portfolio_360 : liste de cles client obligatoire."""
+    keys = args.get("client_keys")
+    return fabric_reference.portfolio_360(keys if isinstance(keys, list) else [])
+
+
+def _h_reconcile_batch(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Adaptateur reconcile_batch : liste d'items {document, client_key}."""
+    items = args.get("items")
+    return fabric_reference.reconcile_batch(items if isinstance(items, list) else [])
+
+
+def _h_rag_ask(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Adaptateur RAG : recupere + genere via ollama_generator (souverain)."""
+    docs = args.get("documents")
+    return rag_local.answer(
+        str(args.get("question") or ""),
+        docs if isinstance(docs, list) else [],
+        generator=rag_local.ollama_generator,
+    )
+
+
+def _h_list_tasks(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Adaptateur list_tasks : filtre optionnel par statut (defaut open)."""
+    status = str(args.get("status") or "open")
+    return {"tasks": tasks.list_tasks(status=status)}
+
+
+def _h_audit(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Adaptateur audit : payload = {document, reference}."""
+    payload = args.get("payload")
+    return audit_engine.audit(payload if isinstance(payload, dict) else {})
+
+
+def _make_tool(name: str, desc: str, props: Dict[str, Any],
+               gate: str, handler: Callable[[Dict[str, Any]], Dict[str, Any]],
+               required: List[str] | None = None) -> "Tool":
+    """Fabrique un Tool lecture-seule avec son schema JSON."""
+    schema: Dict[str, Any] = {"type": "object", "properties": props}
+    if required:
+        schema["required"] = required
+    return Tool(name=name, description=desc, parameters_schema=schema,
+                kind="read", gate_feature=gate, handler=handler)
+
+
+# ── REGISTRY : whitelist d'activation (QUE des outils read) ─────────────────
+REGISTRY: Dict[str, "Tool"] = {t.name: t for t in [
+    _make_tool(
+        "client_360",
+        "Synthese 360 d'un client (reference SI + taches ouvertes + volume d'usage).",
+        {"client_key": {"type": "string", "description": "Identifiant client (nom ou SIRET)"}},
+        "audit", _h_client_360, ["client_key"],
+    ),
+    _make_tool(
+        "portfolio_360",
+        "Tableau de bord 360 d'une liste de clients (resume par client + totaux).",
+        {"client_keys": {"type": "array", "items": {"type": "string"},
+                         "description": "Liste d'identifiants client"}},
+        "audit", _h_portfolio_360, ["client_keys"],
+    ),
+    _make_tool(
+        "reconcile_batch",
+        "Reconciliation contrat vers SI d'un lot de contrats (rapport de portefeuille).",
+        {"items": {"type": "array", "items": {"type": "object"},
+                   "description": "Liste de {document, client_key}"}},
+        "audit", _h_reconcile_batch, ["items"],
+    ),
+    _make_tool(
+        "rag_ask",
+        "Recherche documentaire grounded (RAG souverain local).",
+        {
+            "question": {"type": "string", "description": "Question en langage naturel"},
+            "documents": {"type": "array", "items": {"type": "object"},
+                          "description": "Documents {id, content} a interroger"},
+        },
+        "llm", _h_rag_ask, ["question"],
+    ),
+    _make_tool(
+        "list_tasks",
+        "Liste les taches (statut filtrable : open, done, cancelled ; defaut open).",
+        {"status": {"type": "string", "description": "open | done | cancelled (defaut open)"}},
+        "audit", _h_list_tasks,
+    ),
+    _make_tool(
+        "audit",
+        "Audit documentaire d'un document vs sa reference SI (verdict CONFORME/ECART/...).",
+        {"payload": {"type": "object",
+                     "description": "Dict {document: {...}, reference: {...}}"}},
+        "audit", _h_audit, ["payload"],
+    ),
+]}
 
 
 def _run_one_tool(name, args, tools, gate, tracker, sources) -> Dict[str, Any]:

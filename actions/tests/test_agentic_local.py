@@ -116,3 +116,19 @@ def test_run_agent_garde_fou_bloque_reponse_exfil():
                        gate=lambda f: None, tracker=_Tracker(), max_steps=2)
     assert res["blocked"] is True
     assert "exfil.example/collect" not in res["answer"]  # refus substitue
+
+
+# ── T9 : REGISTRY (whitelist d'outils lecture-seule) ────────────────────────
+
+def test_registry_ne_contient_que_des_outils_read():
+    assert ag.REGISTRY  # non vide
+    assert all(t.kind == "read" for t in ag.REGISTRY.values())
+    assert {"client_360", "portfolio_360", "reconcile_batch", "rag_ask",
+            "list_tasks", "audit"} <= set(ag.REGISTRY)
+
+
+def test_handler_client_360_enveloppe_la_fonction(monkeypatch):
+    import app.fabric_reference as fr
+    monkeypatch.setattr(fr, "client_360", lambda ck, **kw: {"client_key": ck, "reference_trouvee": True})
+    out = ag.REGISTRY["client_360"].handler({"client_key": "ALPHA"})
+    assert out["client_key"] == "ALPHA" and out["reference_trouvee"] is True
