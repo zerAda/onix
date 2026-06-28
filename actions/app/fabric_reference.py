@@ -332,7 +332,12 @@ def portfolio_360(
     Pour chaque client : `client_360` puis on ne garde qu'un résumé SLIM (data-minim. :
     NI `reference` complète NI `taches_ouvertes`) : `{client_key, reference_trouvee,
     nb_taches_ouvertes, nb_evenements_usage}`. **Fail-closed et SANS exception** (client
-    en erreur → résumé 0/False). LECTURE SEULE."""
+    en erreur → résumé 0/False). LECTURE SEULE.
+
+    Perf : sur les sources par DÉFAUT, coût O(clients × tâches ouvertes) — chaque
+    `client_360` interroge la base par client. Acceptable à l'échelle POC ; pour un gros
+    portefeuille, injectez un `tasks_lister`/`usage_counter` « batch » (une seule lecture
+    groupée par hash) : l'injection des sources EST l'échappatoire prévue."""
     keys = client_keys if isinstance(client_keys, (list, tuple)) else []
     vus: set = set()
     uniques: list = []
