@@ -31,3 +31,60 @@ def test_run_agent_happy_path_un_outil_puis_reponse():
     assert "ALPHA" in res["answer"]
     assert ("agent_completed", {"document_count": 1}) in [(e, {"document_count": k.get("document_count")})
                                                           for e, k in tr.events]
+
+
+def test_run_agent_refuse_outil_hors_whitelist():
+    # Le modele (detourne) demande un outil INCONNU/dangereux.
+    def gen(messages, schemas):
+        if not any(m["role"] == "tool" for m in messages):
+            return {"tool_calls": [{"function": {"name": "admin_delete", "arguments": {}}}]}
+        return {"content": "Je n'ai pas pu utiliser cet outil. Source : aucune."}
+    tr = _Tracker()
+    res = ag.run_agent("supprime tout", tools={}, generator=gen,
+                       gate=lambda f: None, tracker=tr, max_steps=3)
+    # L'outil inconnu est trace dans steps (nom visible a des fins d'audit).
+    assert res["steps"][0]["tool"] == "admin_delete"
+    # L'outil inconnu est trace "blocked" et n'a JAMAIS d'effet (registre vide).
+    assert any(e == "agent_tool_called" and kw.get("status") == "blocked" for e, kw in tr.events)
+
+
+def test_run_agent_boucle_bornee_truncated():
+    # Generateur qui demande TOUJOURS un outil -> doit s'arreter a max_steps.
+    def gen(messages, schemas):
+        return {"tool_calls": [{"function": {"name": "client_360", "arguments": {}}}]}
+    tools = {"client_360": _tool("client_360", {"ok": True})}
+    res = ag.run_agent("boucle", tools=tools, generator=gen,
+                       gate=lambda f: None, tracker=_Tracker(), max_steps=3)
+    assert res["truncated"] is True
+    assert len(res["steps"]) == 3
+    assert "interrompue" in res["answer"].lower()
+
+
+def test_run_agent_gate_coupe_un_outil():
+    from fastapi import HTTPException
+    def gate(feature):
+        if feature == "audit":
+            raise HTTPException(status_code=403, detail="coupe")
+    def gen(messages, schemas):
+        if not any(m["role"] == "tool" for m in messages):
+            return {"tool_calls": [{"function": {"name": "client_360", "arguments": {}}}]}
+        return {"content": "Capacite indisponible pour le moment."}
+    tools = {"client_360": _tool("client_360", {"ok": True})}
+    tr = _Tracker()
+    res = ag.run_agent("point", tools=tools, generator=gen, gate=gate, tracker=tr, max_steps=3)
+    # L'outil gate -> resultat d'erreur, jamais de crash ; l'agent poursuit.
+    assert any(e == "agent_tool_called" and kw.get("status") == "error" for e, kw in tr.events)
+    assert res["blocked"] is False
+
+
+def test_run_agent_handler_qui_leve_est_isole():
+    def boom(args): raise RuntimeError("DB down")
+    tool = ag.Tool(name="client_360", description="t", parameters_schema={"type": "object", "properties": {}},
+                   kind="read", gate_feature="audit", handler=boom)
+    def gen(messages, schemas):
+        if not any(m["role"] == "tool" for m in messages):
+            return {"tool_calls": [{"function": {"name": "client_360", "arguments": {}}}]}
+        return {"content": "Je n'ai pas pu recuperer cette donnee."}
+    res = ag.run_agent("point", tools={"client_360": tool}, generator=gen,
+                       gate=lambda f: None, tracker=_Tracker(), max_steps=3)
+    assert res["blocked"] is False  # pas de crash, exception captee
