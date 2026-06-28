@@ -69,4 +69,6 @@
 - **Client « M365-first », time-to-prod prioritaire, budget cloud assumé** → **AC360 gagne** (intégration native, gouvernance héritée).
 - **Client souverain / sensible aux données / coût / air-gap / anti-lock-in** (ex. assurance/mutuelle française, exigences RGPD strictes) → **ONYX (onix) gagne** (FOSS, local, 0 licence, portable) — **tout en égalant** AC360 sur sécurité/gouvernance et en le **dépassant** sur observabilité/tests.
 
-**Prochaine bataille à gagner pour onix** : combler l'écart **RAG** (le mur #12 Onyx↔Ollama force le mode non-agentique) et soigner le **time-to-prod** (faciliter le câblage gateway/IdP), pour neutraliser les 2 seuls vrais avantages d'AC360.
+**Prochaine bataille à gagner pour onix** : combler l'écart **RAG** et soigner le **time-to-prod** (faciliter le câblage gateway/IdP), pour neutraliser les 2 seuls vrais avantages d'AC360.
+
+> **MAJ 2026-06-28 (run LIVE)** : le RAG **non-agentique** souverain est **validé en réel** (Ollama gemma4 8B : récupération accent-folded + génération grounded/sourcée + fail-closed). Surtout, une **sonde agentique** montre que gemma4 émet des `tool_calls` natifs corrects via l'API `/api/chat` → le **mur #12 est un défaut d'intégration Onyx, PAS une limite du modèle local**. L'écart agentique vs AC360 est donc **franchissable en souverain** (couche `agentic_local` via API native, à concevoir avec un design fail-closed — outils lecture-seule, gate, audit). Le seul avantage *durablement* différenciant d'AC360 redevient le **time-to-prod M365-natif**.
