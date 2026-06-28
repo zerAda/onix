@@ -13,6 +13,7 @@ import os
 from typing import Any, Callable, Dict, List
 
 from . import guardrail_core, fabric_reference, rag_local, tasks, audit_engine
+from .rag_local import _ollama_timeout
 
 _SYSTEM_PROMPT = (
     "Tu es l'assistant client GEREP, souverain et local, en LECTURE SEULE. Reponds en "
@@ -234,3 +235,22 @@ def _run_one_tool(name, args, tools, gate, tracker, sources) -> Dict[str, Any]:
         sources.extend(raw["sources"])
     tracker.track("agent_tool_called", action_name=str(name))
     return raw if isinstance(raw, dict) else {"result": raw}
+
+
+def ollama_chat(messages, tools):
+    """Generateur par defaut : Ollama /api/chat (API native tool-calling, souveraine).
+    Config par env (jamais en repo) : ONIX_OLLAMA_URL, ONIX_LLM_MODEL, ONIX_OLLAMA_TIMEOUT.
+    Renvoie le `message` (avec tool_calls ou content). Leve en cas d'echec (capte par run_agent)."""
+    import json as _json
+    import urllib.request
+    base = os.environ.get("ONIX_OLLAMA_URL", "http://ollama:11434").strip().rstrip("/")
+    if not base.startswith(("http://", "https://")):  # anti-SSRF : schema maitrise
+        raise ValueError("ONIX_OLLAMA_URL invalide")
+    model = os.environ.get("ONIX_LLM_MODEL", "gemma3:4b").strip() or "gemma3:4b"
+    body = _json.dumps({"model": model, "messages": messages, "tools": tools,
+                        "stream": False}).encode("utf-8")
+    req = urllib.request.Request(base + "/api/chat", data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=_ollama_timeout()) as resp:  # nosec B310 - URL interne (env)
+        data = _json.loads(resp.read().decode("utf-8"))
+    return data.get("message", {}) or {}

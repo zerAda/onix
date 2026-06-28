@@ -132,3 +132,12 @@ def test_handler_client_360_enveloppe_la_fonction(monkeypatch):
     monkeypatch.setattr(fr, "client_360", lambda ck, **kw: {"client_key": ck, "reference_trouvee": True})
     out = ag.REGISTRY["client_360"].handler({"client_key": "ALPHA"})
     assert out["client_key"] == "ALPHA" and out["reference_trouvee"] is True
+
+
+# ── T10 : ollama_chat (generateur natif Ollama, anti-SSRF) ──────────────────
+
+def test_ollama_chat_rejette_url_invalide(monkeypatch):
+    monkeypatch.setenv("ONIX_OLLAMA_URL", "file:///etc/passwd")
+    import pytest
+    with pytest.raises(ValueError):
+        ag.ollama_chat([{"role": "user", "content": "x"}], [])
