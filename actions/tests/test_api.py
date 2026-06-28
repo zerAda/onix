@@ -391,6 +391,45 @@ def test_portfolio_360_endpoint_truncation_is_signaled(client, monkeypatch):
     assert r.headers["X-Portfolio-Requested"] == "600"
 
 
+def test_portfolio_360_endpoint_empty_is_tracked(client, monkeypatch):
+    """Portefeuille VIDE : 200 + totaux à 0 (tronque False), ET l'accès est tracé
+    (`portfolio_360_viewed`, document_count 0) — la traçabilité n'est pas sautée."""
+    import app.usage_tracker as usage_tracker
+    captured = []
+    real_track = usage_tracker.track
+    monkeypatch.setattr(usage_tracker, "track",
+                        lambda et, **kw: (captured.append((et, kw)), real_track(et, **kw))[1])
+    b = client.post("/portfolio/360", json={"client_keys": []}).json()
+    assert b["lignes"] == []
+    assert b["totaux"] == {"nb_clients": 0, "nb_avec_reference": 0,
+                           "total_taches_ouvertes": 0, "total_usage": 0,
+                           "nb_demandes": 0, "tronque": False}
+    vues = [kw for et, kw in captured if et == "portfolio_360_viewed"]
+    assert len(vues) == 1 and vues[0].get("document_count") == 0
+
+
+def test_portfolio_360_endpoint_invalid_type_rejected(client):
+    """`client_keys` d'un type invalide (objet au lieu d'une liste) → 422 Pydantic
+    (fail-closed à la frontière, jamais un 500)."""
+    r = client.post("/portfolio/360", json={"client_keys": {"x": 1}})
+    assert r.status_code == 422
+
+
+def test_portfolio_360_csv_columns_are_slim(client, monkeypatch):
+    """Le CSV de portefeuille n'expose QUE les 4 colonnes slim : une PII présente dans
+    la référence SI (secret_note) ne doit JAMAIS fuiter dans l'export."""
+    import app.fabric_reference as fabric_reference
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference",
+                        lambda ck, **kw: {"nom_client": ck, "secret_note": "PII-SENSIBLE"})
+    monkeypatch.setattr(fabric_reference, "_default_open_tasks", lambda ck: [])
+    monkeypatch.setattr(fabric_reference, "_default_usage_count", lambda ck: 0)
+    r = client.post("/portfolio/360?format=csv", json={"client_keys": ["a"]})
+    # En-tête EXACT à 4 colonnes (après le BOM) + aucune fuite de la PII de la référence.
+    lignes = r.text.lstrip(chr(0xFEFF)).splitlines()
+    assert lignes[0] == "client_key,reference_trouvee,nb_taches_ouvertes,nb_evenements_usage"
+    assert "secret_note" not in r.text and "PII-SENSIBLE" not in r.text
+
+
 def test_generate_fiche_and_download(client):
     r = client.post("/generate/fiche", json={
         "client_name": "ACME SAS",
