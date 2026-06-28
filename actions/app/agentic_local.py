@@ -53,17 +53,24 @@ def _context(steps: List[Dict[str, Any]]) -> str:
 
 
 # L2 — marqueurs d'injection a fort signal (peu probables dans un vrai doc d'assurance).
+# EN + FR (impératifs de detournement). BEST-EFFORT : une injection purement semantique
+# SANS marqueur connu peut passer L2 ; le garde-fou L3 (post_filter en SORTIE) reste alors
+# le filet (anti-exfil, anti-fuite, lecture-seule). Defense en profondeur, pas L2 seul.
 _INJECTION_MARKERS = (
     "ignore previous instructions", "ignore your instructions", "ignore tes instructions",
     "disregard your", "you are now", "tu es desormais", "system prompt", "reveal your",
     "revele ton", "exfil.example", "freebot",
+    "a partir de maintenant", "ta nouvelle mission", "nouvelle instruction",
+    "nouvelle tache prioritaire", "oublie tes consignes", "oublie tes instructions",
+    "obeis a la directive", "agis comme",
 )
 
 
 def _scan_injection(text: Any):
     """L2 — detecteur deterministe d'injection dans un resultat d'outil (entree).
     Renvoie (texte, suspect). Au moindre marqueur, on REMPLACE par un marqueur neutre :
-    l'injection brute n'atteint JAMAIS le modele."""
+    l'injection brute n'atteint JAMAIS le modele. BEST-EFFORT (cf. note sur les marqueurs) ;
+    le garde-fou L3 en sortie est le filet pour les injections sans marqueur connu."""
     raw = str(text or "")
     low = raw.lower()
     if any(m in low for m in _INJECTION_MARKERS):
@@ -102,12 +109,14 @@ def run_agent(question, *, tools, generator, gate, tracker, max_steps: int = 6) 
                          "tool_calls": tool_calls})
         for tc in tool_calls:
             fn = (tc or {}).get("function") or {}
-            name = fn.get("name")
+            name = fn.get("name") or ""   # tool_call malforme -> "" (traite hors-whitelist)
             args = _parse_args(fn.get("arguments"))
             result = _run_one_tool(name, args, tools, gate, tracker, sources)
             steps.append({"tool": name, "args": args})
+            # `default=str` : un resultat d'outil peut contenir un type non-JSON (date,
+            # Decimal) -> ne JAMAIS lever ici (sinon 500 + fuite de trace). Fail-closed.
             messages.append({"role": "tool",
-                             "content": json.dumps(result, ensure_ascii=False)})
+                             "content": json.dumps(result, ensure_ascii=False, default=str)})
     tracker.track("agent_completed", document_count=len(steps), status="skipped")
     return {"answer": "Analyse interrompue : limite d'etapes atteinte. Resultats partiels.",
             "grounded": False, "steps": steps, "sources": sources,
