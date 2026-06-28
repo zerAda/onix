@@ -15,14 +15,23 @@ n'invente JAMAIS), génération en erreur ⇒ `grounded=False` (jamais de fuite)
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Callable, Dict, List, Sequence
 
 # Mots « significatifs » (≥4 lettres, accents FR inclus) pour le score de pertinence.
 _WORD = re.compile(r"[a-zàâäéèêëïîôöùûüç]{4,}")
 
 
+def _fold(word: str) -> str:
+    """Replie les accents (NFKD) : « résiliation » == « resiliation ». Les contrats et
+    l'OCR français mélangent les accents — sans repli, une question dé-accentuée ratait
+    le document accentué (récupération à côté). Symétrique : appliqué aux DEUX côtés."""
+    return "".join(c for c in unicodedata.normalize("NFKD", word)
+                   if not unicodedata.combining(c))
+
+
 def _keywords(text: Any) -> set:
-    return set(_WORD.findall(str(text or "").lower()))
+    return {_fold(w) for w in _WORD.findall(str(text or "").lower())}
 
 
 def retrieve(

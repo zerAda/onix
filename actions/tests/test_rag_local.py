@@ -50,3 +50,21 @@ def test_answer_failclosed_generateur_en_erreur():
     r = answer("Cotisation CLIENT BETA ?", DOCS, generator=boom)
     assert r["grounded"] is False and r["reason"] == "generation KO"
     assert r["sources"] == ["beta"]  # la source reste tracée
+
+
+def test_retrieve_replie_les_accents_fr():
+    """Récupération robuste aux accents : une question SANS accents retrouve un document
+    AVEC accents (et inversement) — fréquent en saisie/OCR de contrats français."""
+    docs = [{"id": "D1", "content": "Conditions de résiliation et d'échéance du contrat santé."}]
+    assert [h["id"] for h in retrieve("resiliation echeance", docs)] == ["D1"]
+    # Sens inverse : question accentuée, document dé-accentué.
+    docs2 = [{"id": "D2", "content": "Modalites de resiliation anticipee du contrat."}]
+    assert [h["id"] for h in retrieve("résiliation anticipée", docs2)] == ["D2"]
+
+
+def test_answer_grounded_malgre_accents_divergents():
+    """Bout-en-bout : une question dé-accentuée reste grounded (source trouvée) malgré
+    un document fortement accentué."""
+    docs = [{"id": "D7", "content": "La prévoyance couvre l'incapacité et l'invalidité."}]
+    r = answer("prevoyance incapacite", docs, generator=lambda p: "Réponse sourcée [1].")
+    assert r["grounded"] is True and r["sources"] == ["D7"]
