@@ -51,9 +51,23 @@ def _context(steps: List[Dict[str, Any]]) -> str:
     return " ".join(str(s.get("tool")) for s in steps)
 
 
-# Stub L2 (remplace en tache 7) : ne neutralise rien pour l'instant.
+# L2 — marqueurs d'injection a fort signal (peu probables dans un vrai doc d'assurance).
+_INJECTION_MARKERS = (
+    "ignore previous instructions", "ignore your instructions", "ignore tes instructions",
+    "disregard your", "you are now", "tu es desormais", "system prompt", "reveal your",
+    "revele ton", "exfil.example", "freebot",
+)
+
+
 def _scan_injection(text: Any):
-    return (str(text or ""), False)
+    """L2 — detecteur deterministe d'injection dans un resultat d'outil (entree).
+    Renvoie (texte, suspect). Au moindre marqueur, on REMPLACE par un marqueur neutre :
+    l'injection brute n'atteint JAMAIS le modele."""
+    raw = str(text or "")
+    low = raw.lower()
+    if any(m in low for m in _INJECTION_MARKERS):
+        return ("[contenu suspect neutralise : instruction ignoree]", True)
+    return (raw, False)
 
 
 def run_agent(question, *, tools, generator, gate, tracker, max_steps: int = 6) -> Dict[str, Any]:
