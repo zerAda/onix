@@ -28,6 +28,14 @@ def test_build_usage_event_rejette_status_invalide():
         build_usage_event("audit_documentaire_started", status="bidon")
 
 
+def test_agent_event_types_valides():
+    """Les 4 types d'evenements de la couche agentique sont acceptes par le tracker."""
+    from app import usage_tracker as ut
+    for et in ("agent_started", "agent_tool_called", "agent_completed", "agent_injection_detected"):
+        ev = ut.build_usage_event(et, action_name="agent")
+        assert ev["event_type"] == et
+
+
 def test_emit_usage_event_persisted_false_si_persistance_echoue(monkeypatch):
     # Force l'échec d'accès base : _connect lève -> capté -> _persisted=False.
     def _boom():
