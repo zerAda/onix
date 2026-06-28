@@ -586,6 +586,53 @@ def test_portfolio_360_to_csv_structure_et_anti_injection():
         "client_key,reference_trouvee,nb_taches_ouvertes,nb_evenements_usage"]
 
 
+def test_portfolio_360_borne_500_exacte():
+    """600 clés uniques -> exactement 500 lignes (borne de sécurité)."""
+    from app.fabric_reference import portfolio_360
+    keys = [f"c{i}" for i in range(600)]
+    rapport = portfolio_360(keys, reference_reader=lambda ck, **kw: None,
+                            tasks_lister=lambda ck: [], usage_counter=lambda ck: 0)
+    assert len(rapport["lignes"]) == 500
+    assert rapport["totaux"]["nb_clients"] == 500
+
+
+def test_portfolio_360_failsafe_par_client(monkeypatch):
+    """Un client dont `client_360` LÈVE -> ligne 0/False, mais les AUTRES clients sont
+    traités normalement (isolation try/except par client, le portefeuille continue)."""
+    import app.fabric_reference as fr
+
+    def fake_360(ck, **kw):
+        if ck == "boom":
+            raise RuntimeError("client down")
+        return {"client_key": ck, "reference": {"nom_client": ck}, "reference_trouvee": True,
+                "nb_taches_ouvertes": 2, "taches_ouvertes": [], "nb_evenements_usage": 3}
+
+    monkeypatch.setattr(fr, "client_360", fake_360)
+    lignes = {l["client_key"]: l for l in fr.portfolio_360(["a", "boom", "b"])["lignes"]}
+    assert lignes["boom"] == {"client_key": "boom", "reference_trouvee": False,
+                              "nb_taches_ouvertes": 0, "nb_evenements_usage": 0}
+    assert lignes["a"]["reference_trouvee"] is True and lignes["a"]["nb_taches_ouvertes"] == 2
+    assert lignes["b"]["nb_evenements_usage"] == 3
+
+
+def test_portfolio_360_totaux_egalent_la_somme(monkeypatch):
+    """Les totaux == somme exacte des lignes (cohérence du tableau de bord)."""
+    import app.fabric_reference as fr
+    data = {
+        "a": {"reference_trouvee": True, "nb_taches_ouvertes": 2, "nb_evenements_usage": 5},
+        "b": {"reference_trouvee": False, "nb_taches_ouvertes": 1, "nb_evenements_usage": 0},
+        "c": {"reference_trouvee": True, "nb_taches_ouvertes": 0, "nb_evenements_usage": 3},
+    }
+    monkeypatch.setattr(fr, "client_360",
+                        lambda ck, **kw: dict(data[ck], client_key=ck, reference=None, taches_ouvertes=[]))
+    rapport = fr.portfolio_360(["a", "b", "c"])
+    t, lignes = rapport["totaux"], rapport["lignes"]
+    assert t["nb_avec_reference"] == sum(1 for l in lignes if l["reference_trouvee"])
+    assert t["total_taches_ouvertes"] == sum(l["nb_taches_ouvertes"] for l in lignes)
+    assert t["total_usage"] == sum(l["nb_evenements_usage"] for l in lignes)
+    assert t == {"nb_clients": 3, "nb_avec_reference": 2, "total_taches_ouvertes": 3, "total_usage": 8}
+
+
 def test_fetch_retry_apres_blip_reseau(monkeypatch):
     """Un blip réseau momentané (1re lecture KO) ⇒ la 2e tentative réussit."""
     import app.fabric_reference as fr
