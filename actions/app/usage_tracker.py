@@ -32,6 +32,7 @@ VALID_EVENT_TYPES = {
     "reconcile_batch_started",
     "reconcile_batch_completed",
     "client_360_viewed",
+    "portfolio_360_viewed",
     "task_created",
     "notification_sent",
     "cost_estimated",

@@ -292,6 +292,14 @@ class Client360Request(BaseModel):
     caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashé).")
 
 
+class Portfolio360Request(BaseModel):
+    # Liste d'identifiants client (dédoublonnée + bornée à 500 par portfolio_360).
+    client_keys: List[str] = Field(
+        default_factory=list, description="Identifiants client du portefeuille (agrégés par hash)."
+    )
+    caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashé).")
+
+
 class FicheRequest(BaseModel):
     client_name: str
     summary: str = ""
@@ -739,6 +747,33 @@ def client_360_endpoint(
     usage_tracker.track("client_360_viewed", user_id=who, action_name="client_360",
                         client_id=key)
     return vue
+
+
+@app.post("/portfolio/360")
+def portfolio_360_endpoint(
+    req: Portfolio360Request,
+    format: Optional[str] = None,
+    caller: CallerContext = Depends(require_caller),
+):
+    """**Tableau de bord 360 de PORTEFEUILLE** : un résumé par client + des totaux, pour
+    une LISTE de clients. Agrégé par HASH (RGPD, **lecture seule**) ; liste dédoublonnée
+    et bornée à 500 (`portfolio_360`). `?format=csv` → export tableur (BOM UTF-8 Excel).
+
+    Gate `audit` (même périmètre de lecture). Fail-closed : liste vide / non conforme →
+    portefeuille vide (200, totaux à 0). Data-minimisé (NI référence complète NI tâches)."""
+    who = _effective_caller(caller, req.caller_id)
+    _gate("audit", who)
+    rapport = fabric_reference.portfolio_360(req.client_keys)
+    usage_tracker.track("portfolio_360_viewed", user_id=who, action_name="portfolio_360",
+                        document_count=rapport["totaux"]["nb_clients"])
+    # Export tableur optionnel (`?format=csv`) : CSV prêt pour Excel (BOM UTF-8).
+    if (format or "").strip().lower() == "csv":
+        return Response(
+            content=chr(0xFEFF) + fabric_reference.portfolio_360_to_csv(rapport),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=portfolio_360.csv"},
+        )
+    return rapport
 
 
 # ---------------------------------------------------------------------------

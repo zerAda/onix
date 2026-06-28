@@ -336,6 +336,45 @@ def test_client_360_endpoint_structure_complete(client, monkeypatch):
                              "nb_taches_ouvertes", "taches_ouvertes", "nb_evenements_usage"}
 
 
+# --- Tableau de bord 360 de portefeuille : POST /portfolio/360 ----------------
+def test_portfolio_360_endpoint(client, monkeypatch):
+    """Agrégation portefeuille via l'endpoint (sources mockées) : lignes + totaux."""
+    import app.fabric_reference as fabric_reference
+    refs = {"a": {"nom_client": "A"}}
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference",
+                        lambda ck, **kw: refs.get((ck or "").strip().lower()))
+    monkeypatch.setattr(fabric_reference, "_default_open_tasks",
+                        lambda ck: [{"task_id": "t"}] if ck == "a" else [])
+    monkeypatch.setattr(fabric_reference, "_default_usage_count", lambda ck: 2 if ck == "a" else 0)
+    b = client.post("/portfolio/360", json={"client_keys": ["a", "b"]}).json()
+    assert b["totaux"]["nb_clients"] == 2 and b["totaux"]["nb_avec_reference"] == 1
+    assert {l["client_key"] for l in b["lignes"]} == {"a", "b"}
+
+
+def test_portfolio_360_endpoint_format_csv(client, monkeypatch):
+    """`?format=csv` → 200 text/csv + BOM Excel (octets bruts)."""
+    import app.fabric_reference as fabric_reference
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference", lambda ck, **kw: None)
+    monkeypatch.setattr(fabric_reference, "_default_open_tasks", lambda ck: [])
+    monkeypatch.setattr(fabric_reference, "_default_usage_count", lambda ck: 0)
+    r = client.post("/portfolio/360?format=csv", json={"client_keys": ["a", "b"]})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert r.content.startswith(b"\xef\xbb\xbf")   # BOM UTF-8
+    assert "client_key,reference_trouvee,nb_taches_ouvertes,nb_evenements_usage" in r.text
+
+
+def test_portfolio_360_endpoint_kill_switch(client):
+    """Kill-switch 'audit' coupé → l'endpoint portefeuille répond 403."""
+    client.post("/admin/control",
+                json={"action": "disable_feature", "scope": "audit", "reason": "test"})
+    try:
+        r = client.post("/portfolio/360", json={"client_keys": ["a"]})
+        assert r.status_code == 403
+    finally:
+        client.post("/admin/control", json={"action": "enable_feature", "scope": "audit"})
+
+
 def test_generate_fiche_and_download(client):
     r = client.post("/generate/fiche", json={
         "client_name": "ACME SAS",
