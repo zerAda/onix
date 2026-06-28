@@ -328,7 +328,9 @@ def portfolio_360(
     bord pour le back-office.
 
     `client_keys` : liste/tuple d'identifiants client (chaînes). Toute autre valeur →
-    portefeuille vide (fail-closed). Dédoublonné en préservant l'ordre, borné à 500.
+    portefeuille vide (fail-closed). Dédoublonné en préservant l'ordre, **traitement
+    borné à 500** (au-delà : `totaux.tronque=True` + `totaux.nb_demandes` — la troncature
+    n'est JAMAIS muette).
     Pour chaque client : `client_360` puis on ne garde qu'un résumé SLIM (data-minim. :
     NI `reference` complète NI `taches_ouvertes`) : `{client_key, reference_trouvee,
     nb_taches_ouvertes, nb_evenements_usage}`. **Fail-closed et SANS exception** (client
@@ -346,13 +348,19 @@ def portfolio_360(
             continue  # identifiants chaîne non vides, dédoublonnés (ordre préservé)
         vus.add(k)
         uniques.append(k)
-        if len(uniques) >= _MAX_PORTFOLIO:
-            break
+    # Honnêteté (zéro résultat partiel présenté comme complet) : on borne le TRAITEMENT
+    # à 500 clients (le coûteux = un `client_360` par client), mais on REMONTE le nombre
+    # demandé + un drapeau `tronque` — l'appelant SAIT qu'un portefeuille plus grand a été
+    # coupé (et doit paginer). Le dédoublonnage, lui, scanne tout (peu coûteux).
+    nb_demandes = len(uniques)
+    tronque = nb_demandes > _MAX_PORTFOLIO
+    a_traiter = uniques[:_MAX_PORTFOLIO]
 
     lignes: list = []
     totaux = {"nb_clients": 0, "nb_avec_reference": 0,
-              "total_taches_ouvertes": 0, "total_usage": 0}
-    for ck in uniques:
+              "total_taches_ouvertes": 0, "total_usage": 0,
+              "nb_demandes": nb_demandes, "tronque": tronque}
+    for ck in a_traiter:
         try:
             vue = client_360(ck, reference_reader=reference_reader,
                              tasks_lister=tasks_lister, usage_counter=usage_counter)

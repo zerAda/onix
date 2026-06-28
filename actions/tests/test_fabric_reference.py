@@ -545,7 +545,8 @@ def test_portfolio_360_lignes_et_totaux():
     assert lignes[1] == {"client_key": "b", "reference_trouvee": False,
                          "nb_taches_ouvertes": 2, "nb_evenements_usage": 1}
     assert rapport["totaux"] == {"nb_clients": 2, "nb_avec_reference": 1,
-                                 "total_taches_ouvertes": 3, "total_usage": 5}
+                                 "total_taches_ouvertes": 3, "total_usage": 5,
+                                 "nb_demandes": 2, "tronque": False}
     # Data-minimisation : ni `reference` complète ni `taches_ouvertes` dans les lignes.
     assert "reference" not in lignes[0] and "taches_ouvertes" not in lignes[0]
 
@@ -594,6 +595,9 @@ def test_portfolio_360_borne_500_exacte():
                             tasks_lister=lambda ck: [], usage_counter=lambda ck: 0)
     assert len(rapport["lignes"]) == 500
     assert rapport["totaux"]["nb_clients"] == 500
+    # Honnêteté : la troncature est SIGNALÉE (600 demandés, coupé à 500), jamais muette.
+    assert rapport["totaux"]["nb_demandes"] == 600
+    assert rapport["totaux"]["tronque"] is True
 
 
 def test_portfolio_360_failsafe_par_client(monkeypatch):
@@ -630,7 +634,8 @@ def test_portfolio_360_totaux_egalent_la_somme(monkeypatch):
     assert t["nb_avec_reference"] == sum(1 for l in lignes if l["reference_trouvee"])
     assert t["total_taches_ouvertes"] == sum(l["nb_taches_ouvertes"] for l in lignes)
     assert t["total_usage"] == sum(l["nb_evenements_usage"] for l in lignes)
-    assert t == {"nb_clients": 3, "nb_avec_reference": 2, "total_taches_ouvertes": 3, "total_usage": 8}
+    assert t == {"nb_clients": 3, "nb_avec_reference": 2, "total_taches_ouvertes": 3,
+                 "total_usage": 8, "nb_demandes": 3, "tronque": False}
 
 
 def test_fetch_retry_apres_blip_reseau(monkeypatch):

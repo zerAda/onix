@@ -768,10 +768,15 @@ def portfolio_360_endpoint(
                         document_count=rapport["totaux"]["nb_clients"])
     # Export tableur optionnel (`?format=csv`) : CSV prêt pour Excel (BOM UTF-8).
     if (format or "").strip().lower() == "csv":
+        # La troncature (portefeuille > 500) n'apparaît pas dans les lignes du CSV :
+        # on la signale par en-têtes pour que l'export reste HONNÊTE (jamais muet).
         return Response(
             content=chr(0xFEFF) + fabric_reference.portfolio_360_to_csv(rapport),
             media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": "attachment; filename=portfolio_360.csv"},
+            headers={"Content-Disposition": "attachment; filename=portfolio_360.csv",
+                     "X-Portfolio-Requested": str(rapport["totaux"]["nb_demandes"]),
+                     "X-Portfolio-Truncated":
+                         "true" if rapport["totaux"]["tronque"] else "false"},
         )
     return rapport
 

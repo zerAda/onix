@@ -375,6 +375,22 @@ def test_portfolio_360_endpoint_kill_switch(client):
         client.post("/admin/control", json={"action": "enable_feature", "scope": "audit"})
 
 
+def test_portfolio_360_endpoint_truncation_is_signaled(client, monkeypatch):
+    """Honnêteté : >500 clients → traité borné à 500 MAIS la troncature est SIGNALÉE
+    (JSON `totaux.tronque`/`nb_demandes` + en-têtes en CSV), jamais muette."""
+    import app.fabric_reference as fabric_reference
+    monkeypatch.setattr(fabric_reference, "fetch_client_reference", lambda ck, **kw: None)
+    monkeypatch.setattr(fabric_reference, "_default_open_tasks", lambda ck: [])
+    monkeypatch.setattr(fabric_reference, "_default_usage_count", lambda ck: 0)
+    keys = [f"c{i}" for i in range(600)]
+    b = client.post("/portfolio/360", json={"client_keys": keys}).json()
+    assert b["totaux"]["nb_clients"] == 500 and b["totaux"]["nb_demandes"] == 600
+    assert b["totaux"]["tronque"] is True
+    r = client.post("/portfolio/360?format=csv", json={"client_keys": keys})
+    assert r.headers["X-Portfolio-Truncated"] == "true"
+    assert r.headers["X-Portfolio-Requested"] == "600"
+
+
 def test_generate_fiche_and_download(client):
     r = client.post("/generate/fiche", json={
         "client_name": "ACME SAS",
