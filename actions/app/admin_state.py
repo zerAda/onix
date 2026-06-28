@@ -31,7 +31,7 @@ from .db import _connect, _lock  # noqa: F401 (réexport pour compat)
 _logger = logging.getLogger("onix.actions.admin")
 
 # Fonctions « métier » gatées (alignées sur AC360 + ajouts onix-actions).
-FEATURES = ("audit", "generate", "tasks", "notify", "usage", "cost", "ocr", "llm")
+FEATURES = ("audit", "generate", "tasks", "notify", "usage", "cost", "ocr", "llm", "agent")
 
 FEATURE_ENV = {f: f"ONIX_{f.upper()}_ENABLED" for f in FEATURES}
 _GLOBAL_ENV = "ONIX_GLOBAL_ENABLED"

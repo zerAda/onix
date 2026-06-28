@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 from . import admin_state, audit_log, cost_tracker, docgen, dlp, notify as notify_mod
 from . import fabric_reference
 from . import rag_local
+from . import agentic_local
 from . import ocr as ocr_mod
 from . import retention as retention_mod
 from . import safe_logger
@@ -298,6 +299,11 @@ class Portfolio360Request(BaseModel):
         default_factory=list, description="Identifiants client du portefeuille (agrégés par hash)."
     )
     caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashé).")
+
+
+class AgentAskRequest(BaseModel):
+    question: str = Field(description="Question en langage naturel (multi-etapes).")
+    caller_id: Optional[str] = Field(default=None, description="Identifiant appelant (hashe).")
 
 
 class FicheRequest(BaseModel):
@@ -660,6 +666,16 @@ def _max_reconcile_batch() -> int:
         return 200
 
 
+def _max_agent_steps() -> int:
+    """Borne d'etapes de l'agent, tunable ONIX_AGENT_MAX_STEPS (defaut 6, fail-safe [1,20])."""
+    raw = os.environ.get("ONIX_AGENT_MAX_STEPS", "").strip()
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return 6
+    return v if 1 <= v <= 20 else 6
+
+
 @app.post("/audit/reconcile/batch")
 def audit_reconcile_batch_endpoint(
     req: ReconcileBatchRequest,
@@ -779,6 +795,25 @@ def portfolio_360_endpoint(
                          "true" if rapport["totaux"]["tronque"] else "false"},
         )
     return rapport
+
+
+@app.post("/agent/ask")
+def agent_ask_endpoint(
+    req: AgentAskRequest, caller: CallerContext = Depends(require_caller)
+) -> Dict[str, Any]:
+    """**Assistant agentique souverain** (lecture-seule) : repond a une question
+    multi-etapes en enchainant des outils LECTURE-SEULE whitelistes (tool-calling natif
+    Ollama, hors Onyx). Fail-closed, borne, audite ; reponse passee au garde-fou
+    deterministe. Gate `agent`."""
+    who = _effective_caller(caller, req.caller_id)
+    _gate("agent", who)
+    if not str(req.question or "").strip():
+        raise HTTPException(status_code=400, detail={"error": "question requise (vide)."})
+    return agentic_local.run_agent(
+        req.question, tools=agentic_local.REGISTRY,
+        generator=agentic_local.ollama_chat,
+        gate=lambda feat: _gate(feat, who),
+        tracker=usage_tracker, max_steps=_max_agent_steps())
 
 
 # ---------------------------------------------------------------------------

@@ -549,3 +549,29 @@ def test_notify_skipped_without_config(client):
 def test_usage_invalid_event_type(client):
     r = client.post("/usage", json={"event_type": "does_not_exist"})
     assert r.status_code == 400
+
+
+# --- Assistant agentique souverain (lecture-seule) : POST /agent/ask -----------
+def test_agent_ask_endpoint_structure(client, monkeypatch):
+    import app.agentic_local as ag
+    # On injecte un run_agent deterministe (pas de modele live en CI).
+    monkeypatch.setattr(ag, "run_agent", lambda q, **kw: {
+        "answer": "Point sur ALPHA.", "grounded": True,
+        "steps": [{"tool": "client_360", "args": {"client_key": "ALPHA"}}],
+        "sources": ["ALPHA"], "blocked": False, "truncated": False})
+    r = client.post("/agent/ask", json={"question": "point sur ALPHA"})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["answer"] and b["steps"][0]["tool"] == "client_360"
+
+
+def test_agent_ask_question_vide_400(client):
+    assert client.post("/agent/ask", json={"question": "   "}).status_code == 400
+
+
+def test_agent_ask_kill_switch_403(client):
+    client.post("/admin/control", json={"action": "disable_feature", "scope": "agent", "reason": "t"})
+    try:
+        assert client.post("/agent/ask", json={"question": "x"}).status_code == 403
+    finally:
+        client.post("/admin/control", json={"action": "enable_feature", "scope": "agent"})
