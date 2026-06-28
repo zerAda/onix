@@ -14,6 +14,7 @@ n'invente JAMAIS), génération en erreur ⇒ `grounded=False` (jamais de fuite)
 """
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from typing import Any, Callable, Dict, List, Sequence
@@ -102,13 +103,26 @@ def answer(
     return {"answer": str(text or "").strip(), "sources": sources, "grounded": True}
 
 
+def _ollama_timeout() -> int:
+    """Délai max d'un appel Ollama (secondes), tunable via ``ONIX_OLLAMA_TIMEOUT``
+    (défaut 120). Le PREMIER appel après inactivité **recharge le modèle** (plusieurs
+    Go en RAM) et peut être long ; un délai trop court ferait échouer la première
+    question (constaté en run réel). Fail-safe : absent / invalide / <=0 -> 120."""
+    raw = os.environ.get("ONIX_OLLAMA_TIMEOUT", "").strip()
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return 120
+    return v if v > 0 else 120
+
+
 def ollama_generator(prompt: str) -> str:
     """Générateur **par défaut** : appel direct Ollama ``/api/generate`` (souverain,
     local, non-agentique). Configuration **par env** (jamais en repo) :
     ``ONIX_OLLAMA_URL`` (défaut ``http://ollama:11434``) · ``ONIX_LLM_MODEL`` (défaut
-    ``gemma3:4b``). Lève en cas d'échec — capturé par :func:`answer` (grounded=False)."""
+    ``gemma3:4b``) · ``ONIX_OLLAMA_TIMEOUT`` (défaut 120 s ; à augmenter si le modèle
+    recharge à froid). Lève en cas d'échec — capturé par :func:`answer` (grounded=False)."""
     import json
-    import os
     import urllib.request
 
     base = os.environ.get("ONIX_OLLAMA_URL", "http://ollama:11434").strip().rstrip("/")
@@ -119,6 +133,6 @@ def ollama_generator(prompt: str) -> str:
     req = urllib.request.Request(
         base + "/api/generate", data=body, headers={"Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310 - URL interne d'exploitation (env)
+    with urllib.request.urlopen(req, timeout=_ollama_timeout()) as resp:  # nosec B310 - URL interne d'exploitation (env)
         data = json.loads(resp.read().decode("utf-8"))
     return str(data.get("response", ""))

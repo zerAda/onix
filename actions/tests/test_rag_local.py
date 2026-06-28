@@ -68,3 +68,17 @@ def test_answer_grounded_malgre_accents_divergents():
     docs = [{"id": "D7", "content": "La prévoyance couvre l'incapacité et l'invalidité."}]
     r = answer("prevoyance incapacite", docs, generator=lambda p: "Réponse sourcée [1].")
     assert r["grounded"] is True and r["sources"] == ["D7"]
+
+
+def test_ollama_timeout_configurable(monkeypatch):
+    """Le délai Ollama est tunable (ONIX_OLLAMA_TIMEOUT) car le 1er appel recharge le
+    modèle (plusieurs Go) et peut être lent. Fail-safe : absent / invalide / <=0 -> 120."""
+    from app import rag_local
+    monkeypatch.delenv("ONIX_OLLAMA_TIMEOUT", raising=False)
+    assert rag_local._ollama_timeout() == 120
+    monkeypatch.setenv("ONIX_OLLAMA_TIMEOUT", "300")
+    assert rag_local._ollama_timeout() == 300
+    monkeypatch.setenv("ONIX_OLLAMA_TIMEOUT", "pas-un-nombre")
+    assert rag_local._ollama_timeout() == 120
+    monkeypatch.setenv("ONIX_OLLAMA_TIMEOUT", "0")
+    assert rag_local._ollama_timeout() == 120
